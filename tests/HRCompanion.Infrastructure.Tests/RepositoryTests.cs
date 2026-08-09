@@ -48,6 +48,7 @@ public sealed class RepositoryTests : IAsyncLifetime
         Assert.Single(read);
         Assert.Equal(SpeakerRole.User, read[0].Speaker);
     }
+
     [Fact]
     public async Task Search_DeduplicatesRepeatedQuotedEvidenceText()
     {
@@ -62,7 +63,6 @@ public sealed class RepositoryTests : IAsyncLifetime
 
         var results = await _repository.SearchAsync("suitable alternative role", 8);
 
-        Assert.Single(results.Where(x => x.Text == repeated));
+        Assert.Single(results, x => x.Text == repeated);
     }
-
 }
