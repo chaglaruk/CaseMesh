@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -12,7 +13,8 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
     private const int MaximumReconnectAttempts = 3;
     internal const int AudioQueueCapacity = 12;
     private static readonly TimeSpan AudioSendTimeout = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan SessionUpdateAckTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SessionCreatedTimeout = TimeSpan.FromSeconds(5);
+    private static readonly HttpClient ClientSecretHttpClient = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly IApiKeyStore _keys;
     private readonly OpenAiOptions _options;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
@@ -73,8 +75,11 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         var sendPump = _sendPump ?? throw new InvalidOperationException("Realtime transcriber is not started.");
         using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         waitCts.CancelAfter(TimeSpan.FromSeconds(5));
-        while (sendPump.Diagnostics.QueueDepth > 0 || sendPump.Diagnostics.FramesSent < sendPump.Diagnostics.FramesAccepted - sendPump.Diagnostics.FramesDropped)
+        while (sendPump.Diagnostics.QueueDepth > 0 ||
+               sendPump.Diagnostics.FramesSent < sendPump.Diagnostics.FramesAccepted - sendPump.Diagnostics.FramesDropped)
+        {
             await Task.Delay(10, waitCts.Token).ConfigureAwait(false);
+        }
 
         await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -210,14 +215,15 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
 
     private async Task<ClientWebSocket> ConnectAsync(string key, CancellationToken cancellationToken)
     {
+        var clientSecret = await CreateTranscriptionClientSecretAsync(key, cancellationToken).ConfigureAwait(false);
         var socket = new ClientWebSocket();
-        socket.Options.SetRequestHeader("Authorization", $"Bearer {key}");
+        socket.Options.AddSubProtocol("realtime");
+        socket.Options.AddSubProtocol($"openai-insecure-api-key.{clientSecret}");
         socket.Options.SetRequestHeader("OpenAI-Safety-Identifier", "hrcompanion-local-user");
         try
         {
             await socket.ConnectAsync(CreateWebSocketUri(), cancellationToken).ConfigureAwait(false);
-            await SendJsonCoreAsync(socket, CreateSessionUpdate(), cancellationToken).ConfigureAwait(false);
-            await WaitForSessionUpdatedAsync(socket, cancellationToken).ConfigureAwait(false);
+            await WaitForTranscriptionSessionCreatedAsync(socket, cancellationToken).ConfigureAwait(false);
             return socket;
         }
         catch
@@ -227,16 +233,22 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         }
     }
 
+    internal Uri CreateClientSecretUri() =>
+        new($"{_options.BaseUrl.TrimEnd('/')}/realtime/client_secrets");
+
     internal Uri CreateWebSocketUri()
     {
         var wsBase = _options.BaseUrl.Replace("https://", "wss://", StringComparison.OrdinalIgnoreCase).TrimEnd('/');
-        return new Uri($"{wsBase}/realtime?model={Uri.EscapeDataString(_options.RealtimeConnectionModel)}");
+        return new Uri($"{wsBase}/realtime");
     }
 
-    internal object CreateSessionUpdate() => new
+    internal object CreateClientSecretRequest() => new
     {
-        event_id = $"hrc-session-{Guid.NewGuid():N}",
-        type = "session.update",
+        expires_after = new
+        {
+            anchor = "created_at",
+            seconds = 120
+        },
         session = new
         {
             type = "transcription",
@@ -249,42 +261,65 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                     {
                         model = _options.TranscriptionModel
                     },
-                    // Keep the initial handshake identical to OpenAI's minimal documented
-                    // gpt-live-transcribe example. Context hints are added only after the
-                    // base transcription session is proven compatible with the live server.
                     turn_detection = (object?)null
                 }
             }
         }
     };
 
-    private async Task WaitForSessionUpdatedAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    private async Task<string> CreateTranscriptionClientSecretAsync(string key, CancellationToken cancellationToken)
     {
-        using var ackCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        ackCts.CancelAfter(SessionUpdateAckTimeout);
+        using var request = new HttpRequestMessage(HttpMethod.Post, CreateClientSecretUri());
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        request.Headers.TryAddWithoutValidation("OpenAI-Safety-Identifier", "hrcompanion-local-user");
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(CreateClientSecretRequest()),
+            Encoding.UTF8,
+            "application/json");
+
+        using var response = await ClientSecretHttpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw CreateSafeRestProtocolException(json, $"client_secret_http_{(int)response.StatusCode}");
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (!TryGetString(root, "value", out var value))
+                throw new RealtimeProtocolException("client_secret_error", "missing_value");
+
+            if (!root.TryGetProperty("session", out var session) ||
+                !TryGetString(session, "type", out var sessionType) ||
+                !string.Equals(sessionType, "transcription", StringComparison.Ordinal))
+            {
+                throw new RealtimeProtocolException("client_secret_error", "unexpected_session_type");
+            }
+
+            return value;
+        }
+        catch (JsonException)
+        {
+            throw new RealtimeProtocolException("client_secret_error", "invalid_json");
+        }
+    }
+
+    private async Task WaitForTranscriptionSessionCreatedAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    {
+        using var readyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        readyCts.CancelAfter(SessionCreatedTimeout);
         var buffer = new byte[64 * 1024];
 
         try
         {
             while (socket.State == WebSocketState.Open)
             {
-                using var stream = new MemoryStream();
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), ackCts.Token).ConfigureAwait(false);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                        throw new WebSocketException("Realtime socket closed before session.updated.");
-                    stream.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
+                var json = await ReceiveTextMessageAsync(socket, buffer, readyCts.Token).ConfigureAwait(false);
+                if (json is null) continue;
 
-                if (result.MessageType != WebSocketMessageType.Text) continue;
-                var json = Encoding.UTF8.GetString(stream.ToArray());
                 using var document = JsonDocument.Parse(json);
                 var root = document.RootElement;
-                if (!root.TryGetProperty("type", out var typeProperty) || typeProperty.ValueKind != JsonValueKind.String) continue;
-                var type = typeProperty.GetString();
-                if (string.Equals(type, "session.updated", StringComparison.Ordinal)) return;
+                if (!TryGetString(root, "type", out var type)) continue;
 
                 if (string.Equals(type, "error", StringComparison.Ordinal))
                 {
@@ -293,13 +328,31 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                         throw new RealtimeProtocolException(parsed.Error.Type, parsed.Error.Code);
                     throw new RealtimeProtocolException("realtime_error", null);
                 }
+
+                if (!string.Equals(type, "session.created", StringComparison.Ordinal) &&
+                    !string.Equals(type, "transcription_session.created", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (string.Equals(type, "transcription_session.created", StringComparison.Ordinal)) return;
+                if (!root.TryGetProperty("session", out var session))
+                    throw new RealtimeProtocolException("session_created_error", "missing_session");
+
+                var isTranscriptionType = TryGetString(session, "type", out var sessionType) &&
+                                          string.Equals(sessionType, "transcription", StringComparison.Ordinal);
+                var isTranscriptionObject = TryGetString(session, "object", out var sessionObject) &&
+                                            string.Equals(sessionObject, "realtime.transcription_session", StringComparison.Ordinal);
+                if (isTranscriptionType || isTranscriptionObject) return;
+
+                throw new RealtimeProtocolException("session_created_error", "unexpected_session_type");
             }
 
-            throw new WebSocketException("Realtime socket closed before session.updated.");
+            throw new WebSocketException("Realtime socket closed before a transcription session was created.");
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new TimeoutException("Realtime session.update was not acknowledged within the safety bound.");
+            throw new TimeoutException("Realtime transcription session was not created within the safety bound.");
         }
     }
 
@@ -308,23 +361,35 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         var buffer = new byte[64 * 1024];
         while (!cancellationToken.IsCancellationRequested && socket.State == WebSocketState.Open)
         {
-            using var stream = new MemoryStream();
-            WebSocketReceiveResult result;
-            do
-            {
-                result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken).ConfigureAwait(false);
-                if (result.MessageType == WebSocketMessageType.Close) return;
-                stream.Write(buffer, 0, result.Count);
-            } while (!result.EndOfMessage);
+            var json = await ReceiveTextMessageAsync(socket, buffer, cancellationToken).ConfigureAwait(false);
+            if (json is null) continue;
 
-            if (result.MessageType != WebSocketMessageType.Text) continue;
-            var parsed = _parser.Parse(Encoding.UTF8.GetString(stream.ToArray()), DateTimeOffset.UtcNow);
+            var parsed = _parser.Parse(json, DateTimeOffset.UtcNow);
             if (parsed.Error is not null)
             {
                 RaiseFault(new RealtimeProtocolException(parsed.Error.Type, parsed.Error.Code));
             }
             foreach (var update in parsed.Updates) Updated?.Invoke(this, update);
         }
+    }
+
+    private static async Task<string?> ReceiveTextMessageAsync(
+        ClientWebSocket socket,
+        byte[] buffer,
+        CancellationToken cancellationToken)
+    {
+        using var stream = new MemoryStream();
+        WebSocketReceiveResult result;
+        do
+        {
+            result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken).ConfigureAwait(false);
+            if (result.MessageType == WebSocketMessageType.Close) return null;
+            stream.Write(buffer, 0, result.Count);
+        } while (!result.EndOfMessage);
+
+        return result.MessageType == WebSocketMessageType.Text
+            ? Encoding.UTF8.GetString(stream.ToArray())
+            : null;
     }
 
     private static Task SendJsonCoreAsync(ClientWebSocket socket, object payload, CancellationToken cancellationToken)
@@ -359,6 +424,34 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         {
             _sendGate.Release();
         }
+    }
+
+    private static RealtimeProtocolException CreateSafeRestProtocolException(string json, string fallbackCode)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            var error = root.TryGetProperty("error", out var nested) ? nested : root;
+            var type = TryGetString(error, "type", out var errorType) ? errorType : "client_secret_error";
+            var hasCode = TryGetString(error, "code", out var code);
+            var hasParam = TryGetString(error, "param", out var param);
+            var safeCode = hasCode ? code : fallbackCode;
+            if (hasParam) safeCode = $"{safeCode}@param={param}";
+            return new RealtimeProtocolException(type, safeCode);
+        }
+        catch (JsonException)
+        {
+            return new RealtimeProtocolException("client_secret_error", fallbackCode);
+        }
+    }
+
+    private static bool TryGetString(JsonElement element, string propertyName, out string value)
+    {
+        value = string.Empty;
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.String) return false;
+        value = property.GetString() ?? string.Empty;
+        return value.Length > 0;
     }
 
     private void OnPumpDiagnosticsChanged(object? sender, TranscriberDiagnostics diagnostics)
