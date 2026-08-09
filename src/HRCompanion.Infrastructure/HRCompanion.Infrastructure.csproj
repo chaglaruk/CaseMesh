@@ -8,6 +8,8 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <!-- Direct pin ensures the transitive native SQLite payload is above the vulnerable <=2.1.11 line. -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
     <PackageReference Include="DocumentFormat.OpenXml" />
     <PackageReference Include="MimeKit" />
     <PackageReference Include="PdfPig" />
