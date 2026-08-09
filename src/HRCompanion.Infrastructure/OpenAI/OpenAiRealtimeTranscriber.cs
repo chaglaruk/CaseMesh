@@ -12,6 +12,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
     private const int MaximumReconnectAttempts = 3;
     internal const int AudioQueueCapacity = 12;
     private static readonly TimeSpan AudioSendTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan SessionUpdateAckTimeout = TimeSpan.FromSeconds(5);
     private readonly IApiKeyStore _keys;
     private readonly OpenAiOptions _options;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
@@ -157,9 +158,15 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                 {
                     break;
                 }
-                catch (Exception ex) when (ex is WebSocketException or HttpRequestException)
+                catch (Exception ex) when (ex is WebSocketException or HttpRequestException or TimeoutException)
                 {
                     RaiseFault(ex);
+                }
+                catch (RealtimeProtocolException ex)
+                {
+                    RaiseFault(ex);
+                    SetState(TranscriberConnectionState.Failed);
+                    return;
                 }
             }
 
@@ -189,6 +196,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         {
             await socket.ConnectAsync(CreateWebSocketUri(), cancellationToken).ConfigureAwait(false);
             await SendJsonCoreAsync(socket, CreateSessionUpdate(), cancellationToken).ConfigureAwait(false);
+            await WaitForSessionUpdatedAsync(socket, cancellationToken).ConfigureAwait(false);
             return socket;
         }
         catch
@@ -206,6 +214,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
 
     internal object CreateSessionUpdate() => new
     {
+        event_id = $"hrc-session-{Guid.NewGuid():N}",
         type = "session.update",
         session = new
         {
@@ -230,6 +239,51 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
             }
         }
     };
+
+    private async Task WaitForSessionUpdatedAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    {
+        using var ackCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        ackCts.CancelAfter(SessionUpdateAckTimeout);
+        var buffer = new byte[64 * 1024];
+
+        try
+        {
+            while (socket.State == WebSocketState.Open)
+            {
+                using var stream = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
+                {
+                    result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), ackCts.Token).ConfigureAwait(false);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                        throw new WebSocketException("Realtime socket closed before session.updated.");
+                    stream.Write(buffer, 0, result.Count);
+                } while (!result.EndOfMessage);
+
+                if (result.MessageType != WebSocketMessageType.Text) continue;
+                var json = Encoding.UTF8.GetString(stream.ToArray());
+                using var document = JsonDocument.Parse(json);
+                var root = document.RootElement;
+                if (!root.TryGetProperty("type", out var typeProperty) || typeProperty.ValueKind != JsonValueKind.String) continue;
+                var type = typeProperty.GetString();
+                if (string.Equals(type, "session.updated", StringComparison.Ordinal)) return;
+
+                if (string.Equals(type, "error", StringComparison.Ordinal))
+                {
+                    var parsed = _parser.Parse(json, DateTimeOffset.UtcNow);
+                    if (parsed.Error is not null)
+                        throw new RealtimeProtocolException(parsed.Error.Type, parsed.Error.Code);
+                    throw new RealtimeProtocolException("realtime_error", null);
+                }
+            }
+
+            throw new WebSocketException("Realtime socket closed before session.updated.");
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException("Realtime session.update was not acknowledged within the safety bound.");
+        }
+    }
 
     private async Task ReceiveLoopAsync(ClientWebSocket socket, CancellationToken cancellationToken)
     {
