@@ -94,6 +94,9 @@ public sealed class GroundingContractTests
         Assert.Contains("I can’t confirm that today", MeetingPromptBuilder.SpokenStyle, StringComparison.Ordinal);
         Assert.Contains("rather than a categorical refusal", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("before any decision is made", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Do not introduce a new numeric deadline", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("How long do I have to review it?", MeetingPromptBuilder.SpokenStyle, StringComparison.Ordinal);
+        Assert.Contains("If SAY, WATCH and ASK are all null, return no sources", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class StaticKeyStore : IApiKeyStore
