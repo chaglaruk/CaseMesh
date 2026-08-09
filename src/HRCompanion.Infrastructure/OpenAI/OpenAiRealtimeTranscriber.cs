@@ -68,6 +68,26 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
 
     public bool TryEnqueue(AudioFrame frame) => _sendPump?.TryEnqueue(frame) ?? false;
 
+    public async Task CommitInputAudioBufferAsync(CancellationToken cancellationToken = default)
+    {
+        await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var socket = _socket;
+            if (socket?.State != WebSocketState.Open)
+                throw new InvalidOperationException("Realtime transcription socket is not open.");
+
+            await SendJsonCoreAsync(
+                socket,
+                new { event_id = $"hrc-commit-{Guid.NewGuid():N}", type = "input_audio_buffer.commit" },
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
+    }
+
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         _stopping = true;
@@ -234,7 +254,10 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                             "Occupational Health", "redeployment", "fit note", "phased return",
                             "reasonable adjustments", "capability", "grievance", "ACAS"
                         }
-                    }
+                    },
+                    // gpt-live-transcribe's documented committed-turn mode requires this field
+                    // to be explicitly null. The client then commits each completed audio turn.
+                    turn_detection = (object?)null
                 }
             }
         }
