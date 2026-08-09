@@ -7,6 +7,7 @@ namespace HRCompanion.Core.Services;
 public sealed class LiveMeetingCoordinator : IAsyncDisposable
 {
     public static readonly TimeSpan DefaultAssistanceTimeout = TimeSpan.FromSeconds(8);
+    public static readonly TimeSpan DefaultIngestionDrainTimeout = TimeSpan.FromSeconds(3);
 
     private readonly MeetingState _state;
     private readonly MeetingAssistantOrchestrator _orchestrator;
@@ -15,6 +16,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
     private readonly IRealtimeTranscriber _remoteTranscriber;
     private readonly IRealtimeTranscriber _userTranscriber;
     private readonly TimeSpan _assistanceTimeout;
+    private readonly TimeSpan _ingestionDrainTimeout;
     private readonly SemaphoreSlim _ingestionGate = new(1, 1);
     private readonly ConcurrentDictionary<string, DateTimeOffset> _turnStarts = new(StringComparer.Ordinal);
     private readonly object _lifecycleSync = new();
@@ -31,6 +33,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
     private bool _hasTranscriptionGap;
     private bool _assistantDegraded;
     private bool _started;
+    private bool _disposed;
 
     public LiveMeetingCoordinator(
         MeetingState state,
@@ -39,7 +42,8 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         IAudioCaptureSource userAudio,
         IRealtimeTranscriber remoteTranscriber,
         IRealtimeTranscriber userTranscriber,
-        TimeSpan? assistanceTimeout = null)
+        TimeSpan? assistanceTimeout = null,
+        TimeSpan? ingestionDrainTimeout = null)
     {
         if (remoteAudio.Speaker != SpeakerRole.Hr || remoteTranscriber.Speaker != SpeakerRole.Hr)
             throw new ArgumentException("Remote source/transcriber must own the HR speaker role.");
@@ -53,7 +57,9 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         _remoteTranscriber = remoteTranscriber;
         _userTranscriber = userTranscriber;
         _assistanceTimeout = assistanceTimeout ?? DefaultAssistanceTimeout;
+        _ingestionDrainTimeout = ingestionDrainTimeout ?? DefaultIngestionDrainTimeout;
         if (_assistanceTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(assistanceTimeout));
+        if (_ingestionDrainTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(ingestionDrainTimeout));
     }
 
     public event EventHandler<TranscriptTurn>? FinalTurn;
@@ -67,6 +73,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
     {
         lock (_lifecycleSync)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_started) return;
             _started = true;
         }
@@ -114,7 +121,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         lock (_pendingSync) pending = _pendingIngestions.ToArray();
         if (pending.Length > 0)
         {
-            try { await Task.WhenAll(pending).WaitAsync(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false); }
+            try { await Task.WhenAll(pending).WaitAsync(_ingestionDrainTimeout, cancellationToken).ConfigureAwait(false); }
             catch (TimeoutException ex) { NonFatalError?.Invoke(this, ex); }
         }
 
@@ -166,27 +173,41 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
 
     private void OnTranscriberStateChanged(object? sender, TranscriberConnectionState state)
     {
-        if (ReferenceEquals(sender, _remoteTranscriber)) _hrState = state;
-        if (ReferenceEquals(sender, _userTranscriber)) _userState = state;
+        lock (_lifecycleSync)
+        {
+            if (ReferenceEquals(sender, _remoteTranscriber)) _hrState = state;
+            if (ReferenceEquals(sender, _userTranscriber)) _userState = state;
+        }
         PublishHealth();
     }
 
     private void OnDiagnosticsChanged(object? sender, TranscriberDiagnostics diagnostics)
     {
-        if (diagnostics.HasTranscriptionGap) _hasTranscriptionGap = true;
+        if (diagnostics.HasTranscriptionGap)
+        {
+            lock (_lifecycleSync) _hasTranscriptionGap = true;
+        }
         PublishHealth();
     }
 
     private void OnFaulted(object? sender, Exception error)
     {
-        if (ReferenceEquals(sender, _remoteAudio)) _remoteAudioFailed = true;
-        if (ReferenceEquals(sender, _userAudio)) _userAudioFailed = true;
+        lock (_lifecycleSync)
+        {
+            if (ReferenceEquals(sender, _remoteAudio)) _remoteAudioFailed = true;
+            if (ReferenceEquals(sender, _userAudio)) _userAudioFailed = true;
+        }
         PublishHealth();
         NonFatalError?.Invoke(this, error);
     }
 
     private void OnTranscription(SpeakerRole speaker, string source, TranscriptionUpdate update)
     {
+        lock (_lifecycleSync)
+        {
+            if (!_started || _disposed) return;
+        }
+
         var speechStartedAt = update.StartedAt ?? update.OccurredAt;
         var generation = _activityGeneration;
         if (update.IsSpeechStarted || !string.IsNullOrWhiteSpace(update.Text))
@@ -206,6 +227,23 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         TrackIngestion(ProcessFinalTurnAsync(turn, generation));
     }
 
+    public Task<TranscriptPersistenceResult> SubmitManualHrTurnAsync(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) throw new ArgumentException("Manual HR turn cannot be empty.", nameof(text));
+        lock (_lifecycleSync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_started) throw new InvalidOperationException("Live meeting capture is not running.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var generation = RegisterConversationActivity(now);
+        var turn = TranscriptTurn.Final(_state.MeetingId, SpeakerRole.Hr, text, now, now, "manual-live");
+        var task = ProcessFinalTurnAsync(turn, generation);
+        TrackIngestion(task);
+        return task;
+    }
+
     private long RegisterConversationActivity(DateTimeOffset speechStartedAt)
     {
         long generation;
@@ -220,32 +258,36 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         return generation;
     }
 
-    private async Task ProcessFinalTurnAsync(TranscriptTurn turn, long generation)
+    private async Task<TranscriptPersistenceResult> ProcessFinalTurnAsync(TranscriptTurn turn, long generation)
     {
-        DateTimeOffset persistedAt;
+        TranscriptPersistenceResult persistence;
         bool isLatestConversationTurn;
         await _ingestionGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            persistedAt = await _orchestrator.PersistFinalTurnAsync(_state, turn).ConfigureAwait(false);
+            persistence = await _orchestrator.PersistFinalTurnAsync(_state, turn).ConfigureAwait(false);
+            if (!persistence.WasInserted) return persistence;
             var turns = _state.Turns;
             isLatestConversationTurn = turns.Count > 0 && turns[^1].Id == turn.Id;
-            FinalTurn?.Invoke(this, turn);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             NonFatalError?.Invoke(this, ex);
-            return;
+            return TranscriptPersistenceResult.Failed();
         }
         finally
         {
             _ingestionGate.Release();
         }
 
+        try { FinalTurn?.Invoke(this, turn); }
+        catch (Exception ex) { NonFatalError?.Invoke(this, ex); }
+
         if (turn.Speaker == SpeakerRole.Hr && isLatestConversationTurn && IsCurrent(generation))
         {
-            StartAssistance(turn, persistedAt, generation);
+            StartAssistance(turn, persistence.PersistedAt!.Value, generation);
         }
+        return persistence;
     }
 
     private void StartAssistance(TranscriptTurn turn, DateTimeOffset persistedAt, long generation)
@@ -278,7 +320,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
                 return;
             }
 
-            _assistantDegraded = false;
+            lock (_lifecycleSync) _assistantDegraded = false;
             PublishHealth();
             var response = result.Response;
             if (response.Say is null && response.Watch is null && response.Ask is null) return;
@@ -296,7 +338,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         catch (Exception ex)
         {
             if (!IsCurrent(generation, cts)) return;
-            _assistantDegraded = true;
+            lock (_lifecycleSync) _assistantDegraded = true;
             PublishHealth();
             NonFatalError?.Invoke(this, ex);
         }
@@ -333,7 +375,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
 
     private void MarkAssistantTimeout()
     {
-        _assistantDegraded = true;
+        lock (_lifecycleSync) _assistantDegraded = true;
         PublishHealth();
         NonFatalError?.Invoke(this, new TimeoutException(
             $"Automatic assistance exceeded the {_assistanceTimeout.TotalSeconds:F0}-second live timeout."));
@@ -348,7 +390,11 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
     {
         lock (_pendingSync) _pendingIngestions.Add(task);
         _ = task.ContinueWith(
-            completed => { lock (_pendingSync) _pendingIngestions.Remove(completed); },
+            completed =>
+            {
+                _ = completed.Exception;
+                lock (_pendingSync) _pendingIngestions.Remove(completed);
+            },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
@@ -357,28 +403,41 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
     private void PublishHealth()
     {
         bool started;
-        lock (_lifecycleSync) started = _started;
+        bool remoteAudioFailed;
+        bool userAudioFailed;
+        bool hasTranscriptionGap;
+        bool assistantDegraded;
+        TranscriberConnectionState hrState;
+        TranscriberConnectionState userState;
+        lock (_lifecycleSync)
+        {
+            started = _started;
+            remoteAudioFailed = _remoteAudioFailed;
+            userAudioFailed = _userAudioFailed;
+            hasTranscriptionGap = _hasTranscriptionGap;
+            assistantDegraded = _assistantDegraded;
+            hrState = _hrState;
+            userState = _userState;
+        }
         var state = !started
             ? LiveMeetingHealthState.Manual
-            : _hasTranscriptionGap
-                ? LiveMeetingHealthState.TranscriptionGap
-                : _hrState == TranscriberConnectionState.Reconnecting
+            : hrState == TranscriberConnectionState.Reconnecting
                     ? LiveMeetingHealthState.HrReconnecting
-                    : _userState == TranscriberConnectionState.Reconnecting
+                    : userState == TranscriberConnectionState.Reconnecting
                         ? LiveMeetingHealthState.UserReconnecting
-                        : _remoteAudioFailed || _userAudioFailed ||
-                          _hrState == TranscriberConnectionState.Failed || _userState == TranscriberConnectionState.Failed ||
-                          _hrState != TranscriberConnectionState.Listening || _userState != TranscriberConnectionState.Listening
+                        : remoteAudioFailed || userAudioFailed ||
+                          hrState == TranscriberConnectionState.Failed || userState == TranscriberConnectionState.Failed ||
+                          hrState != TranscriberConnectionState.Listening || userState != TranscriberConnectionState.Listening
                             ? LiveMeetingHealthState.TranscriptionDegraded
-                            : _assistantDegraded
+                            : assistantDegraded
                                 ? LiveMeetingHealthState.AssistantDegraded
                                 : LiveMeetingHealthState.FullListening;
         HealthChanged?.Invoke(this, new(
             state,
-            _hrState,
-            _userState,
-            _hasTranscriptionGap,
-            _assistantDegraded,
+            hrState,
+            userState,
+            hasTranscriptionGap,
+            assistantDegraded,
             _remoteTranscriber.Diagnostics,
             _userTranscriber.Diagnostics));
     }
@@ -400,11 +459,15 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        lock (_lifecycleSync)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
         await StopAsync().ConfigureAwait(false);
         await _remoteAudio.DisposeAsync().ConfigureAwait(false);
         await _userAudio.DisposeAsync().ConfigureAwait(false);
         await _remoteTranscriber.DisposeAsync().ConfigureAwait(false);
         await _userTranscriber.DisposeAsync().ConfigureAwait(false);
-        _ingestionGate.Dispose();
     }
 }

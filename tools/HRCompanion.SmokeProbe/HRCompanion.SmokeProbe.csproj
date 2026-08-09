@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>HRCompanion.SmokeProbe</RootNamespace>
+    <AssemblyName>HRCompanion.SmokeProbe</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\HRCompanion.Core\HRCompanion.Core.csproj" />
+    <ProjectReference Include="..\..\src\HRCompanion.Infrastructure\HRCompanion.Infrastructure.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+</Project>

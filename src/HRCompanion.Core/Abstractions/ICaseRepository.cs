@@ -11,7 +11,7 @@ public interface ICaseRepository
     Task<IReadOnlyList<EvidenceSnippet>> SearchAsync(string query, int limit = 8, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<CaseFact>> GetFactsAsync(CancellationToken cancellationToken = default);
     Task SaveFactAsync(CaseFact fact, CancellationToken cancellationToken = default);
-    Task SaveTranscriptTurnAsync(TranscriptTurn turn, CancellationToken cancellationToken = default);
+    Task<TranscriptPersistenceResult> SaveTranscriptTurnAsync(TranscriptTurn turn, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TranscriptTurn>> GetMeetingTurnsAsync(Guid meetingId, CancellationToken cancellationToken = default);
     Task StartMeetingAsync(MeetingState meeting, CancellationToken cancellationToken = default);
     Task CompleteMeetingAsync(Guid meetingId, CancellationToken cancellationToken = default);

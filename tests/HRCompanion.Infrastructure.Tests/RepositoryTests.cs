@@ -93,12 +93,14 @@ public sealed class RepositoryTests : IAsyncLifetime
     {
         var meetingId = Guid.NewGuid();
         var now = DateTimeOffset.UtcNow;
-        await _repository.SaveTranscriptTurnAsync(TranscriptTurn.Final(
+        var first = await _repository.SaveTranscriptTurnAsync(TranscriptTurn.Final(
             meetingId, SpeakerRole.Hr, "Original final", now, now, "teams", "provider-item-1"));
-        await _repository.SaveTranscriptTurnAsync(TranscriptTurn.Final(
+        var duplicate = await _repository.SaveTranscriptTurnAsync(TranscriptTurn.Final(
             meetingId, SpeakerRole.Hr, "Retried final", now, now, "teams", "provider-item-1"));
 
         var turns = await _repository.GetMeetingTurnsAsync(meetingId);
+        Assert.Equal(TranscriptPersistenceStatus.Inserted, first.Status);
+        Assert.Equal(TranscriptPersistenceStatus.AlreadyDurable, duplicate.Status);
         Assert.Single(turns);
         Assert.Equal("Original final", turns[0].Text);
     }

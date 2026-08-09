@@ -335,5 +335,10 @@ public sealed class RealtimeProtocolException : Exception
     public RealtimeProtocolException(string eventType, string? code)
         : base($"Realtime API event reported {eventType}{(code is null ? string.Empty : $" ({code})")}.")
     {
+        EventType = eventType;
+        Code = code;
     }
+
+    public string EventType { get; }
+    public string? Code { get; }
 }

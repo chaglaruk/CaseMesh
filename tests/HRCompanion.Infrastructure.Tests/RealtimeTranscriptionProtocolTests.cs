@@ -99,6 +99,7 @@ public sealed class RealtimeTranscriptionProtocolTests
             now.AddSeconds(3));
 
         Assert.NotNull(failure.Error);
+        Assert.Equal("transcription_error", failure.Error!.Type);
         Assert.Equal("synthetic_failure", failure.Error!.Code);
         var released = Assert.Single(failure.Updates);
         Assert.Equal("turn-b", released.ItemId);
@@ -108,6 +109,12 @@ public sealed class RealtimeTranscriptionProtocolTests
             """{"type":"conversation.item.input_audio_transcription.completed","item_id":"turn-a","transcript":"must stay ignored"}""",
             now.AddSeconds(4));
         Assert.Empty(lateFailedCompletion.Updates);
+
+        var duplicateFailure = parser.Parse(
+            """{"type":"conversation.item.input_audio_transcription.failed","item_id":"turn-a","error":{"type":"transcription_error","code":"synthetic_failure"}}""",
+            now.AddSeconds(5));
+        Assert.Empty(duplicateFailure.Updates);
+        Assert.Equal("synthetic_failure", duplicateFailure.Error!.Code);
     }
 
     [Fact]

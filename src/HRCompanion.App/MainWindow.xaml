@@ -45,6 +45,8 @@
                     <TextBlock x:Name="RecentTranscriptText" Text="—" TextTrimming="CharacterEllipsis" MaxWidth="650" />
                     <TextBlock x:Name="LatencyText" Margin="12,0,0,0" Foreground="#555" />
                 </StackPanel>
+                <TextBlock x:Name="PreflightText" Grid.ColumnSpan="3" Margin="0,82,0,0" Foreground="#555"
+                           Text="Preflight: checking local dependencies..." TextWrapping="Wrap" />
             </Grid>
         </Border>
 

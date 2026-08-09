@@ -200,7 +200,7 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task SaveTranscriptTurnAsync(TranscriptTurn turn, CancellationToken cancellationToken = default)
+    public async Task<TranscriptPersistenceResult> SaveTranscriptTurnAsync(TranscriptTurn turn, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
@@ -218,7 +218,13 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
         command.Parameters.AddWithValue("$final", turn.IsFinal ? 1 : 0);
         command.Parameters.AddWithValue("$source", turn.Source);
         command.Parameters.AddWithValue("$providerItem", (object?)turn.ProviderItemId ?? DBNull.Value);
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        var affected = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return affected switch
+        {
+            1 => TranscriptPersistenceResult.Inserted(DateTimeOffset.UtcNow),
+            0 => TranscriptPersistenceResult.AlreadyDurable(),
+            _ => throw new InvalidOperationException($"Unexpected transcript insert row count: {affected}.")
+        };
     }
 
     public async Task<IReadOnlyList<TranscriptTurn>> GetMeetingTurnsAsync(Guid meetingId, CancellationToken cancellationToken = default)

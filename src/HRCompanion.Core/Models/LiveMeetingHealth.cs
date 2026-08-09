@@ -9,7 +9,6 @@ public enum LiveMeetingHealthState
     HrReconnecting,
     UserReconnecting,
     TranscriptionDegraded,
-    TranscriptionGap,
     AssistantDegraded
 }
 

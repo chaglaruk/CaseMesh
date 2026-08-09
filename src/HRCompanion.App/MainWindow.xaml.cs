@@ -45,8 +45,8 @@ public partial class MainWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        await RefreshDocumentCountAsync();
         RefreshDevices();
+        await RefreshPreflightAsync();
         var recovered = await _repository.GetUnfinishedMeetingAsync();
         if (recovered is not null)
         {
@@ -56,7 +56,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RefreshDevices_Click(object sender, RoutedEventArgs e) => RefreshDevices();
+    private async void RefreshDevices_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshDevices();
+        await RefreshPreflightAsync();
+    }
 
     private void RefreshDevices()
     {
@@ -83,6 +87,20 @@ public partial class MainWindow : Window
         if (MicrophoneBox.SelectedItem is not MicrophoneDeviceInfo microphone)
         {
             SetLiveStatus("MANUAL", "No microphone is available. Manual assistance remains available.");
+            return;
+        }
+        string? apiKey;
+        try { apiKey = await _keyStore.GetAsync(); }
+        catch (Exception ex)
+        {
+            SetLiveStatus("MANUAL", $"Windows Credential Manager is unavailable ({ex.GetType().Name}). Manual assistance remains available.");
+            await RefreshPreflightAsync();
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            SetLiveStatus("MANUAL", "OpenAI API key is missing. Save it locally before starting live transcription.");
+            await RefreshPreflightAsync();
             return;
         }
 
@@ -178,27 +196,27 @@ public partial class MainWindow : Window
 
     private void OnHealthChanged(LiveMeetingHealth health)
     {
+        var statusSuffix = health.HasTranscriptionGap ? " + GAP" : string.Empty;
+        var gapDetail = health.HasTranscriptionGap
+            ? $" Historical transcription gap: HR dropped {health.HrDiagnostics.FramesDropped}, " +
+              $"USER dropped {health.UserDiagnostics.FramesDropped}; the transcript may be incomplete."
+            : string.Empty;
         switch (health.State)
         {
             case LiveMeetingHealthState.FullListening:
-                SetLiveStatus("LISTENING", "Teams/HR and microphone/USER transcription are healthy.");
+                SetLiveStatus("LISTENING" + statusSuffix, "Teams/HR and microphone/USER transcription are currently healthy." + gapDetail);
                 break;
             case LiveMeetingHealthState.HrReconnecting:
-                SetLiveStatus("HR RECONNECTING", "Teams/HR transcription is reconnecting; USER transcription remains independently tracked.");
+                SetLiveStatus("HR RECONNECTING" + statusSuffix, "Teams/HR transcription is reconnecting; USER transcription remains independently tracked." + gapDetail);
                 break;
             case LiveMeetingHealthState.UserReconnecting:
-                SetLiveStatus("USER RECONNECTING", "Microphone/USER transcription is reconnecting; HR transcription remains independently tracked.");
+                SetLiveStatus("USER RECONNECTING" + statusSuffix, "Microphone/USER transcription is reconnecting; HR transcription remains independently tracked." + gapDetail);
                 break;
             case LiveMeetingHealthState.TranscriptionDegraded:
-                SetLiveStatus("TRANSCRIPTION DEGRADED", "At least one actual-speech source is unavailable. Use manual fallback for missing turns.");
-                break;
-            case LiveMeetingHealthState.TranscriptionGap:
-                SetLiveStatus("TRANSCRIPTION GAP",
-                    $"Audio frames dropped: HR {health.HrDiagnostics.FramesDropped}, USER {health.UserDiagnostics.FramesDropped}. " +
-                    $"Queue high-water: HR {health.HrDiagnostics.QueueHighWaterMark}, USER {health.UserDiagnostics.QueueHighWaterMark}. The transcript may be incomplete.");
+                SetLiveStatus("TRANSCRIPTION DEGRADED" + statusSuffix, "At least one actual-speech source is unavailable. Use manual fallback for missing turns." + gapDetail);
                 break;
             case LiveMeetingHealthState.AssistantDegraded:
-                SetLiveStatus("ASSISTANT DEGRADED", "Live transcription remains healthy, but SAY/WATCH/ASK generation is unavailable.");
+                SetLiveStatus("ASSISTANT DEGRADED" + statusSuffix, "Live transcription remains healthy, but SAY/WATCH/ASK generation is unavailable." + gapDetail);
                 break;
             case LiveMeetingHealthState.Manual:
                 SetLiveStatus("MANUAL", "Live capture is stopped. Manual assistance remains available.");
@@ -256,7 +274,7 @@ public partial class MainWindow : Window
             StatusText.Text = $"Working context: imported {result.Imported}; duplicates {result.SkippedDuplicate}; errors {result.Errors.Count}.";
             if (result.Errors.Count > 0)
                 MessageBox.Show(string.Join(Environment.NewLine, result.Errors.Take(10)), "Some context records could not be imported", MessageBoxButton.OK, MessageBoxImage.Warning);
-            await RefreshDocumentCountAsync();
+            await RefreshPreflightAsync();
         }
         catch (Exception ex)
         {
@@ -274,7 +292,7 @@ public partial class MainWindow : Window
             StatusText.Text = $"Imported {result.Imported}; duplicates {result.SkippedDuplicate}; unsupported {result.Unsupported}; errors {result.Errors.Count}.";
             if (result.Errors.Count > 0)
                 MessageBox.Show(string.Join(Environment.NewLine, result.Errors.Take(10)), "Some files could not be imported", MessageBoxButton.OK, MessageBoxImage.Warning);
-            await RefreshDocumentCountAsync();
+            await RefreshPreflightAsync();
         }
         catch (Exception ex)
         {
@@ -290,6 +308,7 @@ public partial class MainWindow : Window
             await _keyStore.SaveAsync(ApiKeyBox.Password);
             ApiKeyBox.Clear();
             StatusText.Text = "API key saved in Windows Credential Manager.";
+            await RefreshPreflightAsync();
         }
         catch (Exception ex)
         {
@@ -307,6 +326,7 @@ public partial class MainWindow : Window
                 Guid.NewGuid(), text, FactStatus.UserPosition, null, "manual context", null, DateTimeOffset.UtcNow));
             ContextBox.Clear();
             StatusText.Text = "Case context saved locally as USER_POSITION.";
+            await RefreshPreflightAsync();
         }
         catch (Exception ex)
         {
@@ -319,20 +339,38 @@ public partial class MainWindow : Window
         var text = HrTurnBox.Text.Trim();
         if (text.Length == 0) return;
         AssistButton.IsEnabled = false;
+        var durable = false;
         try
         {
             await _repository.StartMeetingAsync(_meeting);
+            if (_coordinator is not null)
+            {
+                StatusText.Text = "Storing manual live HR turn...";
+                var liveResult = await _coordinator.SubmitManualHrTurnAsync(text);
+                durable = liveResult.WasInserted || liveResult.Status == TranscriptPersistenceStatus.AlreadyDurable;
+                StatusText.Text = liveResult.Status switch
+                {
+                    TranscriptPersistenceStatus.Inserted => "Manual live HR turn stored; current assistance is being prepared.",
+                    TranscriptPersistenceStatus.AlreadyDurable => "Manual live HR turn was already stored.",
+                    _ => "Manual live HR turn could not be stored; it was not added to the transcript."
+                };
+                return;
+            }
+
             StatusText.Text = "Retrieving context and drafting...";
             var now = DateTimeOffset.UtcNow;
             var turn = TranscriptTurn.Final(_meeting.MeetingId, SpeakerRole.Hr, text, now, now, "manual");
-            _latest = await _orchestrator.AcceptFinalTurnAsync(_meeting, turn);
+            var result = await _orchestrator.AcceptFinalTurnWithTimingAsync(_meeting, turn, () => durable = true);
+            _latest = result.Response;
             Render(_latest);
             RenderRecentTranscript();
             StatusText.Text = "Assistance ready.";
         }
         catch (Exception ex)
         {
-            SetLiveStatus("MANUAL", "Assistant unavailable; the manual HR turn is still stored locally.");
+            SetLiveStatus("MANUAL", durable
+                ? "Assistant unavailable; the manual HR turn is stored locally."
+                : "Manual HR turn persistence failed; it was not added to the durable transcript.");
             MessageBox.Show(ex.Message, "Assistant error", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally
@@ -366,12 +404,34 @@ public partial class MainWindow : Window
         _overlay.Render(_latest);
     }
 
-    private async Task RefreshDocumentCountAsync()
+    private async Task RefreshPreflightAsync()
     {
-        var documentsTask = _repository.GetDocumentsAsync();
-        var factsTask = _repository.GetFactsAsync();
-        await Task.WhenAll(documentsTask, factsTask);
-        DocumentCountText.Text = $"{(await documentsTask).Count} source document(s); {(await factsTask).Count} context/fact record(s) stored locally";
+        var keyPresent = false;
+        var databaseAccessible = false;
+        var sourceCount = 0;
+        var factCount = 0;
+        try { keyPresent = !string.IsNullOrWhiteSpace(await _keyStore.GetAsync()); } catch { }
+        try
+        {
+            var documentsTask = _repository.GetDocumentsAsync();
+            var factsTask = _repository.GetFactsAsync();
+            await Task.WhenAll(documentsTask, factsTask);
+            sourceCount = (await documentsTask).Count;
+            factCount = (await factsTask).Count;
+            databaseAccessible = true;
+            DocumentCountText.Text = $"{sourceCount} source document(s); {factCount} context/fact record(s) stored locally";
+        }
+        catch
+        {
+            DocumentCountText.Text = "Case Brain database is unavailable";
+        }
+
+        PreflightText.Text = string.Join("  |  ",
+            $"API key {(keyPresent ? "OK" : "MISSING")}",
+            $"Teams {(TeamsProcessBox.SelectedItem is null ? "MISSING" : "OK")}",
+            $"microphone {(MicrophoneBox.SelectedItem is null ? "MISSING" : "OK")}",
+            $"Case Brain {(databaseAccessible ? "OK" : "ERROR")}",
+            sourceCount + factCount == 0 ? "sources EMPTY (allowed)" : $"sources {sourceCount + factCount}");
     }
 
     protected override async void OnClosing(CancelEventArgs e)

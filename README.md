@@ -38,6 +38,7 @@ See [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md).
 - `HRCompanion.Audio.Windows` — Windows audio capture abstractions and safe fallback capture.
 - `HRCompanion.App` — minimal WPF desktop shell and overlay.
 - `HRCompanion.AudioProbe` — local Windows validation utility for audio gates.
+- `HRCompanion.SmokeProbe` — credential-backed synthetic dual-Realtime/Sol smoke utility; no key is accepted on the command line.
 - `tests/*` — deterministic unit tests.
 
 ## Current status
@@ -82,6 +83,14 @@ dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.cspro
 ```
 
 `--self-test` proves target-process capture on the local Windows audio stack. `--isolation-self-test` plays audio outside a silent target and checks that it is excluded. Neither replaces a real Teams/headset/mute/restart Gate 1 rehearsal. Full system loopback is available only through the explicitly degraded `--system-fallback` option.
+
+After saving the API key through the app, run the synthetic live API smoke path:
+
+```powershell
+.\scripts\smoke.ps1
+```
+
+The script reads `HRCompanion/OpenAI` from Windows Credential Manager, generates synthetic 24 kHz mono speech only under a temporary directory, tests separate HR/USER Realtime sessions and one grounded Sol response, reports content-free metrics, and removes the temporary audio. It exits before audio generation or API access when the credential is absent.
 
 ## AI defaults
 

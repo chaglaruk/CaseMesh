@@ -76,13 +76,15 @@ All model IDs are configuration values, not hard-coded business logic.
 
 `TRANSCRIPTION_DEGRADED`: at least one actual-speech source is unavailable. The UI identifies HR vs USER reconnecting separately and keeps manual entry available.
 
-`TRANSCRIPTION_GAP`: the bounded audio sender dropped at least one frame, so the transcript may be incomplete. The app exposes source-specific accepted/sent/dropped counts and queue high-water marks without logging PCM or text.
+`TRANSCRIPTION_GAP` is sticky historical metadata rather than the current primary state. Current HR/USER reconnect or failure remains visible while the UI also warns that the transcript may be incomplete. The app exposes source-specific accepted/sent/dropped counts and queue high-water marks without logging PCM or text.
 
 `MANUAL`: audio pipeline unavailable; user can paste/type the latest HR turn and still request a grounded response.
 
 ## Live concurrency
 
-Actual final turns use a short serialized state/SQLite ingestion path. Retrieval, optional Luna analysis and the Sol request run outside that boundary. Any newer real speech advances a conversation generation, cancels obsolete model work where possible and prevents late SAY/WATCH/ASK output from rendering. Automatic assistance has an eight-second live-use timeout; this is a safety bound, not a latency claim.
+Actual final turns use a short serialized SQLite-first ingestion path. SQLite reports whether a turn was inserted or already durable; only a successful new insert enters `MeetingState`, raises the actual-turn UI event, or starts assistance. Retrieval, optional Luna analysis and the Sol request run outside that boundary. Live manual HR turns use this same lifecycle. Any newer real speech advances a conversation generation, cancels obsolete model work where possible and prevents late SAY/WATCH/ASK output from rendering. Automatic assistance has an eight-second live-use timeout; this is a safety cap, not a target or latency claim.
+
+Stop waits a bounded interval for in-flight actual-turn ingestion, but does not cancel or dispose synchronization still owned by a slow durable insert. Once stopped/disposed, no new callbacks are accepted and any already-entered insert cannot start assistance.
 
 Each Realtime transcriber owns one sender worker and a 12-frame bounded queue. Overflow drops the oldest queued frame in favour of current audio and marks a visible transcription gap. Frames encountered while disconnected are also dropped and counted rather than replayed after the conversation has moved on.
 
@@ -93,4 +95,5 @@ The target is process-specific capture of Microsoft Teams plus separate micropho
 Protocol references checked on 2026-08-09:
 
 - [OpenAI Realtime transcription guide](https://developers.openai.com/api/docs/guides/realtime-transcription)
+- [OpenAI Realtime server events](https://developers.openai.com/api/reference/resources/realtime/server-events)
 - [Microsoft Application Loopback sample](https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/ApplicationLoopback)

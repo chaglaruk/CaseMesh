@@ -36,13 +36,21 @@ public sealed class MeetingAssistantOrchestrator
             throw new ArgumentException("Only final transcript turns may enter the durable meeting state.", nameof(turn));
         }
 
-        var persistedAt = await PersistFinalTurnAsync(state, turn, cancellationToken).ConfigureAwait(false);
+        var persistence = await PersistFinalTurnAsync(state, turn, cancellationToken).ConfigureAwait(false);
+        if (!persistence.WasInserted)
+        {
+            return new(AssistantResponse.NoAction(), null);
+        }
         onPersisted?.Invoke();
 
-        return await GenerateAssistanceWithTimingAsync(state, turn, persistedAt, cancellationToken).ConfigureAwait(false);
+        return await GenerateAssistanceWithTimingAsync(
+            state,
+            turn,
+            persistence.PersistedAt!.Value,
+            cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<DateTimeOffset> PersistFinalTurnAsync(
+    public async Task<TranscriptPersistenceResult> PersistFinalTurnAsync(
         MeetingState state,
         TranscriptTurn turn,
         CancellationToken cancellationToken = default)
@@ -51,10 +59,14 @@ public sealed class MeetingAssistantOrchestrator
         {
             throw new ArgumentException("Only final transcript turns may enter the durable meeting state.", nameof(turn));
         }
+        if (turn.MeetingId != state.MeetingId)
+        {
+            throw new ArgumentException("Transcript turn belongs to a different meeting.", nameof(turn));
+        }
 
-        state.AddTurn(turn);
-        await _repository.SaveTranscriptTurnAsync(turn, cancellationToken).ConfigureAwait(false);
-        return DateTimeOffset.UtcNow;
+        var result = await _repository.SaveTranscriptTurnAsync(turn, cancellationToken).ConfigureAwait(false);
+        if (result.WasInserted) state.AddTurn(turn);
+        return result;
     }
 
     public async Task<AssistanceRunResult> GenerateAssistanceWithTimingAsync(
