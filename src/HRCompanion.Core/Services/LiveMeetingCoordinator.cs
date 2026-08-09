@@ -1,0 +1,153 @@
+using System.Collections.Concurrent;
+using HRCompanion.Core.Abstractions;
+using HRCompanion.Core.Models;
+
+namespace HRCompanion.Core.Services;
+
+public sealed class LiveMeetingCoordinator : IAsyncDisposable
+{
+    private readonly MeetingState _state;
+    private readonly MeetingAssistantOrchestrator _orchestrator;
+    private readonly IAudioCaptureSource _remoteAudio;
+    private readonly IAudioCaptureSource _userAudio;
+    private readonly IRealtimeTranscriber _remoteTranscriber;
+    private readonly IRealtimeTranscriber _userTranscriber;
+    private readonly SemaphoreSlim _turnGate = new(1, 1);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _turnStarts = new(StringComparer.Ordinal);
+    private bool _started;
+
+    public LiveMeetingCoordinator(
+        MeetingState state,
+        MeetingAssistantOrchestrator orchestrator,
+        IAudioCaptureSource remoteAudio,
+        IAudioCaptureSource userAudio,
+        IRealtimeTranscriber remoteTranscriber,
+        IRealtimeTranscriber userTranscriber)
+    {
+        if (remoteAudio.Speaker != SpeakerRole.Hr || remoteTranscriber.Speaker != SpeakerRole.Hr)
+            throw new ArgumentException("Remote source/transcriber must own the HR speaker role.");
+        if (userAudio.Speaker != SpeakerRole.User || userTranscriber.Speaker != SpeakerRole.User)
+            throw new ArgumentException("Microphone source/transcriber must own the User speaker role.");
+
+        _state = state;
+        _orchestrator = orchestrator;
+        _remoteAudio = remoteAudio;
+        _userAudio = userAudio;
+        _remoteTranscriber = remoteTranscriber;
+        _userTranscriber = userTranscriber;
+    }
+
+    public event EventHandler<TranscriptTurn>? FinalTurn;
+    public event EventHandler<AssistantResponse>? AssistantUpdated;
+    public event EventHandler<Exception>? NonFatalError;
+
+    public async Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        if (_started) return;
+        Attach();
+        try
+        {
+            await _remoteTranscriber.StartAsync(cancellationToken).ConfigureAwait(false);
+            await _userTranscriber.StartAsync(cancellationToken).ConfigureAwait(false);
+            await _remoteAudio.StartAsync(cancellationToken).ConfigureAwait(false);
+            await _userAudio.StartAsync(cancellationToken).ConfigureAwait(false);
+            _started = true;
+        }
+        catch
+        {
+            Detach();
+            await SafeStopAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_started) return;
+        _started = false;
+        Detach();
+        await _remoteAudio.StopAsync(cancellationToken).ConfigureAwait(false);
+        await _userAudio.StopAsync(cancellationToken).ConfigureAwait(false);
+        await _remoteTranscriber.StopAsync(cancellationToken).ConfigureAwait(false);
+        await _userTranscriber.StopAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private void Attach()
+    {
+        _remoteAudio.FrameReady += OnRemoteFrame;
+        _userAudio.FrameReady += OnUserFrame;
+        _remoteTranscriber.Updated += OnRemoteTranscription;
+        _userTranscriber.Updated += OnUserTranscription;
+    }
+
+    private void Detach()
+    {
+        _remoteAudio.FrameReady -= OnRemoteFrame;
+        _userAudio.FrameReady -= OnUserFrame;
+        _remoteTranscriber.Updated -= OnRemoteTranscription;
+        _userTranscriber.Updated -= OnUserTranscription;
+    }
+
+    private void OnRemoteFrame(object? sender, AudioFrame frame) => _ = ForwardFrameAsync(_remoteTranscriber, frame);
+    private void OnUserFrame(object? sender, AudioFrame frame) => _ = ForwardFrameAsync(_userTranscriber, frame);
+    private void OnRemoteTranscription(object? sender, TranscriptionUpdate update) => OnTranscription(SpeakerRole.Hr, "teams", update);
+    private void OnUserTranscription(object? sender, TranscriptionUpdate update) => OnTranscription(SpeakerRole.User, "microphone", update);
+
+    private async Task ForwardFrameAsync(IRealtimeTranscriber transcriber, AudioFrame frame)
+    {
+        try { await transcriber.SendAsync(frame).ConfigureAwait(false); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { NonFatalError?.Invoke(this, ex); }
+    }
+
+    private void OnTranscription(SpeakerRole speaker, string source, TranscriptionUpdate update)
+    {
+        var itemKey = !string.IsNullOrWhiteSpace(update.ItemId)
+            ? $"{speaker}:{update.ItemId}"
+            : $"{speaker}:fallback";
+        _turnStarts.TryAdd(itemKey, update.OccurredAt);
+        if (!update.IsFinal || string.IsNullOrWhiteSpace(update.Text)) return;
+        var startedAt = _turnStarts.TryRemove(itemKey, out var start) ? start : update.OccurredAt;
+        var turn = TranscriptTurn.Final(_state.MeetingId, speaker, update.Text, startedAt, update.OccurredAt, source);
+        _ = ProcessFinalTurnAsync(turn);
+    }
+
+    private async Task ProcessFinalTurnAsync(TranscriptTurn turn)
+    {
+        await _turnGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            FinalTurn?.Invoke(this, turn);
+            var response = await _orchestrator.AcceptFinalTurnAsync(_state, turn).ConfigureAwait(false);
+            if (response.Say is not null || response.Watch is not null || response.Ask is not null)
+            {
+                AssistantUpdated?.Invoke(this, response);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            NonFatalError?.Invoke(this, ex);
+        }
+        finally
+        {
+            _turnGate.Release();
+        }
+    }
+
+    private async Task SafeStopAsync()
+    {
+        try { await _remoteAudio.StopAsync().ConfigureAwait(false); } catch { }
+        try { await _userAudio.StopAsync().ConfigureAwait(false); } catch { }
+        try { await _remoteTranscriber.StopAsync().ConfigureAwait(false); } catch { }
+        try { await _userTranscriber.StopAsync().ConfigureAwait(false); } catch { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync().ConfigureAwait(false);
+        await _remoteAudio.DisposeAsync().ConfigureAwait(false);
+        await _userAudio.DisposeAsync().ConfigureAwait(false);
+        await _remoteTranscriber.DisposeAsync().ConfigureAwait(false);
+        await _userTranscriber.DisposeAsync().ConfigureAwait(false);
+        _turnGate.Dispose();
+    }
+}

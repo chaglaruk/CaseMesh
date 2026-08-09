@@ -1,0 +1,12 @@
+{
+  "caseName": "HR Case",
+  "objectives": [
+    "Describe the user's current meeting objective here."
+  ],
+  "boundaries": [
+    "Describe anything the user does not want to agree to without consideration."
+  ],
+  "userPositions": [],
+  "verifiedFacts": [],
+  "people": []
+}

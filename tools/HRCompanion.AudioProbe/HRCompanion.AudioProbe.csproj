@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>HRCompanion.AudioProbe</RootNamespace>
+    <AssemblyName>HRCompanion.AudioProbe</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\HRCompanion.Core\HRCompanion.Core.csproj" />
+    <ProjectReference Include="..\..\src\HRCompanion.Audio.Windows\HRCompanion.Audio.Windows.csproj" />
+  </ItemGroup>
+</Project>

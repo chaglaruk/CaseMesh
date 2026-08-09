@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>HRCompanion.Audio.Windows</RootNamespace>
+    <AssemblyName>HRCompanion.Audio.Windows</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\HRCompanion.Core\HRCompanion.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio" />
+  </ItemGroup>
+</Project>

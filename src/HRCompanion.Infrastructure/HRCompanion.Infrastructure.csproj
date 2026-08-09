@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>HRCompanion.Infrastructure</RootNamespace>
+    <AssemblyName>HRCompanion.Infrastructure</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\HRCompanion.Core\HRCompanion.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="DocumentFormat.OpenXml" />
+    <PackageReference Include="MimeKit" />
+    <PackageReference Include="PdfPig" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+</Project>

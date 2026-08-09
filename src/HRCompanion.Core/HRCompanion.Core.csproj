@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>HRCompanion.Core</RootNamespace>
+    <AssemblyName>HRCompanion.Core</AssemblyName>
+  </PropertyGroup>
+</Project>

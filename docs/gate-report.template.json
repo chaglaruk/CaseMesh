@@ -1,0 +1,26 @@
+{
+  "generatedAt": null,
+  "headSha": null,
+  "environment": {
+    "os": null,
+    "dotnet": null,
+    "teamsVersion": null,
+    "audioOutput": null,
+    "microphone": null
+  },
+  "gates": {
+    "gate0_build_tests": { "status": "NOT_ATTEMPTED", "evidence": [] },
+    "gate1_audio_ownership": { "status": "NOT_ATTEMPTED", "evidence": [] },
+    "gate2_live_transcription": { "status": "NOT_ATTEMPTED", "evidence": [] },
+    "gate3_case_brain": { "status": "NOT_ATTEMPTED", "evidence": [] },
+    "gate4_grounded_assistance": { "status": "NOT_ATTEMPTED", "evidence": [] },
+    "gate5_naturalness_latency": {
+      "status": "NOT_ATTEMPTED",
+      "medianMs": null,
+      "p95Ms": null,
+      "evidence": []
+    },
+    "gate6_overlay": { "status": "NOT_ATTEMPTED", "evidence": [] },
+    "gate7_endurance_recovery": { "status": "NOT_ATTEMPTED", "evidence": [] }
+  }
+}

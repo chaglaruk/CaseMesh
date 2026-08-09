@@ -1,0 +1,47 @@
+# Build
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Local/private case data (never commit)
+*.hrcontext
+data/
+case-data/
+imports/
+exports/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.flac
+
+# Secrets
+.env
+.env.*
+secrets.json
+appsettings.Local.json
+
+# Test outputs
+TestResults/
+*.trx
+
+# Logs / crash recovery
+logs/
+crash/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Packaging
+artifacts/
+publish/
