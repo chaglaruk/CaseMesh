@@ -39,11 +39,12 @@ See [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md).
 - `HRCompanion.App` — minimal WPF desktop shell and overlay.
 - `HRCompanion.AudioProbe` — local Windows validation utility for audio gates.
 - `HRCompanion.SmokeProbe` — credential-backed synthetic dual-Realtime/Sol smoke utility; no key is accepted on the command line.
+- `HRCompanion.QualityProbe` — ten-case synthetic Sol quality matrix for manual spoken-answer review; it never reads the real Case Brain.
 - `tests/*` — deterministic unit tests.
 
 ## Current status
 
-GitHub Actions has successfully completed `.NET 10` restore, Windows Release build, and the automated test suite for the current code baseline. This verifies the build/test portion only. **Do not call the app meeting-ready until process-specific Teams capture, live transcription, overlay behavior, latency, recovery, and real-device rehearsal gates pass.**
+GitHub Actions has successfully completed `.NET 10` restore, Windows Release build, and the automated test suite for the current code baseline. A credential-backed synthetic smoke has also produced separate HR and USER final Realtime transcripts with provider item IDs, followed by a grounded Sol response with valid source IDs and zero reported protocol errors. This proves the synthetic API path only. **Do not call the app meeting-ready until process-specific Teams capture, real pipeline latency, overlay behavior, recovery, and real-device rehearsal gates pass.**
 
 Read [docs/STATUS.md](docs/STATUS.md) and [docs/GATES.md](docs/GATES.md) before continuing.
 
@@ -90,7 +91,15 @@ After saving the API key through the app, run the synthetic live API smoke path:
 .\scripts\smoke.ps1
 ```
 
-The script reads `HRCompanion/OpenAI` from Windows Credential Manager, generates synthetic 24 kHz mono speech only under a temporary directory, tests separate HR/USER Realtime sessions and one grounded Sol response, reports content-free metrics, and removes the temporary audio. It exits before audio generation or API access when the credential is absent.
+The script reads `HRCompanion/OpenAI` from Windows Credential Manager, generates synthetic 24 kHz mono speech only under a temporary directory, creates dedicated short-lived transcription sessions for separate HR/USER Realtime streams, tests one grounded Sol response, reports content-free metrics, and removes the temporary audio. It exits before audio generation or API access when the credential is absent.
+
+For manual synthetic answer-quality review:
+
+```powershell
+.\scripts\quality-matrix.ps1
+```
+
+The quality matrix sends ten synthetic HR scenarios to the configured Sol answer model and prints the actual `SAY`, `WATCH`, `ASK`, source-ID validity, and isolated request timing. It does not import private material and does not automatically certify naturalness. Its timing must not be reported as Gate 5 end-to-end latency.
 
 ## AI defaults
 
@@ -98,8 +107,7 @@ Configuration defaults are intentionally centralized and replaceable:
 
 - answer model: `gpt-5.6-sol`
 - lightweight intent/retrieval helper: `gpt-5.6-luna`
-- Realtime WebSocket connection model: `gpt-realtime-2.1`
-- live transcription: `gpt-live-transcribe`
+- live transcription: `gpt-live-transcribe`, using dedicated short-lived Realtime transcription sessions
 
 The app's memory is **not ChatGPT memory**. Case knowledge must come from the local Case Brain, verified sources, meeting transcripts, and explicit user-position records.
 
