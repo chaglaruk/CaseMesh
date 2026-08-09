@@ -98,6 +98,8 @@ try
 catch (Exception ex)
 {
     Console.Error.WriteLine($"Synthetic live smoke failed: {ex.GetType().Name}.");
+    if (ex is RealtimeProtocolException protocol)
+        protocolErrors.Enqueue($"{protocol.EventType}/{protocol.Code ?? "none"}");
     foreach (var error in protocolErrors.Distinct(StringComparer.Ordinal))
         Console.Error.WriteLine($"Realtime error: {error}");
     return 1;
