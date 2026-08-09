@@ -215,7 +215,6 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                 input = new
                 {
                     format = new { type = "audio/pcm", rate = 24000 },
-                    noise_reduction = new { type = Speaker == SpeakerRole.User ? "near_field" : "far_field" },
                     transcription = new
                     {
                         model = _options.TranscriptionModel,
@@ -227,7 +226,10 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                             "reasonable adjustments", "capability", "grievance", "ACAS"
                         },
                         delay = "low"
-                    }
+                    },
+                    // Match the dedicated Realtime transcription guide exactly: disable automatic
+                    // turn detection and explicitly commit each completed live-audio turn.
+                    turn_detection = (object?)null
                 }
             }
         }
