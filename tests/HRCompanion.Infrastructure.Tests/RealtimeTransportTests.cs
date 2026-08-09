@@ -81,7 +81,7 @@ public sealed class RealtimeTransportTests
     }
 
     [Fact]
-    public void SessionUpdate_UsesCurrentDedicatedLiveTranscriptionShape()
+    public void SessionUpdate_UsesMinimalDocumentedLiveTranscriptionShape()
     {
         var transcriber = new OpenAiRealtimeTranscriber(
             SpeakerRole.Hr,
@@ -94,14 +94,11 @@ public sealed class RealtimeTransportTests
         var transcription = input.GetProperty("transcription");
 
         Assert.StartsWith("hrc-session-", root.GetProperty("event_id").GetString(), StringComparison.Ordinal);
+        Assert.Equal("transcription", root.GetProperty("session").GetProperty("type").GetString());
         Assert.Equal("audio/pcm", input.GetProperty("format").GetProperty("type").GetString());
         Assert.Equal(24000, input.GetProperty("format").GetProperty("rate").GetInt32());
         Assert.Equal("gpt-live-transcribe", transcription.GetProperty("model").GetString());
-        Assert.Equal("en", transcription.GetProperty("languages")[0].GetString());
-        Assert.False(transcription.TryGetProperty("language", out _));
-        Assert.False(transcription.TryGetProperty("delay", out _));
-        Assert.Contains(transcription.GetProperty("keywords").EnumerateArray(),
-            item => item.GetString() == "Occupational Health");
+        Assert.Single(transcription.EnumerateObject());
         Assert.True(input.TryGetProperty("turn_detection", out var turnDetection));
         Assert.Equal(System.Text.Json.JsonValueKind.Null, turnDetection.ValueKind);
         Assert.False(input.TryGetProperty("noise_reduction", out _));
