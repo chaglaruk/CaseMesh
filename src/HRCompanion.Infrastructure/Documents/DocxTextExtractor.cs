@@ -11,7 +11,7 @@ internal sealed class DocxTextExtractor : ITextExtractor
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var doc = WordprocessingDocument.Open(path, false);
-        var body = doc.MainDocumentPart?.Document.Body;
+        var body = doc.MainDocumentPart?.Document?.Body;
         var paragraphs = body is null
             ? []
             : body.Descendants<Paragraph>()
