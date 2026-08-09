@@ -2,7 +2,11 @@ using System.Diagnostics;
 
 namespace HRCompanion.Audio.Windows;
 
-public sealed record TeamsProcessInfo(int ProcessId, string ProcessName, string? MainWindowTitle);
+public sealed record TeamsProcessInfo(int ProcessId, string ProcessName, string? MainWindowTitle)
+{
+    public bool IsLikelyRoot => !string.IsNullOrWhiteSpace(MainWindowTitle);
+    public string DisplayName => $"{ProcessName} (PID {ProcessId}){(MainWindowTitle is null ? string.Empty : " — " + MainWindowTitle)}";
+}
 
 public static class TeamsProcessLocator
 {
@@ -29,6 +33,9 @@ public static class TeamsProcessLocator
                 }
             }
         }
-        return matches.OrderBy(x => x.ProcessId).ToArray();
+        return matches
+            .OrderByDescending(x => x.IsLikelyRoot)
+            .ThenBy(x => x.ProcessId)
+            .ToArray();
     }
 }

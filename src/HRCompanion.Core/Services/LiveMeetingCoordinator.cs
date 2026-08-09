@@ -40,6 +40,8 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
     public event EventHandler<TranscriptTurn>? FinalTurn;
     public event EventHandler<AssistantResponse>? AssistantUpdated;
     public event EventHandler<Exception>? NonFatalError;
+    public event EventHandler<TranscriberConnectionState>? ConnectionStateChanged;
+    public event EventHandler<PipelineTiming>? LatencyMeasured;
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -66,10 +68,10 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         if (!_started) return;
         _started = false;
         Detach();
-        await _remoteAudio.StopAsync(cancellationToken).ConfigureAwait(false);
-        await _userAudio.StopAsync(cancellationToken).ConfigureAwait(false);
-        await _remoteTranscriber.StopAsync(cancellationToken).ConfigureAwait(false);
-        await _userTranscriber.StopAsync(cancellationToken).ConfigureAwait(false);
+        await StopOneAsync(() => _remoteAudio.StopAsync(cancellationToken)).ConfigureAwait(false);
+        await StopOneAsync(() => _userAudio.StopAsync(cancellationToken)).ConfigureAwait(false);
+        await StopOneAsync(() => _remoteTranscriber.StopAsync(cancellationToken)).ConfigureAwait(false);
+        await StopOneAsync(() => _userTranscriber.StopAsync(cancellationToken)).ConfigureAwait(false);
     }
 
     private void Attach()
@@ -78,6 +80,12 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         _userAudio.FrameReady += OnUserFrame;
         _remoteTranscriber.Updated += OnRemoteTranscription;
         _userTranscriber.Updated += OnUserTranscription;
+        _remoteTranscriber.StateChanged += OnTranscriberStateChanged;
+        _userTranscriber.StateChanged += OnTranscriberStateChanged;
+        _remoteTranscriber.Faulted += OnFaulted;
+        _userTranscriber.Faulted += OnFaulted;
+        _remoteAudio.Faulted += OnFaulted;
+        _userAudio.Faulted += OnFaulted;
     }
 
     private void Detach()
@@ -86,12 +94,20 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         _userAudio.FrameReady -= OnUserFrame;
         _remoteTranscriber.Updated -= OnRemoteTranscription;
         _userTranscriber.Updated -= OnUserTranscription;
+        _remoteTranscriber.StateChanged -= OnTranscriberStateChanged;
+        _userTranscriber.StateChanged -= OnTranscriberStateChanged;
+        _remoteTranscriber.Faulted -= OnFaulted;
+        _userTranscriber.Faulted -= OnFaulted;
+        _remoteAudio.Faulted -= OnFaulted;
+        _userAudio.Faulted -= OnFaulted;
     }
 
     private void OnRemoteFrame(object? sender, AudioFrame frame) => _ = ForwardFrameAsync(_remoteTranscriber, frame);
     private void OnUserFrame(object? sender, AudioFrame frame) => _ = ForwardFrameAsync(_userTranscriber, frame);
     private void OnRemoteTranscription(object? sender, TranscriptionUpdate update) => OnTranscription(SpeakerRole.Hr, "teams", update);
     private void OnUserTranscription(object? sender, TranscriptionUpdate update) => OnTranscription(SpeakerRole.User, "microphone", update);
+    private void OnTranscriberStateChanged(object? sender, TranscriberConnectionState state) => ConnectionStateChanged?.Invoke(this, state);
+    private void OnFaulted(object? sender, Exception error) => NonFatalError?.Invoke(this, error);
 
     private async Task ForwardFrameAsync(IRealtimeTranscriber transcriber, AudioFrame frame)
     {
@@ -106,8 +122,9 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
             : $"{speaker}:fallback";
         _turnStarts.TryAdd(itemKey, update.OccurredAt);
         if (!update.IsFinal || string.IsNullOrWhiteSpace(update.Text)) return;
-        var startedAt = _turnStarts.TryRemove(itemKey, out var start) ? start : update.OccurredAt;
-        var turn = TranscriptTurn.Final(_state.MeetingId, speaker, update.Text, startedAt, update.OccurredAt, source);
+        var startedAt = update.StartedAt ?? (_turnStarts.TryRemove(itemKey, out var start) ? start : update.OccurredAt);
+        _turnStarts.TryRemove(itemKey, out _);
+        var turn = TranscriptTurn.Final(_state.MeetingId, speaker, update.Text, startedAt, update.OccurredAt, source, update.ItemId);
         _ = ProcessFinalTurnAsync(turn);
     }
 
@@ -116,11 +133,18 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         await _turnGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            FinalTurn?.Invoke(this, turn);
-            var response = await _orchestrator.AcceptFinalTurnAsync(_state, turn).ConfigureAwait(false);
+            var result = await _orchestrator.AcceptFinalTurnWithTimingAsync(
+                _state,
+                turn,
+                () => FinalTurn?.Invoke(this, turn)).ConfigureAwait(false);
+            var response = result.Response;
             if (response.Say is not null || response.Watch is not null || response.Ask is not null)
             {
                 AssistantUpdated?.Invoke(this, response);
+                if (result.Timing is not null)
+                {
+                    LatencyMeasured?.Invoke(this, result.Timing with { FirstUsefulRenderedAt = DateTimeOffset.UtcNow });
+                }
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -139,6 +163,13 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         try { await _userAudio.StopAsync().ConfigureAwait(false); } catch { }
         try { await _remoteTranscriber.StopAsync().ConfigureAwait(false); } catch { }
         try { await _userTranscriber.StopAsync().ConfigureAwait(false); } catch { }
+    }
+
+    private async Task StopOneAsync(Func<Task> stop)
+    {
+        try { await stop().ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is not OperationCanceledException) { NonFatalError?.Invoke(this, ex); }
     }
 
     public async ValueTask DisposeAsync()

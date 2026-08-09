@@ -8,7 +8,8 @@ public sealed record TranscriptTurn(
     DateTimeOffset StartedAt,
     DateTimeOffset EndedAt,
     bool IsFinal,
-    string Source)
+    string Source,
+    string? ProviderItemId = null)
 {
     public static TranscriptTurn Final(
         Guid meetingId,
@@ -16,6 +17,7 @@ public sealed record TranscriptTurn(
         string text,
         DateTimeOffset startedAt,
         DateTimeOffset endedAt,
-        string source) =>
-        new(Guid.NewGuid(), meetingId, speaker, text.Trim(), startedAt, endedAt, true, source);
+        string source,
+        string? providerItemId = null) =>
+        new(Guid.NewGuid(), meetingId, speaker, text.Trim(), startedAt, endedAt, true, source, providerItemId);
 }

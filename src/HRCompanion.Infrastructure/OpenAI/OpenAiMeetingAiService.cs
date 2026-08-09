@@ -182,7 +182,10 @@ public sealed class OpenAiMeetingAiService : IMeetingAiService
         var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"OpenAI Responses API returned {(int)response.StatusCode}: {Redact(payload)}", null, response.StatusCode);
+            throw new HttpRequestException(
+                $"OpenAI Responses API returned HTTP {(int)response.StatusCode}. Response content was suppressed to protect meeting data.",
+                null,
+                response.StatusCode);
         }
         return ExtractOutputText(payload);
     }
@@ -217,6 +220,4 @@ public sealed class OpenAiMeetingAiService : IMeetingAiService
         var element = root.GetProperty(name);
         return element.ValueKind == JsonValueKind.Null ? null : element.GetString();
     }
-
-    private static string Redact(string value) => value.Length <= 800 ? value : value[..800] + "…";
 }

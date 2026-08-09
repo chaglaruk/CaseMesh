@@ -7,18 +7,18 @@ Last update: 2026-08-09.
 | Repository architecture | PARTIAL | Narrow single-user Windows architecture, privacy rules, gates, and handoff authored. |
 | Build / automated tests | VERIFIED | GitHub Actions on Windows Server 2025 with .NET 10 completed restore, Release build, and tests successfully on the current code baseline. This does not verify live hardware/audio behavior. |
 | Static source validation | AUTOMATED_ONLY | JSON/XML parse checks and a C# lexical/delimiter scan were also performed during authoring; CI compilation supersedes these for build validity. |
-| Core orchestration | AUTOMATED_ONLY | Speaker ownership, chronological meeting state, cue engine, local HR aliases, tests authored. |
+| Core orchestration | AUTOMATED_ONLY | Speaker ownership, durable provider item IDs, chronological meeting state, cue engine, local HR aliases, persistence-before-assistance and timing instrumentation compile and are covered by deterministic tests. |
 | SQLite schema / FTS5 | AUTOMATED_ONLY | Local documents, chunks, facts, transcripts, FTS5/BM25 and tests authored. |
-| TXT/MD/HTML/DOCX/EML/PDF ingestion | AUTOMATED_ONLY | Recursive import, SHA-256 deduplication, per-file failure isolation, source locators, empty/scanned-text detection and repeated-evidence de-crowding authored. Real representative-file validation pending. |
+| TXT/MD/HTML/DOCX/EML/PDF ingestion | AUTOMATED_ONLY | One recursive synthetic import test exercises every format, SHA-256 deduplication, FTS5 retrieval, PDF page locators, malformed-PDF isolation and repeated-evidence de-crowding. Private representative-file validation remains pending. |
 | Working-context seed import | AUTOMATED_ONLY | Separate `.hrcontext` path maps USER_POSITION vs UNVERIFIED context without creating false documentary evidence; tests authored. |
-| Prompt grounding | AUTOMATED_ONLY | Trust hierarchy, separate application instructions, prompt-injection resistance, evidence-ID allow-list/schema and natural spoken style authored. |
+| Prompt grounding | AUTOMATED_ONLY | Tests verify malicious document text remains in untrusted input rather than application instructions, invented source IDs are removed, SAY never becomes USER_ACTUALLY_SAID, and the natural British speech contract remains explicit. |
 | Windows credential storage | AUTOMATED_ONLY | P/Invoke implementation compiles; actual Windows Credential Manager behavior still needs local validation. |
 | System-loopback + mic fallback | AUTOMATED_ONLY | NAudio implementation compiles; real-device validation pending. |
-| Process-specific Teams capture | NOT_ATTEMPTED | Critical Gate 1 task for Codex/Windows environment. Microsoft application-loopback design was researched, but the repository keeps a loud stub rather than shipping unverified COM interop as if it worked. |
-| Live OpenAI transcription | PARTIAL | `gpt-live-transcribe` WebSocket client, 24 kHz PCM, two-source ownership, serialized sends and `item_id` retention compile; end-to-end/reconnect/order validation pending. |
+| Process-specific Teams capture | PARTIAL | Uses Windows `ActivateAudioInterfaceAsync` with `AUDIOCLIENT_ACTIVATION_PARAMS`, include-target-process-tree mode and `VAD\\Process_Loopback`. Real self-tests captured a target tone (peak 23627) and excluded an unrelated tone from a silent target (peak 1). No Teams call/headset/mute/restart evidence exists yet. |
+| Live OpenAI transcription | AUTOMATED_ONLY | Two independent 24 kHz PCM sessions, current transcription session shape, serialized sends, safe errors/close, three bounded reconnects, item-chain ordering and duplicate-final suppression compile. Synthetic A/B out-of-order protocol tests pass; no live API session was run. |
 | GPT structured assistant | PARTIAL | Responses API client, `gpt-5.6-sol`, low verbosity/reasoning, source-constrained structured response compiles; live API/latency verification pending. |
-| WPF overlay | PARTIAL | Minimal case import, manual fallback, local USER_POSITION context, Credential Manager API key, SAY/WATCH/ASK and topmost overlay compile; focus/runtime testing pending. |
-| Live start/stop UI | NOT_ATTEMPTED | Deliberately blocked on real Teams process-loopback implementation rather than wiring a misleading system-audio path. |
+| WPF overlay | PARTIAL | App launch/normal close succeeded and the topmost non-activating SAY/WATCH/ASK overlay plus manual fallback compile. Visual/focus testing beside Teams is still required. |
+| Live start/stop UI | PARTIAL | Teams/microphone selectors, fresh meeting creation, dual capture/transcription, compact actual transcript, LISTENING/RECONNECTING/TRANSCRIPT ONLY/MANUAL status, bounded stop and local unfinished-meeting recovery are wired. Live Teams/API exercise remains pending. |
 | 30-minute rehearsal | NOT_ATTEMPTED | Required before real meeting. |
 
 ## CI history relevant to bootstrap
@@ -29,8 +29,8 @@ Last update: 2026-08-09.
 
 ## Known deliberate gaps
 
-- True Teams process-specific loopback capture must be implemented with the supported Windows application-loopback mechanism and tested on the user's Windows machine.
-- Realtime reconnection and explicit cross-turn `item_id` ordering/reconciliation need Windows/live API verification. Item IDs are retained so this can be implemented without changing the public transcript contract again.
+- Teams process-specific loopback is implemented with the supported Windows application-loopback mechanism, but must still be tested during a real call with unrelated audio, headphones/Bluetooth, mute and Teams restart.
+- Realtime reconnect and `item_id` ordering are deterministic-test covered but still need live API verification under pauses, interruption and overlap.
 - Assistant Responses are currently rendered after a complete short structured response. Instrument real latency before deciding whether partial SAY streaming is necessary.
 - EML message bodies are indexed; embedded attachment contents are not recursively extracted from inside the EML in v0.1. Files exported alongside the email are imported normally.
 - No semantic embedding index yet. v0.1 uses local FTS5/BM25 plus zero-latency HR concept aliases and optional lightweight AI retrieval expansion when local analysis is ambiguous.

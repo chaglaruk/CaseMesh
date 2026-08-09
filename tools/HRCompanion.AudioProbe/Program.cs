@@ -1,38 +1,165 @@
 using HRCompanion.Audio.Windows;
 using HRCompanion.Core.Abstractions;
+using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
+using System.Diagnostics;
 
 Console.WriteLine("HR Companion Audio Probe");
-Console.WriteLine("This probe does not save audio. It measures received PCM frame activity only.");
+Console.WriteLine("No audio is saved. The probe reports PCM frame activity only.");
 Console.WriteLine();
 
 var teams = TeamsProcessLocator.Find();
 Console.WriteLine($"Teams candidate processes: {teams.Count}");
 foreach (var process in teams)
 {
-    Console.WriteLine($"  PID {process.ProcessId}: {process.ProcessName} {process.MainWindowTitle}");
+    Console.WriteLine($"  {(process.IsLikelyRoot ? "ROOT?" : "child")}  {process.DisplayName}");
 }
-Console.WriteLine();
 
-await using IAudioCaptureSource mic = new MicrophoneCaptureSource();
-await using IAudioCaptureSource loopback = new SystemLoopbackCaptureSource();
-long micBytes = 0;
-long remoteBytes = 0;
-mic.FrameReady += (_, frame) => Interlocked.Add(ref micBytes, frame.Pcm16Bit24KhzMono.Length);
-loopback.FrameReady += (_, frame) => Interlocked.Add(ref remoteBytes, frame.Pcm16Bit24KhzMono.Length);
+if (args.Contains("--list", StringComparer.OrdinalIgnoreCase)) return;
 
-Console.WriteLine($"Microphone: {mic.DisplayName}");
-Console.WriteLine($"Remote fallback: {loopback.DisplayName}");
-Console.WriteLine("Capturing activity for 10 seconds. Speak locally and play Teams/other output if available...");
+var selfTest = args.Contains("--self-test", StringComparer.OrdinalIgnoreCase);
+var isolationSelfTest = args.Contains("--isolation-self-test", StringComparer.OrdinalIgnoreCase);
+var durationSeconds = ReadIntArgument("--seconds", selfTest || isolationSelfTest ? 5 : 15);
+var microphoneNumber = ReadIntArgument("--microphone", 0);
+var useSystemFallback = args.Contains("--system-fallback", StringComparer.OrdinalIgnoreCase);
+var requestedProcessId = ReadNullableIntArgument("--teams");
+var selectedProcess = requestedProcessId is null
+    ? teams.FirstOrDefault()
+    : teams.FirstOrDefault(process => process.ProcessId == requestedProcessId.Value);
 
-await mic.StartAsync();
-await loopback.StartAsync();
-for (var second = 1; second <= 10; second++)
+if (!useSystemFallback && !selfTest && !isolationSelfTest && selectedProcess is null)
 {
-    await Task.Delay(1000);
-    Console.WriteLine($"{second,2}s  mic={Interlocked.Read(ref micBytes) / 1024.0:F1} KiB  remote={Interlocked.Read(ref remoteBytes) / 1024.0:F1} KiB");
+    Console.Error.WriteLine();
+    Console.Error.WriteLine("No selected Teams process is running. Start Teams, then run:");
+    Console.Error.WriteLine("  dotnet run --project .\\tools\\HRCompanion.AudioProbe\\HRCompanion.AudioProbe.csproj -- --teams <PID> --seconds 30");
+    Environment.ExitCode = 2;
+    return;
 }
-await mic.StopAsync();
-await loopback.StopAsync();
+
+using var silentTarget = isolationSelfTest ? StartSilentTarget(durationSeconds + 5) : null;
+await using IAudioCaptureSource microphone = new MicrophoneCaptureSource(microphoneNumber);
+await using IAudioCaptureSource remote = useSystemFallback
+    ? new SystemLoopbackCaptureSource()
+    : new TeamsProcessLoopbackCaptureSource(
+        selfTest ? Environment.ProcessId : isolationSelfTest ? silentTarget!.Id : selectedProcess!.ProcessId);
+
+long microphoneBytes = 0;
+long remoteBytes = 0;
+long remotePeak = 0;
+Exception? captureFailure = null;
+microphone.FrameReady += (_, frame) => Interlocked.Add(ref microphoneBytes, frame.Pcm16Bit24KhzMono.Length);
+remote.FrameReady += (_, frame) =>
+{
+    Interlocked.Add(ref remoteBytes, frame.Pcm16Bit24KhzMono.Length);
+    var span = frame.Pcm16Bit24KhzMono.Span;
+    for (var index = 0; index + 1 < span.Length; index += 2)
+    {
+        var sample = Math.Abs((int)(short)(span[index] | span[index + 1] << 8));
+        InterlockedMax(ref remotePeak, sample);
+    }
+};
+microphone.Faulted += (_, error) => captureFailure ??= error;
+remote.Faulted += (_, error) => captureFailure ??= error;
 
 Console.WriteLine();
-Console.WriteLine("Result is diagnostic only. System loopback is not Teams-isolated and cannot verify Gate 1.");
+Console.WriteLine($"Microphone/USER: {microphone.DisplayName}");
+Console.WriteLine($"Remote/HR:       {remote.DisplayName}");
+Console.WriteLine(useSystemFallback
+    ? "DEGRADED: system loopback includes unrelated audio and cannot verify Gate 1."
+    : "ISOLATED MODE: Windows includes only the selected process tree; verify this with unrelated audio playing.");
+Console.WriteLine($"Capturing for {durationSeconds} seconds...");
+
+try
+{
+    await microphone.StartAsync();
+    await remote.StartAsync();
+    using var tone = selfTest || isolationSelfTest ? StartSyntheticTone() : null;
+    for (var second = 1; second <= durationSeconds && captureFailure is null; second++)
+    {
+        await Task.Delay(1000);
+        Console.WriteLine($"{second,3}s  USER={Interlocked.Read(ref microphoneBytes) / 1024.0:F1} KiB  HR={Interlocked.Read(ref remoteBytes) / 1024.0:F1} KiB");
+    }
+}
+finally
+{
+    using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    await microphone.StopAsync(stopCts.Token);
+    await remote.StopAsync(stopCts.Token);
+}
+
+Console.WriteLine();
+if (captureFailure is not null)
+{
+    Console.Error.WriteLine($"Capture failed: {captureFailure.GetType().Name}: {captureFailure.Message}");
+    Environment.ExitCode = 1;
+}
+else
+{
+    var peak = Interlocked.Read(ref remotePeak);
+    Console.WriteLine($"Remote peak sample: {peak}");
+    if (selfTest && peak < 100)
+    {
+        Console.Error.WriteLine("Self-test failed: target-process tone was not present in process-loopback capture.");
+        Environment.ExitCode = 1;
+    }
+    else if (isolationSelfTest && peak >= 100)
+    {
+        Console.Error.WriteLine("Isolation self-test failed: unrelated parent-process tone appeared in silent target capture.");
+        Environment.ExitCode = 1;
+    }
+    else
+    {
+        Console.WriteLine("Probe completed. Perform the Teams/headset checklist in docs/GATES.md before marking Gate 1 verified.");
+    }
+}
+
+int ReadIntArgument(string name, int fallback) => ReadNullableIntArgument(name) ?? fallback;
+
+int? ReadNullableIntArgument(string name)
+{
+    var index = Array.FindIndex(args, value => value.Equals(name, StringComparison.OrdinalIgnoreCase));
+    if (index < 0) return null;
+    if (index + 1 >= args.Length || !int.TryParse(args[index + 1], out var value) || value < 0)
+    {
+        throw new ArgumentException($"{name} requires a non-negative integer value.");
+    }
+    return value;
+}
+
+WaveOutEvent StartSyntheticTone()
+{
+    var tone = new SignalGenerator(44100, 1)
+    {
+        Gain = 0.08,
+        Frequency = 440,
+        Type = SignalGeneratorType.Sin
+    };
+    var output = new WaveOutEvent { DesiredLatency = 80 };
+    output.Init(tone);
+    output.Play();
+    Console.WriteLine("Synthetic self-test tone is playing from the target process.");
+    return output;
+}
+
+Process StartSilentTarget(int seconds)
+{
+    var process = Process.Start(new ProcessStartInfo
+    {
+        FileName = "powershell.exe",
+        Arguments = $"-NoProfile -NonInteractive -Command Start-Sleep -Seconds {seconds}",
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        WindowStyle = ProcessWindowStyle.Hidden
+    });
+    return process ?? throw new InvalidOperationException("Could not start the silent isolation target process.");
+}
+
+void InterlockedMax(ref long target, long value)
+{
+    long current;
+    do
+    {
+        current = Interlocked.Read(ref target);
+        if (value <= current) return;
+    } while (Interlocked.CompareExchange(ref target, value, current) != current);
+}

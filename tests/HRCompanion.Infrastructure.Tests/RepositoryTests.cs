@@ -65,4 +65,41 @@ public sealed class RepositoryTests : IAsyncLifetime
 
         Assert.Single(results, x => x.Text == repeated);
     }
+
+    [Fact]
+    public async Task UnfinishedMeeting_RestoresActualTranscriptAndCanBeCompleted()
+    {
+        var meeting = new MeetingState(Guid.NewGuid(), "Synthetic case", DateTimeOffset.UtcNow.AddMinutes(-2));
+        await _repository.StartMeetingAsync(meeting);
+        await _repository.SaveTranscriptTurnAsync(TranscriptTurn.Final(
+            meeting.MeetingId,
+            SpeakerRole.User,
+            "Actual synthetic microphone turn",
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            DateTimeOffset.UtcNow,
+            "microphone",
+            "item-user-1"));
+
+        var restored = await _repository.GetUnfinishedMeetingAsync();
+        Assert.NotNull(restored);
+        Assert.Equal("Actual synthetic microphone turn", Assert.Single(restored.Turns).Text);
+
+        await _repository.CompleteMeetingAsync(meeting.MeetingId);
+        Assert.Null(await _repository.GetUnfinishedMeetingAsync());
+    }
+
+    [Fact]
+    public async Task Transcript_DeduplicatesSameProviderItemAcrossRetry()
+    {
+        var meetingId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        await _repository.SaveTranscriptTurnAsync(TranscriptTurn.Final(
+            meetingId, SpeakerRole.Hr, "Original final", now, now, "teams", "provider-item-1"));
+        await _repository.SaveTranscriptTurnAsync(TranscriptTurn.Final(
+            meetingId, SpeakerRole.Hr, "Retried final", now, now, "teams", "provider-item-1"));
+
+        var turns = await _repository.GetMeetingTurnsAsync(meetingId);
+        Assert.Single(turns);
+        Assert.Equal("Original final", turns[0].Text);
+    }
 }

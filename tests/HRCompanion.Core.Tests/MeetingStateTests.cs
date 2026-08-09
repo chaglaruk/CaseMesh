@@ -32,4 +32,24 @@ public sealed class MeetingStateTests
         Assert.Equal("Second completion arrived first", state.Turns[1].Text);
     }
 
+    [Fact]
+    public void LatencySummary_CalculatesMedianAndNearestRankP95()
+    {
+        var origin = DateTimeOffset.Parse("2026-08-09T10:00:00Z");
+        var values = new[] { 100d, 200d, 300d, 400d, 1000d };
+        var samples = values.Select((milliseconds, index) => new PipelineTiming(
+            Guid.NewGuid(),
+            origin,
+            origin.AddMilliseconds(10),
+            origin.AddMilliseconds(20),
+            origin.AddMilliseconds(30),
+            origin.AddMilliseconds(milliseconds),
+            origin.AddMilliseconds(milliseconds)));
+
+        var summary = LatencySummary.Calculate(samples);
+        Assert.NotNull(summary);
+        Assert.Equal(300, summary.MedianMs);
+        Assert.Equal(1000, summary.P95Ms);
+    }
+
 }

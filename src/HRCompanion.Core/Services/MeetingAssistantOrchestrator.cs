@@ -22,6 +22,13 @@ public sealed class MeetingAssistantOrchestrator
     public async Task<AssistantResponse> AcceptFinalTurnAsync(
         MeetingState state,
         TranscriptTurn turn,
+        CancellationToken cancellationToken = default) =>
+        (await AcceptFinalTurnWithTimingAsync(state, turn, null, cancellationToken).ConfigureAwait(false)).Response;
+
+    public async Task<AssistanceRunResult> AcceptFinalTurnWithTimingAsync(
+        MeetingState state,
+        TranscriptTurn turn,
+        Action? onPersisted = null,
         CancellationToken cancellationToken = default)
     {
         if (!turn.IsFinal)
@@ -31,10 +38,11 @@ public sealed class MeetingAssistantOrchestrator
 
         state.AddTurn(turn);
         await _repository.SaveTranscriptTurnAsync(turn, cancellationToken).ConfigureAwait(false);
+        onPersisted?.Invoke();
 
         if (turn.Speaker != SpeakerRole.Hr)
         {
-            return AssistantResponse.NoAction();
+            return new(AssistantResponse.NoAction(), null);
         }
 
         var deterministic = _cues.Analyze(turn.Text);
@@ -51,21 +59,32 @@ public sealed class MeetingAssistantOrchestrator
 
         if (!analysis.NeedsAssistant && !analysis.PotentialWrittenFollowUp)
         {
-            return AssistantResponse.NoAction(analysis.Intent);
+            return new(AssistantResponse.NoAction(analysis.Intent), null);
         }
 
         var query = BuildRetrievalQuery(turn.Text, analysis.RetrievalTerms);
+        var retrievalStartedAt = DateTimeOffset.UtcNow;
         var evidenceTask = _repository.SearchAsync(query, 8, cancellationToken);
         var factsTask = _repository.GetFactsAsync(cancellationToken);
         await Task.WhenAll(evidenceTask, factsTask).ConfigureAwait(false);
+        var retrievalCompletedAt = DateTimeOffset.UtcNow;
 
-        return await _ai.CreateAssistantResponseAsync(
+        var answerRequestStartedAt = DateTimeOffset.UtcNow;
+        var response = await _ai.CreateAssistantResponseAsync(
             state,
             turn,
             analysis,
             await factsTask.ConfigureAwait(false),
             await evidenceTask.ConfigureAwait(false),
             cancellationToken).ConfigureAwait(false);
+        var responseCompletedAt = DateTimeOffset.UtcNow;
+        return new(response, new(
+            turn.Id,
+            turn.EndedAt,
+            retrievalStartedAt,
+            retrievalCompletedAt,
+            answerRequestStartedAt,
+            responseCompletedAt));
     }
 
     private static MeetingAnalysis Merge(MeetingAnalysis local, MeetingAnalysis ai)

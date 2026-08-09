@@ -16,6 +16,7 @@ public sealed class SystemLoopbackCaptureSource : IAudioCaptureSource
     public SpeakerRole Speaker => SpeakerRole.Hr;
     public string DisplayName => "System loopback (fallback — not Teams-isolated)";
     public event EventHandler<AudioFrame>? FrameReady;
+    public event EventHandler<Exception>? Faulted;
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -24,6 +25,7 @@ public sealed class SystemLoopbackCaptureSource : IAudioCaptureSource
         _capture = new WasapiLoopbackCapture();
         _converter = new AudioFrameConverter(_capture.WaveFormat);
         _capture.DataAvailable += OnDataAvailable;
+        _capture.RecordingStopped += OnRecordingStopped;
         _capture.StartRecording();
         return Task.CompletedTask;
     }
@@ -33,11 +35,17 @@ public sealed class SystemLoopbackCaptureSource : IAudioCaptureSource
         cancellationToken.ThrowIfCancellationRequested();
         if (_capture is null) return Task.CompletedTask;
         _capture.DataAvailable -= OnDataAvailable;
+        _capture.RecordingStopped -= OnRecordingStopped;
         _capture.StopRecording();
         _capture.Dispose();
         _capture = null;
         _converter = null;
         return Task.CompletedTask;
+    }
+
+    private void OnRecordingStopped(object? sender, StoppedEventArgs e)
+    {
+        if (e.Exception is not null) Faulted?.Invoke(this, e.Exception);
     }
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)

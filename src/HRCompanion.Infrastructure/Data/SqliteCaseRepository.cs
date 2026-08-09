@@ -205,9 +205,9 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO transcript_turns(id, meeting_id, speaker, text, started_at, ended_at, is_final, source)
-            VALUES($id, $meeting, $speaker, $text, $started, $ended, $final, $source)
-            ON CONFLICT(id) DO NOTHING;
+            INSERT INTO transcript_turns(id, meeting_id, speaker, text, started_at, ended_at, is_final, source, provider_item_id)
+            VALUES($id, $meeting, $speaker, $text, $started, $ended, $final, $source, $providerItem)
+            ON CONFLICT DO NOTHING;
             """;
         command.Parameters.AddWithValue("$id", turn.Id.ToString("D"));
         command.Parameters.AddWithValue("$meeting", turn.MeetingId.ToString("D"));
@@ -217,6 +217,7 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
         command.Parameters.AddWithValue("$ended", ToSqlDate(turn.EndedAt));
         command.Parameters.AddWithValue("$final", turn.IsFinal ? 1 : 0);
         command.Parameters.AddWithValue("$source", turn.Source);
+        command.Parameters.AddWithValue("$providerItem", (object?)turn.ProviderItemId ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -226,10 +227,10 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, speaker, text, started_at, ended_at, is_final, source
+            SELECT id, speaker, text, started_at, ended_at, is_final, source, provider_item_id
             FROM transcript_turns
             WHERE meeting_id = $meeting
-            ORDER BY started_at ASC;
+            ORDER BY started_at ASC, ended_at ASC;
             """;
         command.Parameters.AddWithValue("$meeting", meetingId.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -243,9 +244,62 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
                 ParseSqlDate(reader.GetString(3)),
                 ParseSqlDate(reader.GetString(4)),
                 reader.GetInt32(5) != 0,
-                reader.GetString(6)));
+                reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7)));
         }
         return turns;
+    }
+
+    public async Task StartMeetingAsync(MeetingState meeting, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO meetings(id, case_name, started_at, ended_at)
+            VALUES($id, $caseName, $startedAt, NULL)
+            ON CONFLICT(id) DO NOTHING;
+            """;
+        command.Parameters.AddWithValue("$id", meeting.MeetingId.ToString("D"));
+        command.Parameters.AddWithValue("$caseName", meeting.CaseName);
+        command.Parameters.AddWithValue("$startedAt", ToSqlDate(meeting.StartedAt));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task CompleteMeetingAsync(Guid meetingId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE meetings SET ended_at = $endedAt WHERE id = $id AND ended_at IS NULL;";
+        command.Parameters.AddWithValue("$id", meetingId.ToString("D"));
+        command.Parameters.AddWithValue("$endedAt", ToSqlDate(DateTimeOffset.UtcNow));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<MeetingState?> GetUnfinishedMeetingAsync(CancellationToken cancellationToken = default)
+    {
+        Guid meetingId;
+        string caseName;
+        DateTimeOffset startedAt;
+        await using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT id, case_name, started_at
+                FROM meetings
+                WHERE ended_at IS NULL
+                ORDER BY started_at DESC
+                LIMIT 1;
+                """;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) return null;
+            meetingId = Guid.Parse(reader.GetString(0));
+            caseName = reader.GetString(1);
+            startedAt = ParseSqlDate(reader.GetString(2));
+        }
+
+        var meeting = new MeetingState(meetingId, caseName, startedAt);
+        foreach (var turn in await GetMeetingTurnsAsync(meetingId, cancellationToken).ConfigureAwait(false)) meeting.AddTurn(turn);
+        return meeting;
     }
 
     internal static string ToFtsQuery(string input)

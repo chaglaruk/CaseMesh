@@ -75,8 +75,13 @@ dotnet test .\HRCompanion.slnx -c Release --no-build
 Run the audio probe before integrating live meeting features:
 
 ```powershell
-dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.csproj
+dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.csproj -- --list
+dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.csproj -- --self-test --seconds 5
+dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.csproj -- --isolation-self-test --seconds 5
+dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.csproj -- --teams <PID> --seconds 30
 ```
+
+`--self-test` proves target-process capture on the local Windows audio stack. `--isolation-self-test` plays audio outside a silent target and checks that it is excluded. Neither replaces a real Teams/headset/mute/restart Gate 1 rehearsal. Full system loopback is available only through the explicitly degraded `--system-fallback` option.
 
 ## AI defaults
 

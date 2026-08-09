@@ -13,4 +13,7 @@ public interface ICaseRepository
     Task SaveFactAsync(CaseFact fact, CancellationToken cancellationToken = default);
     Task SaveTranscriptTurnAsync(TranscriptTurn turn, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TranscriptTurn>> GetMeetingTurnsAsync(Guid meetingId, CancellationToken cancellationToken = default);
+    Task StartMeetingAsync(MeetingState meeting, CancellationToken cancellationToken = default);
+    Task CompleteMeetingAsync(Guid meetingId, CancellationToken cancellationToken = default);
+    Task<MeetingState?> GetUnfinishedMeetingAsync(CancellationToken cancellationToken = default);
 }

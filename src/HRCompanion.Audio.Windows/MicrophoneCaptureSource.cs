@@ -18,6 +18,7 @@ public sealed class MicrophoneCaptureSource : IAudioCaptureSource
         : "Microphone";
 
     public event EventHandler<AudioFrame>? FrameReady;
+    public event EventHandler<Exception>? Faulted;
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -34,6 +35,7 @@ public sealed class MicrophoneCaptureSource : IAudioCaptureSource
         };
         _converter = new AudioFrameConverter(_capture.WaveFormat);
         _capture.DataAvailable += OnDataAvailable;
+        _capture.RecordingStopped += OnRecordingStopped;
         _capture.StartRecording();
         return Task.CompletedTask;
     }
@@ -43,12 +45,23 @@ public sealed class MicrophoneCaptureSource : IAudioCaptureSource
         cancellationToken.ThrowIfCancellationRequested();
         if (_capture is null) return Task.CompletedTask;
         _capture.DataAvailable -= OnDataAvailable;
+        _capture.RecordingStopped -= OnRecordingStopped;
         _capture.StopRecording();
         _capture.Dispose();
         _capture = null;
         _converter = null;
         return Task.CompletedTask;
     }
+
+    private void OnRecordingStopped(object? sender, StoppedEventArgs e)
+    {
+        if (e.Exception is not null) Faulted?.Invoke(this, e.Exception);
+    }
+
+    public static IReadOnlyList<MicrophoneDeviceInfo> GetDevices() =>
+        Enumerable.Range(0, WaveIn.DeviceCount)
+            .Select(index => new MicrophoneDeviceInfo(index, WaveIn.GetCapabilities(index).ProductName))
+            .ToArray();
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
     {
@@ -61,3 +74,5 @@ public sealed class MicrophoneCaptureSource : IAudioCaptureSource
 
     public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
 }
+
+public sealed record MicrophoneDeviceInfo(int DeviceNumber, string DisplayName);
