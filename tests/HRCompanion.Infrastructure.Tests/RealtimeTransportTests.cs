@@ -98,7 +98,7 @@ public sealed class RealtimeTransportTests
         Assert.Equal("gpt-live-transcribe", transcription.GetProperty("model").GetString());
         Assert.Equal("en", transcription.GetProperty("languages")[0].GetString());
         Assert.False(transcription.TryGetProperty("language", out _));
-        Assert.Equal("low", transcription.GetProperty("delay").GetString());
+        Assert.False(transcription.TryGetProperty("delay", out _));
         Assert.Contains(transcription.GetProperty("keywords").EnumerateArray(),
             item => item.GetString() == "Occupational Health");
         Assert.False(input.TryGetProperty("turn_detection", out _));
