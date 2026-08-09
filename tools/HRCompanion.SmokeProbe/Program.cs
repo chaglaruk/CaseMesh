@@ -86,15 +86,12 @@ try
 
     var sayWords = response.Say?.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length ?? 0;
     var sourceIdsValid = response.Sources.All(source => source.EvidenceId == evidence.EvidenceId);
-    var milliseconds = new[] { realtime.Elapsed.TotalMilliseconds, sol.Elapsed.TotalMilliseconds };
-    Array.Sort(milliseconds);
-    var medianMilliseconds = (milliseconds[0] + milliseconds[1]) / 2d;
     Console.WriteLine("Synthetic live smoke: PASS");
     Console.WriteLine($"HR final item ID present: {!string.IsNullOrWhiteSpace(finals[0].ItemId)}");
     Console.WriteLine($"USER final item ID present: {!string.IsNullOrWhiteSpace(finals[1].ItemId)}");
-    Console.WriteLine($"Realtime dual-final elapsed ms: {realtime.Elapsed.TotalMilliseconds:F0}");
-    Console.WriteLine($"Sol structured-response elapsed ms: {sol.Elapsed.TotalMilliseconds:F0}");
-    Console.WriteLine($"Content-free latency samples: 2; median ms: {medianMilliseconds:F0}; p95 ms: {milliseconds[1]:F0}");
+    Console.WriteLine($"Realtime dual-final diagnostic wall-clock ms: {realtime.Elapsed.TotalMilliseconds:F0}");
+    Console.WriteLine($"Sol structured-response diagnostic wall-clock ms: {sol.Elapsed.TotalMilliseconds:F0}");
+    Console.WriteLine("These smoke timings are connectivity diagnostics only; they are not Gate 5 end-to-end meeting latency samples and must not be reported as median/p95.");
     Console.WriteLine($"SAY word count: {sayWords}; source IDs valid: {sourceIdsValid}; protocol errors: {protocolErrors.Count}");
     return protocolErrors.IsEmpty && sourceIdsValid ? 0 : 1;
 }
