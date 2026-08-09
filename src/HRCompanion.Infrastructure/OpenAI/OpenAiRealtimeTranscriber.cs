@@ -227,13 +227,6 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                             "reasonable adjustments", "capability", "grievance", "ACAS"
                         },
                         delay = "low"
-                    },
-                    turn_detection = new
-                    {
-                        type = "server_vad",
-                        threshold = 0.45,
-                        prefix_padding_ms = 250,
-                        silence_duration_ms = 650
                     }
                 }
             }
