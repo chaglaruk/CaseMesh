@@ -226,10 +226,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                             "reasonable adjustments", "capability", "grievance", "ACAS"
                         },
                         delay = "low"
-                    },
-                    // Match the dedicated Realtime transcription guide exactly: disable automatic
-                    // turn detection and explicitly commit each completed live-audio turn.
-                    turn_detection = (object?)null
+                    }
                 }
             }
         }
