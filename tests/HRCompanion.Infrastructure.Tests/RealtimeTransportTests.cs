@@ -102,7 +102,8 @@ public sealed class RealtimeTransportTests
         Assert.False(transcription.TryGetProperty("delay", out _));
         Assert.Contains(transcription.GetProperty("keywords").EnumerateArray(),
             item => item.GetString() == "Occupational Health");
-        Assert.False(input.TryGetProperty("turn_detection", out _));
+        Assert.True(input.TryGetProperty("turn_detection", out var turnDetection));
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, turnDetection.ValueKind);
         Assert.False(input.TryGetProperty("noise_reduction", out _));
     }
 
