@@ -101,7 +101,7 @@ internal sealed class RealtimeTranscriptionEventParser
 
         return new(updates, new(
             TryGetString(error, "type", out var type) ? type : "transcription_error",
-            TryGetString(error, "code", out var code) ? code : null));
+            FormatSafeErrorCode(error)));
     }
 
     private static RealtimeParseResult OnError(JsonElement root)
@@ -109,7 +109,16 @@ internal sealed class RealtimeTranscriptionEventParser
         if (!root.TryGetProperty("error", out var error)) return new([], new("realtime_error", null));
         return new([], new(
             TryGetString(error, "type", out var type) ? type : "realtime_error",
-            TryGetString(error, "code", out var code) ? code : null));
+            FormatSafeErrorCode(error)));
+    }
+
+    private static string? FormatSafeErrorCode(JsonElement error)
+    {
+        var hasCode = TryGetString(error, "code", out var code);
+        var hasParam = TryGetString(error, "param", out var param);
+        if (!hasCode && !hasParam) return null;
+        if (!hasParam) return code;
+        return hasCode ? $"{code}@param={param}" : $"param={param}";
     }
 
     private IReadOnlyList<TranscriptionUpdate> DrainCompleted()
