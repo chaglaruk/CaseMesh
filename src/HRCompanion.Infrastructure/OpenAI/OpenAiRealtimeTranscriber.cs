@@ -68,19 +68,20 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
 
     public bool TryEnqueue(AudioFrame frame) => _sendPump?.TryEnqueue(frame) ?? false;
 
-    public async Task CommitInputAudioBufferAsync(CancellationToken cancellationToken = default)
+    public async Task CommitAsync(CancellationToken cancellationToken = default)
     {
+        var sendPump = _sendPump ?? throw new InvalidOperationException("Realtime transcriber is not started.");
+        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        waitCts.CancelAfter(TimeSpan.FromSeconds(5));
+        while (sendPump.Diagnostics.QueueDepth > 0 || sendPump.Diagnostics.FramesSent < sendPump.Diagnostics.FramesAccepted - sendPump.Diagnostics.FramesDropped)
+            await Task.Delay(10, waitCts.Token).ConfigureAwait(false);
+
         await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var socket = _socket;
-            if (socket?.State != WebSocketState.Open)
-                throw new InvalidOperationException("Realtime transcription socket is not open.");
-
-            await SendJsonCoreAsync(
-                socket,
-                new { event_id = $"hrc-commit-{Guid.NewGuid():N}", type = "input_audio_buffer.commit" },
-                cancellationToken).ConfigureAwait(false);
+            if (socket?.State != WebSocketState.Open) throw new InvalidOperationException("Realtime socket is not open.");
+            await SendJsonCoreAsync(socket, new { type = "input_audio_buffer.commit" }, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -246,17 +247,11 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                     format = new { type = "audio/pcm", rate = 24000 },
                     transcription = new
                     {
-                        model = _options.TranscriptionModel,
-                        languages = new[] { _options.TranscriptionLanguage },
-                        prompt = "British employment HR meeting. Preserve names, dates and role titles.",
-                        keywords = new[]
-                        {
-                            "Occupational Health", "redeployment", "fit note", "phased return",
-                            "reasonable adjustments", "capability", "grievance", "ACAS"
-                        }
+                        model = _options.TranscriptionModel
                     },
-                    // gpt-live-transcribe's documented committed-turn mode requires this field
-                    // to be explicitly null. The client then commits each completed audio turn.
+                    // Keep the initial handshake identical to OpenAI's minimal documented
+                    // gpt-live-transcribe example. Context hints are added only after the
+                    // base transcription session is proven compatible with the live server.
                     turn_detection = (object?)null
                 }
             }
