@@ -81,20 +81,22 @@ public sealed class RealtimeTransportTests
     }
 
     [Fact]
-    public void SessionUpdate_UsesMinimalDocumentedLiveTranscriptionShape()
+    public void ClientSecretRequest_CreatesMinimalTranscriptionSessionAtConnectionTime()
     {
         var transcriber = new OpenAiRealtimeTranscriber(
             SpeakerRole.Hr,
             new EmptyKeyStore(),
             Options.Create(new OpenAiOptions()));
-        var json = System.Text.Json.JsonSerializer.Serialize(transcriber.CreateSessionUpdate());
+        var json = System.Text.Json.JsonSerializer.Serialize(transcriber.CreateClientSecretRequest());
         using var document = System.Text.Json.JsonDocument.Parse(json);
         var root = document.RootElement;
-        var input = root.GetProperty("session").GetProperty("audio").GetProperty("input");
+        var session = root.GetProperty("session");
+        var input = session.GetProperty("audio").GetProperty("input");
         var transcription = input.GetProperty("transcription");
 
-        Assert.StartsWith("hrc-session-", root.GetProperty("event_id").GetString(), StringComparison.Ordinal);
-        Assert.Equal("transcription", root.GetProperty("session").GetProperty("type").GetString());
+        Assert.Equal("created_at", root.GetProperty("expires_after").GetProperty("anchor").GetString());
+        Assert.Equal(120, root.GetProperty("expires_after").GetProperty("seconds").GetInt32());
+        Assert.Equal("transcription", session.GetProperty("type").GetString());
         Assert.Equal("audio/pcm", input.GetProperty("format").GetProperty("type").GetString());
         Assert.Equal(24000, input.GetProperty("format").GetProperty("rate").GetInt32());
         Assert.Equal("gpt-live-transcribe", transcription.GetProperty("model").GetString());
@@ -105,7 +107,7 @@ public sealed class RealtimeTransportTests
     }
 
     [Fact]
-    public void WebSocketEndpoint_UsesDedicatedConnectionModelRatherThanTranscriptionModel()
+    public void ConnectionEndpoints_DoNotBootstrapARealtimeVoiceModel()
     {
         var transcriber = new OpenAiRealtimeTranscriber(
             SpeakerRole.Hr,
@@ -113,8 +115,12 @@ public sealed class RealtimeTransportTests
             Options.Create(new OpenAiOptions()));
 
         Assert.Equal(
-            "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1",
+            "https://api.openai.com/v1/realtime/client_secrets",
+            transcriber.CreateClientSecretUri().AbsoluteUri);
+        Assert.Equal(
+            "wss://api.openai.com/v1/realtime",
             transcriber.CreateWebSocketUri().AbsoluteUri);
+        Assert.DoesNotContain("model=", transcriber.CreateWebSocketUri().Query, StringComparison.OrdinalIgnoreCase);
     }
 
     private static AudioFrame Frame(int value) => new(new byte[] { (byte)value, 0 }, DateTimeOffset.UtcNow);
