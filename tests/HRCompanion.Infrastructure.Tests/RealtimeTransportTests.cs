@@ -89,10 +89,11 @@ public sealed class RealtimeTransportTests
             Options.Create(new OpenAiOptions()));
         var json = System.Text.Json.JsonSerializer.Serialize(transcriber.CreateSessionUpdate());
         using var document = System.Text.Json.JsonDocument.Parse(json);
-        var input = document.RootElement
-            .GetProperty("session").GetProperty("audio").GetProperty("input");
+        var root = document.RootElement;
+        var input = root.GetProperty("session").GetProperty("audio").GetProperty("input");
         var transcription = input.GetProperty("transcription");
 
+        Assert.StartsWith("hrc-session-", root.GetProperty("event_id").GetString(), StringComparison.Ordinal);
         Assert.Equal("audio/pcm", input.GetProperty("format").GetProperty("type").GetString());
         Assert.Equal(24000, input.GetProperty("format").GetProperty("rate").GetInt32());
         Assert.Equal("gpt-live-transcribe", transcription.GetProperty("model").GetString());
