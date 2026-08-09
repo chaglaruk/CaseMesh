@@ -224,8 +224,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                         {
                             "Occupational Health", "redeployment", "fit note", "phased return",
                             "reasonable adjustments", "capability", "grievance", "ACAS"
-                        },
-                        delay = "low"
+                        }
                     }
                 }
             }
