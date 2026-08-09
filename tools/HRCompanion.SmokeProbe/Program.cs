@@ -40,7 +40,7 @@ try
 {
     await Task.WhenAll(hr.StartAsync(), user.StartAsync());
     var realtime = Stopwatch.StartNew();
-    await Task.WhenAll(StreamWaveAsync(hr, args[0]), StreamWaveAsync(user, args[1]));
+    await Task.WhenAll(StreamWaveAndCommitAsync(hr, args[0]), StreamWaveAndCommitAsync(user, args[1]));
     var finals = await Task.WhenAll(
         hrFinal.Task.WaitAsync(TimeSpan.FromSeconds(30)),
         userFinal.Task.WaitAsync(TimeSpan.FromSeconds(30)));
@@ -117,7 +117,7 @@ void OnFault(object? sender, Exception error)
         : error.GetType().Name);
 }
 
-static async Task StreamWaveAsync(IRealtimeTranscriber transcriber, string path)
+static async Task StreamWaveAndCommitAsync(OpenAiRealtimeTranscriber transcriber, string path)
 {
     using var wave = new WaveFileReader(path);
     if (wave.WaveFormat.SampleRate != 24000 || wave.WaveFormat.BitsPerSample != 16 || wave.WaveFormat.Channels != 1)
@@ -132,10 +132,19 @@ static async Task StreamWaveAsync(IRealtimeTranscriber transcriber, string path)
             throw new InvalidOperationException("Realtime sender rejected a smoke frame.");
         await Task.Delay(TimeSpan.FromMilliseconds(read * 1000d / 2 / 24000));
     }
-    for (var index = 0; index < 12; index++)
+
+    using var drainCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    while (true)
     {
-        if (!transcriber.TryEnqueue(new AudioFrame(new byte[frameBytes], DateTimeOffset.UtcNow)))
-            throw new InvalidOperationException("Realtime sender rejected a trailing-silence frame.");
-        await Task.Delay(TimeSpan.FromMilliseconds(100));
+        var diagnostics = transcriber.Diagnostics;
+        if (diagnostics.FramesDropped > 0)
+            throw new InvalidOperationException("Realtime sender dropped a smoke frame before commit.");
+        if (diagnostics.FramesAccepted > 0 &&
+            diagnostics.FramesSent == diagnostics.FramesAccepted &&
+            diagnostics.QueueDepth == 0)
+            break;
+        await Task.Delay(20, drainCts.Token);
     }
+
+    await transcriber.CommitInputAudioBufferAsync(drainCts.Token);
 }
