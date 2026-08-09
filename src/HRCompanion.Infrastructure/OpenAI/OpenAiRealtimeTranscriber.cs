@@ -68,7 +68,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
 
     public bool TryEnqueue(AudioFrame frame) => _sendPump?.TryEnqueue(frame) ?? false;
 
-    public async Task CommitAsync(CancellationToken cancellationToken = default)
+    public async Task CommitInputAudioBufferAsync(CancellationToken cancellationToken = default)
     {
         var sendPump = _sendPump ?? throw new InvalidOperationException("Realtime transcriber is not started.");
         using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
