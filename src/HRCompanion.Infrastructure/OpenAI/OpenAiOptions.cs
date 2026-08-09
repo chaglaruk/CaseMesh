@@ -5,7 +5,6 @@ public sealed class OpenAiOptions
     public string BaseUrl { get; set; } = "https://api.openai.com/v1";
     public string AnswerModel { get; set; } = "gpt-5.6-sol";
     public string FastModel { get; set; } = "gpt-5.6-luna";
-    public string RealtimeConnectionModel { get; set; } = "gpt-realtime-2.1";
     public string TranscriptionModel { get; set; } = "gpt-live-transcribe";
     public string TranscriptionLanguage { get; set; } = "en";
     // API service_tier supports auto/default/flex/priority. Keep auto until real latency/cost benchmarking justifies priority.
