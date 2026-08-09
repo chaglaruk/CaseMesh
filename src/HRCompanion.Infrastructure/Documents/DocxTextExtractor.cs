@@ -12,10 +12,12 @@ internal sealed class DocxTextExtractor : ITextExtractor
         cancellationToken.ThrowIfCancellationRequested();
         using var doc = WordprocessingDocument.Open(path, false);
         var body = doc.MainDocumentPart?.Document.Body;
-        var paragraphs = body?.Descendants<Paragraph>()
-            .Select(p => p.InnerText.Trim())
-            .Where(x => x.Length > 0)
-            .ToArray() ?? [];
+        var paragraphs = body is null
+            ? []
+            : body.Descendants<Paragraph>()
+                .Select(p => p.InnerText.Trim())
+                .Where(x => x.Length > 0)
+                .ToArray();
         var text = string.Join(Environment.NewLine, paragraphs);
         return Task.FromResult(new ExtractedDocument(Path.GetFileName(path), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", text, File.GetLastWriteTimeUtc(path)));
     }
