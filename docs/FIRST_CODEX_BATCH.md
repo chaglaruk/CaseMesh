@@ -43,7 +43,7 @@ Gate rule: **Gate 1 is not VERIFIED unless an actual Teams call/process on Windo
 Use current official OpenAI Realtime transcription documentation, not remembered/old event schemas.
 
 1. Keep two independent transcription streams/sessions: Teams => `SpeakerRole.Hr`, microphone => `SpeakerRole.User`. Do not rely on model diarization for speaker ownership.
-2. Preserve 24 kHz mono PCM framing and `gpt-live-transcribe` context (`languages`, HR keywords, suitable delay setting).
+2. Preserve 24 kHz mono PCM framing and use the current dedicated streaming STT model (`gpt-realtime-whisper` unless current official documentation changes) with concise HR terminology/context hints supported by the current API.
 3. Verify that WebSocket sends are serialized and cannot race under frequent audio callbacks.
 4. Handle socket/API error events and remote close without crashing the meeting process.
 5. Add bounded reconnect/recovery behavior that preserves already-persisted transcript.

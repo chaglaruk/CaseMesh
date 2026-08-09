@@ -57,7 +57,9 @@ public sealed class MeetingAssistantOrchestrator
             analysis = Merge(deterministic, aiAnalysis);
         }
 
-        if (!analysis.NeedsAssistant && !analysis.PotentialWrittenFollowUp)
+        // High-risk informational turns such as capability/settlement/resignation language still need
+        // a WATCH/ASK opportunity even when they are not phrased as a direct question or request.
+        if (!analysis.NeedsAssistant && !analysis.PotentialWrittenFollowUp && !analysis.PotentialCommitment)
         {
             return new(AssistantResponse.NoAction(analysis.Intent), null);
         }
