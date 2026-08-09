@@ -42,7 +42,7 @@ See [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md).
 
 ## Current status
 
-The repository contains a substantial first-pass implementation, but this environment does not contain a .NET SDK and cannot compile Windows/WPF code. **Do not call the app meeting-ready until the Windows build, process-specific Teams capture, live transcription, and real-device latency gates pass.**
+GitHub Actions has successfully completed `.NET 10` restore, Windows Release build, and the automated test suite for the current code baseline. This verifies the build/test portion only. **Do not call the app meeting-ready until process-specific Teams capture, live transcription, overlay behavior, latency, recovery, and real-device rehearsal gates pass.**
 
 Read [docs/STATUS.md](docs/STATUS.md) and [docs/GATES.md](docs/GATES.md) before continuing.
 
