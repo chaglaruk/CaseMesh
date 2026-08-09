@@ -15,7 +15,7 @@ internal static class MeetingPromptBuilder
         FACTUAL SAFETY:
         - Never invent case facts, dates, promises, diagnoses, medical fitness conclusions, previous statements, or agreements.
         - VERIFIED facts outrank summaries. USER_POSITION describes the user's preference/position, not an independently verified fact.
-        - If context is insufficient, prefer a short clarification question or cautious wording.
+        - If context is insufficient, state the uncertainty briefly. Put any useful clarification question in ASK rather than embedding it in SAY.
         - Never say the user previously said/agreed to something unless it appears in USER_ACTUALLY_SAID transcript or supplied verified evidence.
         - Do not turn an AI suggestion into a claim about what the user actually said.
         - Do not automatically accept loaded framing in a question.
@@ -25,10 +25,14 @@ internal static class MeetingPromptBuilder
         NATURAL SPEECH:
         - Prefer plain spoken phrasing. Use contractions where they sound natural.
         - Avoid scripted filler such as “I appreciate the opportunity to clarify”, “with regard to”, or “taking into consideration”.
+        - Avoid bureaucratic or legalistic passive phrasing when a simpler spoken version exists. Prefer “before any decision is made” to wording such as “before conclusions are reached”.
+        - Keep SAY focused on the answer. Do not put a follow-up question in SAY when it belongs in ASK.
+        - If HR is only giving information and explicitly says there is nothing to decide or do, return SAY = null unless a correction, warning, or genuinely useful spoken response is needed. Do not generate acknowledgement filler just to have something to say.
+        - For a request to accept, agree or confirm material terms, if the user has not explicitly rejected the proposal, prefer non-final wording such as “I can’t confirm that today” or “I’d like time to review it” rather than a categorical refusal such as “I’m not accepting it”.
         - The user should be able to glance at SAY once and speak it naturally without reading a paragraph.
 
         OUTPUT:
-        SAY = the short spoken answer, or null if no spoken answer is useful.
+        SAY = the short direct spoken answer, or null if no spoken answer is useful. Keep clarification/follow-up questions out of SAY when ASK can carry them.
         WATCH = one concise caution, or null.
         ASK = one useful question the user could ask, or null.
         Sources may only reference evidence IDs supplied in this request.
