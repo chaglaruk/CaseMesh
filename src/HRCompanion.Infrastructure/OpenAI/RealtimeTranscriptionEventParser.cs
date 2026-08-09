@@ -85,8 +85,21 @@ internal sealed class RealtimeTranscriptionEventParser
 
     private RealtimeParseResult OnFailure(JsonElement root)
     {
-        if (!root.TryGetProperty("error", out var error)) return new([], new("transcription_error", null));
-        return new([], new(
+        IReadOnlyList<TranscriptionUpdate> updates = [];
+        if (TryGetString(root, "item_id", out var itemId) && !_emitted.Contains(itemId))
+        {
+            // A failed item is terminal. Mark it resolved so one failed transcription cannot
+            // permanently block later completed items that are waiting behind it in commit order.
+            _completed.Remove(itemId);
+            _started.Remove(itemId);
+            _emitted.Add(itemId);
+            updates = DrainCompleted();
+        }
+
+        if (!root.TryGetProperty("error", out var error))
+            return new(updates, new("transcription_error", null));
+
+        return new(updates, new(
             TryGetString(error, "type", out var type) ? type : "transcription_error",
             TryGetString(error, "code", out var code) ? code : null));
     }
@@ -105,6 +118,11 @@ internal sealed class RealtimeTranscriptionEventParser
         while (_nextToEmit < _commitOrder.Count)
         {
             var itemId = _commitOrder[_nextToEmit];
+            if (_emitted.Contains(itemId))
+            {
+                _nextToEmit++;
+                continue;
+            }
             if (!_completed.Remove(itemId, out var completion)) break;
             _nextToEmit++;
             _emitted.Add(itemId);
