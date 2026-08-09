@@ -93,13 +93,17 @@ public sealed class RealtimeTransportTests
             .GetProperty("session").GetProperty("audio").GetProperty("input");
         var transcription = input.GetProperty("transcription");
 
+        Assert.Equal("audio/pcm", input.GetProperty("format").GetProperty("type").GetString());
+        Assert.Equal(24000, input.GetProperty("format").GetProperty("rate").GetInt32());
         Assert.Equal("gpt-live-transcribe", transcription.GetProperty("model").GetString());
         Assert.Equal("en", transcription.GetProperty("languages")[0].GetString());
         Assert.False(transcription.TryGetProperty("language", out _));
         Assert.Equal("low", transcription.GetProperty("delay").GetString());
         Assert.Contains(transcription.GetProperty("keywords").EnumerateArray(),
             item => item.GetString() == "Occupational Health");
-        Assert.False(input.TryGetProperty("turn_detection", out _));
+        Assert.True(input.TryGetProperty("turn_detection", out var turnDetection));
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, turnDetection.ValueKind);
+        Assert.False(input.TryGetProperty("noise_reduction", out _));
     }
 
     [Fact]
