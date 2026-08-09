@@ -98,6 +98,7 @@ Configuration defaults are intentionally centralized and replaceable:
 
 - answer model: `gpt-5.6-sol`
 - lightweight intent/retrieval helper: `gpt-5.6-luna`
+- Realtime WebSocket connection model: `gpt-realtime-2.1`
 - live transcription: `gpt-live-transcribe`
 
 The app's memory is **not ChatGPT memory**. Case knowledge must come from the local Case Brain, verified sources, meeting transcripts, and explicit user-position records.

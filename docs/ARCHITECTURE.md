@@ -68,6 +68,8 @@ True embedding-based semantic search is a later optional layer and must not bloc
 
 All model IDs are configuration values, not hard-coded business logic.
 
+The Realtime WebSocket connection and its transcription worker are separate model roles. The connection uses the current documented Realtime connection model; `audio.input.transcription.model` remains `gpt-live-transcribe` inside the dedicated transcription session.
+
 ## Failure modes
 
 `FULL`: capture + transcription + retrieval + assistant all healthy.
@@ -95,5 +97,6 @@ The target is process-specific capture of Microsoft Teams plus separate micropho
 Protocol references checked on 2026-08-09:
 
 - [OpenAI Realtime transcription guide](https://developers.openai.com/api/docs/guides/realtime-transcription)
+- [OpenAI Realtime WebSocket guide](https://developers.openai.com/api/docs/guides/realtime-websocket)
 - [OpenAI Realtime server events](https://developers.openai.com/api/reference/resources/realtime/server-events)
 - [Microsoft Application Loopback sample](https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/ApplicationLoopback)

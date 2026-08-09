@@ -185,12 +185,9 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         var socket = new ClientWebSocket();
         socket.Options.SetRequestHeader("Authorization", $"Bearer {key}");
         socket.Options.SetRequestHeader("OpenAI-Safety-Identifier", "hrcompanion-local-user");
-        var wsBase = _options.BaseUrl.Replace("https://", "wss://", StringComparison.OrdinalIgnoreCase).TrimEnd('/');
         try
         {
-            await socket.ConnectAsync(
-                new Uri($"{wsBase}/realtime?model={Uri.EscapeDataString(_options.TranscriptionModel)}"),
-                cancellationToken).ConfigureAwait(false);
+            await socket.ConnectAsync(CreateWebSocketUri(), cancellationToken).ConfigureAwait(false);
             await SendJsonCoreAsync(socket, CreateSessionUpdate(), cancellationToken).ConfigureAwait(false);
             return socket;
         }
@@ -199,6 +196,12 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
             socket.Dispose();
             throw;
         }
+    }
+
+    internal Uri CreateWebSocketUri()
+    {
+        var wsBase = _options.BaseUrl.Replace("https://", "wss://", StringComparison.OrdinalIgnoreCase).TrimEnd('/');
+        return new Uri($"{wsBase}/realtime?model={Uri.EscapeDataString(_options.RealtimeConnectionModel)}");
     }
 
     internal object CreateSessionUpdate() => new

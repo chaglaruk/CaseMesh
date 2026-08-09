@@ -100,6 +100,19 @@ public sealed class RealtimeTransportTests
             item => item.GetString() == "Occupational Health");
     }
 
+    [Fact]
+    public void WebSocketEndpoint_UsesDedicatedConnectionModelRatherThanTranscriptionModel()
+    {
+        var transcriber = new OpenAiRealtimeTranscriber(
+            SpeakerRole.Hr,
+            new EmptyKeyStore(),
+            Options.Create(new OpenAiOptions()));
+
+        Assert.Equal(
+            "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1",
+            transcriber.CreateWebSocketUri().AbsoluteUri);
+    }
+
     private static AudioFrame Frame(int value) => new(new byte[] { (byte)value, 0 }, DateTimeOffset.UtcNow);
 
     private static async Task WaitForAsync(Func<bool> condition)
