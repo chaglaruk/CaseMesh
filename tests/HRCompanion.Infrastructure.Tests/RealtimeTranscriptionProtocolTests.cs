@@ -82,6 +82,35 @@ public sealed class RealtimeTranscriptionProtocolTests
     }
 
     [Fact]
+    public void FailedEarlierItem_DoesNotBlockLaterCompletedTurn()
+    {
+        var parser = new RealtimeTranscriptionEventParser();
+        var now = DateTimeOffset.UtcNow;
+        parser.Parse("""{"type":"input_audio_buffer.committed","item_id":"turn-a","previous_item_id":null}""", now);
+        parser.Parse("""{"type":"input_audio_buffer.committed","item_id":"turn-b","previous_item_id":"turn-a"}""", now.AddSeconds(1));
+
+        var waiting = parser.Parse(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"turn-b","transcript":"later turn survives"}""",
+            now.AddSeconds(2));
+        Assert.Empty(waiting.Updates);
+
+        var failure = parser.Parse(
+            """{"type":"conversation.item.input_audio_transcription.failed","item_id":"turn-a","error":{"type":"transcription_error","code":"synthetic_failure"}}""",
+            now.AddSeconds(3));
+
+        Assert.NotNull(failure.Error);
+        Assert.Equal("synthetic_failure", failure.Error!.Code);
+        var released = Assert.Single(failure.Updates);
+        Assert.Equal("turn-b", released.ItemId);
+        Assert.Equal("later turn survives", released.Text);
+
+        var lateFailedCompletion = parser.Parse(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"turn-a","transcript":"must stay ignored"}""",
+            now.AddSeconds(4));
+        Assert.Empty(lateFailedCompletion.Updates);
+    }
+
+    [Fact]
     public void SpeechStarted_EmitsActivityWithoutInventingTranscriptText()
     {
         var parser = new RealtimeTranscriptionEventParser();
