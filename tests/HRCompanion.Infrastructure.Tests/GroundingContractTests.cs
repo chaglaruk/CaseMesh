@@ -87,8 +87,13 @@ public sealed class GroundingContractTests
         Assert.Contains("15-45 words", MeetingPromptBuilder.SpokenStyle, StringComparison.Ordinal);
         Assert.Contains("British spoken English", MeetingPromptBuilder.SpokenStyle, StringComparison.Ordinal);
         Assert.Contains("contractions", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("prefer a short clarification", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Put any useful clarification question in ASK", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("I appreciate the opportunity to clarify", MeetingPromptBuilder.SpokenStyle, StringComparison.Ordinal);
+        Assert.Contains("nothing to decide or do", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("acknowledgement filler", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("I can’t confirm that today", MeetingPromptBuilder.SpokenStyle, StringComparison.Ordinal);
+        Assert.Contains("rather than a categorical refusal", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("before any decision is made", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class StaticKeyStore : IApiKeyStore
