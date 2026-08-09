@@ -89,8 +89,9 @@ public sealed class RealtimeTransportTests
             Options.Create(new OpenAiOptions()));
         var json = System.Text.Json.JsonSerializer.Serialize(transcriber.CreateSessionUpdate());
         using var document = System.Text.Json.JsonDocument.Parse(json);
-        var transcription = document.RootElement
-            .GetProperty("session").GetProperty("audio").GetProperty("input").GetProperty("transcription");
+        var input = document.RootElement
+            .GetProperty("session").GetProperty("audio").GetProperty("input");
+        var transcription = input.GetProperty("transcription");
 
         Assert.Equal("gpt-live-transcribe", transcription.GetProperty("model").GetString());
         Assert.Equal("en", transcription.GetProperty("languages")[0].GetString());
@@ -98,6 +99,7 @@ public sealed class RealtimeTransportTests
         Assert.Equal("low", transcription.GetProperty("delay").GetString());
         Assert.Contains(transcription.GetProperty("keywords").EnumerateArray(),
             item => item.GetString() == "Occupational Health");
+        Assert.False(input.TryGetProperty("turn_detection", out _));
     }
 
     [Fact]
