@@ -7,7 +7,7 @@ The first Windows batch is fully specified in [`docs/FIRST_CODEX_BATCH.md`](FIRS
 The first coordinated Windows batch now includes the supported process-loopback implementation, deterministic realtime ordering/recovery, live Start/Stop wiring, broad synthetic Case Brain/grounding coverage, and latency instrumentation. Highest-priority unresolved validation work:
 
 1. real Teams call validation with unrelated audio, headset/Bluetooth, mute and process restart
-2. live two-source `gpt-realtime-whisper` protocol and reconnect exercise
+2. live two-source `gpt-live-transcribe` protocol and reconnect exercise using the current dedicated Realtime Transcription guide
 3. live GPT-5.6 Sol grounding/naturalness and realistic median/p95 latency measurement
 4. visual overlay/focus validation beside Teams
 5. a 30+ minute endurance/restart rehearsal
