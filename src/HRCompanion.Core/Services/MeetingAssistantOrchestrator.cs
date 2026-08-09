@@ -36,9 +36,33 @@ public sealed class MeetingAssistantOrchestrator
             throw new ArgumentException("Only final transcript turns may enter the durable meeting state.", nameof(turn));
         }
 
+        var persistedAt = await PersistFinalTurnAsync(state, turn, cancellationToken).ConfigureAwait(false);
+        onPersisted?.Invoke();
+
+        return await GenerateAssistanceWithTimingAsync(state, turn, persistedAt, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<DateTimeOffset> PersistFinalTurnAsync(
+        MeetingState state,
+        TranscriptTurn turn,
+        CancellationToken cancellationToken = default)
+    {
+        if (!turn.IsFinal)
+        {
+            throw new ArgumentException("Only final transcript turns may enter the durable meeting state.", nameof(turn));
+        }
+
         state.AddTurn(turn);
         await _repository.SaveTranscriptTurnAsync(turn, cancellationToken).ConfigureAwait(false);
-        onPersisted?.Invoke();
+        return DateTimeOffset.UtcNow;
+    }
+
+    public async Task<AssistanceRunResult> GenerateAssistanceWithTimingAsync(
+        MeetingState state,
+        TranscriptTurn turn,
+        DateTimeOffset persistedAt,
+        CancellationToken cancellationToken = default)
+    {
 
         if (turn.Speaker != SpeakerRole.Hr)
         {
@@ -47,13 +71,17 @@ public sealed class MeetingAssistantOrchestrator
 
         var deterministic = _cues.Analyze(turn.Text);
         MeetingAnalysis analysis = deterministic;
+        DateTimeOffset? analysisStartedAt = null;
+        DateTimeOffset? analysisCompletedAt = null;
 
         // Keep the common live path to one model round-trip. Use Luna only when local intent/retrieval is genuinely ambiguous.
         var ambiguous = deterministic.Intent == MeetingIntent.Unknown ||
                         (deterministic.NeedsAssistant && deterministic.RetrievalTerms.Count < 2);
         if (ambiguous && turn.Text.Length >= 20)
         {
+            analysisStartedAt = DateTimeOffset.UtcNow;
             var aiAnalysis = await _ai.AnalyzeTurnAsync(state, turn, cancellationToken).ConfigureAwait(false);
+            analysisCompletedAt = DateTimeOffset.UtcNow;
             analysis = Merge(deterministic, aiAnalysis);
         }
 
@@ -83,8 +111,11 @@ public sealed class MeetingAssistantOrchestrator
         return new(response, new(
             turn.Id,
             turn.EndedAt,
+            persistedAt,
             retrievalStartedAt,
             retrievalCompletedAt,
+            analysisStartedAt,
+            analysisCompletedAt,
             answerRequestStartedAt,
             responseCompletedAt));
     }

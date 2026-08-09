@@ -40,8 +40,11 @@ public sealed class MeetingStateTests
         var samples = values.Select((milliseconds, index) => new PipelineTiming(
             Guid.NewGuid(),
             origin,
+            origin.AddMilliseconds(5),
             origin.AddMilliseconds(10),
             origin.AddMilliseconds(20),
+            null,
+            null,
             origin.AddMilliseconds(30),
             origin.AddMilliseconds(milliseconds),
             origin.AddMilliseconds(milliseconds)));

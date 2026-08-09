@@ -3,8 +3,11 @@ namespace HRCompanion.Core.Models;
 public sealed record PipelineTiming(
     Guid TurnId,
     DateTimeOffset HrFinalTurnAt,
+    DateTimeOffset ActualTurnPersistedAt,
     DateTimeOffset RetrievalStartedAt,
     DateTimeOffset RetrievalCompletedAt,
+    DateTimeOffset? AnalysisStartedAt,
+    DateTimeOffset? AnalysisCompletedAt,
     DateTimeOffset AnswerRequestStartedAt,
     DateTimeOffset ResponseCompletedAt,
     DateTimeOffset? FirstUsefulRenderedAt = null)

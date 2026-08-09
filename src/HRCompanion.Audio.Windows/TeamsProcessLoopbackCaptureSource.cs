@@ -59,11 +59,11 @@ public sealed class TeamsProcessLoopbackCaptureSource : IAudioCaptureSource
         try
         {
             audioClient = await ActivateProcessLoopbackAsync((uint)ProcessId, cancellationToken).ConfigureAwait(false);
-            var captureFormat = new WaveFormat(44100, 16, 2);
+            var captureFormat = ProcessLoopbackCaptureFormat.Create();
             audioClient.Initialize(
                 AudioClientShareMode.Shared,
-                AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback,
-                1_000_000,
+                AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback | AudioClientStreamFlags.AutoConvertPcm,
+                0,
                 0,
                 captureFormat,
                 Guid.Empty);
@@ -150,7 +150,7 @@ public sealed class TeamsProcessLoopbackCaptureSource : IAudioCaptureSource
                     var buffer = capture.GetBuffer(out var frames, out var flags, out _, out _);
                     try
                     {
-                        var byteCount = frames * 4;
+                        var byteCount = ProcessLoopbackCaptureFormat.GetByteCount(frames, converter.InputBlockAlign);
                         var bytes = new byte[byteCount];
                         if ((flags & AudioClientBufferFlags.Silent) == 0 && byteCount > 0)
                         {
@@ -340,4 +340,16 @@ public sealed class TeamsProcessLoopbackCaptureSource : IAudioCaptureSource
     }
 
     public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
+}
+
+internal static class ProcessLoopbackCaptureFormat
+{
+    public static WaveFormat Create() => new(44100, 16, 2);
+
+    public static int GetByteCount(int frames, int blockAlign)
+    {
+        if (frames < 0) throw new ArgumentOutOfRangeException(nameof(frames));
+        if (blockAlign <= 0) throw new ArgumentOutOfRangeException(nameof(blockAlign));
+        return checked(frames * blockAlign);
+    }
 }

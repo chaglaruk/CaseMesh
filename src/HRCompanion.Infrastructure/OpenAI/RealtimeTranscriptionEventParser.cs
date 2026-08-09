@@ -44,8 +44,9 @@ internal sealed class RealtimeTranscriptionEventParser
 
     private RealtimeParseResult OnSpeechStarted(JsonElement root, DateTimeOffset receivedAt)
     {
-        if (TryGetString(root, "item_id", out var itemId)) _started.TryAdd(itemId, receivedAt);
-        return new([]);
+        if (!TryGetString(root, "item_id", out var itemId)) return new([]);
+        _started.TryAdd(itemId, receivedAt);
+        return new([new(string.Empty, false, receivedAt, itemId, receivedAt, null, true)]);
     }
 
     private RealtimeParseResult OnCommitted(JsonElement root, DateTimeOffset receivedAt)

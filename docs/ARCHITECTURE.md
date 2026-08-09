@@ -72,10 +72,25 @@ All model IDs are configuration values, not hard-coded business logic.
 
 `FULL`: capture + transcription + retrieval + assistant all healthy.
 
-`TRANSCRIPT_ONLY`: assistant/retrieval API unavailable; persist transcript and keep meeting usable.
+`ASSISTANT_DEGRADED`: both actual-speech transcription streams remain healthy, but retrieval/answer generation is unavailable. Transcript persistence continues.
+
+`TRANSCRIPTION_DEGRADED`: at least one actual-speech source is unavailable. The UI identifies HR vs USER reconnecting separately and keeps manual entry available.
+
+`TRANSCRIPTION_GAP`: the bounded audio sender dropped at least one frame, so the transcript may be incomplete. The app exposes source-specific accepted/sent/dropped counts and queue high-water marks without logging PCM or text.
 
 `MANUAL`: audio pipeline unavailable; user can paste/type the latest HR turn and still request a grounded response.
 
+## Live concurrency
+
+Actual final turns use a short serialized state/SQLite ingestion path. Retrieval, optional Luna analysis and the Sol request run outside that boundary. Any newer real speech advances a conversation generation, cancels obsolete model work where possible and prevents late SAY/WATCH/ASK output from rendering. Automatic assistance has an eight-second live-use timeout; this is a safety bound, not a latency claim.
+
+Each Realtime transcriber owns one sender worker and a 12-frame bounded queue. Overflow drops the oldest queued frame in favour of current audio and marks a visible transcription gap. Frames encountered while disconnected are also dropped and counted rather than replayed after the conversation has moved on.
+
 ## Audio strategy
 
-The target is process-specific capture of Microsoft Teams plus separate microphone capture. The repository includes a safe system-loopback fallback and an audio probe, but process-specific Teams capture is a Windows hardware/runtime gate and must be implemented/validated against Microsoft's application-loopback mechanism before calling Gate 1 verified.
+The target is process-specific capture of Microsoft Teams plus separate microphone capture. Process capture follows Microsoft's current Application Loopback sample: `ActivateAudioInterfaceAsync`, include-target-process-tree activation, 44.1 kHz/16-bit/stereo PCM, shared-mode `AUTOCONVERTPCM`, and byte counts derived from block alignment. The repository includes a labelled system-loopback fallback and an audio probe, but a real Teams/headset call is still required before calling Gate 1 verified.
+
+Protocol references checked on 2026-08-09:
+
+- [OpenAI Realtime transcription guide](https://developers.openai.com/api/docs/guides/realtime-transcription)
+- [Microsoft Application Loopback sample](https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/ApplicationLoopback)

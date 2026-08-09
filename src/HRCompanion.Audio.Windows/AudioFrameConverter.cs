@@ -29,6 +29,8 @@ internal sealed class AudioFrameConverter
             : new WdlResamplingSampleProvider(samples, 24000);
     }
 
+    public int InputBlockAlign => _buffer.WaveFormat.BlockAlign;
+
     public IEnumerable<AudioFrame> Push(byte[] buffer, int bytesRecorded, DateTimeOffset capturedAt)
     {
         _buffer.AddSamples(buffer, 0, bytesRecorded);

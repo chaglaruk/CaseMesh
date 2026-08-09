@@ -162,10 +162,10 @@ public partial class MainWindow : Window
     {
         coordinator.FinalTurn += (_, _) => Dispatcher.Invoke(RenderRecentTranscript);
         coordinator.AssistantUpdated += (_, response) => Dispatcher.Invoke(() => Render(response));
-        coordinator.ConnectionStateChanged += (_, state) => Dispatcher.Invoke(() => OnConnectionStateChanged(state));
+        coordinator.AssistanceInvalidated += (_, _) => Dispatcher.Invoke(() => Render(AssistantResponse.NoAction()));
+        coordinator.HealthChanged += (_, health) => Dispatcher.Invoke(() => OnHealthChanged(health));
         coordinator.NonFatalError += (_, error) => Dispatcher.Invoke(() =>
         {
-            SetLiveStatus("TRANSCRIPT ONLY", "A live component is degraded; persisted transcript capture continues where available.");
             StatusText.Text = $"Non-fatal live error: {error.GetType().Name}. No transcript content was logged.";
         });
         coordinator.LatencyMeasured += (_, timing) => Dispatcher.Invoke(() =>
@@ -176,18 +176,32 @@ public partial class MainWindow : Window
         });
     }
 
-    private void OnConnectionStateChanged(TranscriberConnectionState state)
+    private void OnHealthChanged(LiveMeetingHealth health)
     {
-        switch (state)
+        switch (health.State)
         {
-            case TranscriberConnectionState.Listening:
-                SetLiveStatus("LISTENING", "Live transcription connected.");
+            case LiveMeetingHealthState.FullListening:
+                SetLiveStatus("LISTENING", "Teams/HR and microphone/USER transcription are healthy.");
                 break;
-            case TranscriberConnectionState.Reconnecting:
-                SetLiveStatus("RECONNECTING", "Realtime transcription is reconnecting; persisted turns remain local.");
+            case LiveMeetingHealthState.HrReconnecting:
+                SetLiveStatus("HR RECONNECTING", "Teams/HR transcription is reconnecting; USER transcription remains independently tracked.");
                 break;
-            case TranscriberConnectionState.Failed:
-                SetLiveStatus("TRANSCRIPT ONLY", "Realtime transcription reached its reconnect limit. Stop and restart when ready.");
+            case LiveMeetingHealthState.UserReconnecting:
+                SetLiveStatus("USER RECONNECTING", "Microphone/USER transcription is reconnecting; HR transcription remains independently tracked.");
+                break;
+            case LiveMeetingHealthState.TranscriptionDegraded:
+                SetLiveStatus("TRANSCRIPTION DEGRADED", "At least one actual-speech source is unavailable. Use manual fallback for missing turns.");
+                break;
+            case LiveMeetingHealthState.TranscriptionGap:
+                SetLiveStatus("TRANSCRIPTION GAP",
+                    $"Audio frames dropped: HR {health.HrDiagnostics.FramesDropped}, USER {health.UserDiagnostics.FramesDropped}. " +
+                    $"Queue high-water: HR {health.HrDiagnostics.QueueHighWaterMark}, USER {health.UserDiagnostics.QueueHighWaterMark}. The transcript may be incomplete.");
+                break;
+            case LiveMeetingHealthState.AssistantDegraded:
+                SetLiveStatus("ASSISTANT DEGRADED", "Live transcription remains healthy, but SAY/WATCH/ASK generation is unavailable.");
+                break;
+            case LiveMeetingHealthState.Manual:
+                SetLiveStatus("MANUAL", "Live capture is stopped. Manual assistance remains available.");
                 break;
         }
     }
@@ -329,6 +343,7 @@ public partial class MainWindow : Window
 
     private void Render(AssistantResponse response)
     {
+        _latest = response;
         SayText.Text = response.Say ?? "—";
         WatchText.Text = response.Watch ?? "—";
         AskText.Text = response.Ask ?? "—";

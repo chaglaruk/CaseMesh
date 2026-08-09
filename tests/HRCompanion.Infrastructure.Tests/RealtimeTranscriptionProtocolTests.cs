@@ -80,4 +80,49 @@ public sealed class RealtimeTranscriptionProtocolTests
         Assert.Single(first.Updates);
         Assert.Empty(duplicate.Updates);
     }
+
+    [Fact]
+    public void SpeechStarted_EmitsActivityWithoutInventingTranscriptText()
+    {
+        var parser = new RealtimeTranscriptionEventParser();
+        var now = DateTimeOffset.UtcNow;
+
+        var activity = parser.Parse(
+            """{"type":"input_audio_buffer.speech_started","item_id":"turn-a"}""", now);
+
+        var update = Assert.Single(activity.Updates);
+        Assert.True(update.IsSpeechStarted);
+        Assert.False(update.IsFinal);
+        Assert.Empty(update.Text);
+        Assert.Equal("turn-a", update.ItemId);
+    }
+
+    [Fact]
+    public void MultipleConnectionResets_DiscardPartialsAndNeverDuplicateDurableFinals()
+    {
+        var parser = new RealtimeTranscriptionEventParser();
+        var now = DateTimeOffset.UtcNow;
+        parser.Parse("""{"type":"input_audio_buffer.committed","item_id":"turn-a","previous_item_id":null}""", now);
+        parser.Parse("""{"type":"conversation.item.input_audio_transcription.delta","item_id":"turn-a","delta":"incomplete"}""", now);
+
+        parser.ResetConnection();
+        parser.Parse("""{"type":"input_audio_buffer.committed","item_id":"turn-b","previous_item_id":null}""", now.AddSeconds(1));
+        var firstFinal = parser.Parse(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"turn-b","transcript":"durable B"}""",
+            now.AddSeconds(2));
+        Assert.Equal("turn-b", Assert.Single(firstFinal.Updates).ItemId);
+
+        parser.ResetConnection();
+        parser.Parse("""{"type":"input_audio_buffer.committed","item_id":"turn-b","previous_item_id":null}""", now.AddSeconds(3));
+        var duplicate = parser.Parse(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"turn-b","transcript":"duplicate B"}""",
+            now.AddSeconds(4));
+        parser.Parse("""{"type":"input_audio_buffer.committed","item_id":"turn-c","previous_item_id":null}""", now.AddSeconds(5));
+        var nextFinal = parser.Parse(
+            """{"type":"conversation.item.input_audio_transcription.completed","item_id":"turn-c","transcript":"durable C"}""",
+            now.AddSeconds(6));
+
+        Assert.Empty(duplicate.Updates);
+        Assert.Equal("turn-c", Assert.Single(nextFinal.Updates).ItemId);
+    }
 }

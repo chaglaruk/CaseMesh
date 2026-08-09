@@ -15,6 +15,13 @@ foreach (var process in teams)
     Console.WriteLine($"  {(process.IsLikelyRoot ? "ROOT?" : "child")}  {process.DisplayName}");
 }
 
+var microphones = MicrophoneCaptureSource.GetDevices();
+Console.WriteLine($"Microphone devices: {microphones.Count}");
+foreach (var device in microphones)
+{
+    Console.WriteLine($"  [{device.DeviceNumber}] {device.DisplayName}");
+}
+
 if (args.Contains("--list", StringComparer.OrdinalIgnoreCase)) return;
 
 var selfTest = args.Contains("--self-test", StringComparer.OrdinalIgnoreCase);

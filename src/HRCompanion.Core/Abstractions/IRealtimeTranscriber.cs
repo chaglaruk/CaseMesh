@@ -9,7 +9,16 @@ public sealed record TranscriptionUpdate(
     DateTimeOffset OccurredAt,
     string? ItemId = null,
     DateTimeOffset? StartedAt = null,
-    string? PreviousItemId = null);
+    string? PreviousItemId = null,
+    bool IsSpeechStarted = false);
+
+public sealed record TranscriberDiagnostics(
+    long FramesAccepted,
+    long FramesSent,
+    long FramesDropped,
+    int QueueDepth,
+    int QueueHighWaterMark,
+    bool HasTranscriptionGap);
 
 public enum TranscriberConnectionState
 {
@@ -23,10 +32,12 @@ public enum TranscriberConnectionState
 public interface IRealtimeTranscriber : IAsyncDisposable
 {
     SpeakerRole Speaker { get; }
+    TranscriberDiagnostics Diagnostics { get; }
     event EventHandler<TranscriptionUpdate>? Updated;
     event EventHandler<TranscriberConnectionState>? StateChanged;
+    event EventHandler<TranscriberDiagnostics>? DiagnosticsChanged;
     event EventHandler<Exception>? Faulted;
     Task StartAsync(CancellationToken cancellationToken = default);
-    ValueTask SendAsync(AudioFrame frame, CancellationToken cancellationToken = default);
+    bool TryEnqueue(AudioFrame frame);
     Task StopAsync(CancellationToken cancellationToken = default);
 }

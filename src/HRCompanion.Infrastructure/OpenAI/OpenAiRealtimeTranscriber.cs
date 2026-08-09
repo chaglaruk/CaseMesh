@@ -10,6 +10,8 @@ namespace HRCompanion.Infrastructure.OpenAI;
 public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
 {
     private const int MaximumReconnectAttempts = 3;
+    internal const int AudioQueueCapacity = 12;
+    private static readonly TimeSpan AudioSendTimeout = TimeSpan.FromSeconds(2);
     private readonly IApiKeyStore _keys;
     private readonly OpenAiOptions _options;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
@@ -17,6 +19,8 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
     private CancellationTokenSource? _receiveCts;
     private Task? _receiveTask;
     private ClientWebSocket? _socket;
+    private AudioFrameSendPump? _sendPump;
+    private TranscriberDiagnostics _lastDiagnostics = new(0, 0, 0, 0, 0, false);
     private volatile bool _stopping;
 
     public OpenAiRealtimeTranscriber(SpeakerRole speaker, IApiKeyStore keys, IOptions<OpenAiOptions> options)
@@ -27,8 +31,10 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
     }
 
     public SpeakerRole Speaker { get; }
+    public TranscriberDiagnostics Diagnostics => _sendPump?.Diagnostics ?? _lastDiagnostics;
     public event EventHandler<TranscriptionUpdate>? Updated;
     public event EventHandler<TranscriberConnectionState>? StateChanged;
+    public event EventHandler<TranscriberDiagnostics>? DiagnosticsChanged;
     public event EventHandler<Exception>? Faulted;
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -44,6 +50,9 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         {
             var socket = await ConnectAsync(key, cancellationToken).ConfigureAwait(false);
             _socket = socket;
+            _sendPump = new AudioFrameSendPump(AudioQueueCapacity, SendFrameCoreAsync);
+            _sendPump.DiagnosticsChanged += OnPumpDiagnosticsChanged;
+            _sendPump.Start();
             SetState(TranscriberConnectionState.Listening);
             _receiveTask = ReceiveAndRecoverAsync(key, socket, _receiveCts.Token);
         }
@@ -56,25 +65,16 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         }
     }
 
-    public async ValueTask SendAsync(AudioFrame frame, CancellationToken cancellationToken = default)
-    {
-        var audio = Convert.ToBase64String(frame.Pcm16Bit24KhzMono.Span);
-        await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var socket = _socket;
-            if (socket?.State != WebSocketState.Open) return;
-            await SendJsonCoreAsync(socket, new { type = "input_audio_buffer.append", audio }, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _sendGate.Release();
-        }
-    }
+    public bool TryEnqueue(AudioFrame frame) => _sendPump?.TryEnqueue(frame) ?? false;
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         _stopping = true;
+        var sendPump = _sendPump;
+        if (sendPump is not null)
+        {
+            await sendPump.StopAsync(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+        }
         var socket = _socket;
         if (socket?.State == WebSocketState.Open)
         {
@@ -106,6 +106,13 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         }
 
         await DisposeSocketAsync().ConfigureAwait(false);
+        if (sendPump is not null)
+        {
+            sendPump.DiagnosticsChanged -= OnPumpDiagnosticsChanged;
+            _lastDiagnostics = sendPump.Diagnostics;
+            await sendPump.DisposeAsync().ConfigureAwait(false);
+        }
+        _sendPump = null;
         _receiveTask = null;
         _receiveCts?.Dispose();
         _receiveCts = null;
@@ -116,7 +123,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
     private async Task ReceiveAndRecoverAsync(string key, ClientWebSocket initialSocket, CancellationToken cancellationToken)
     {
         var socket = initialSocket;
-        var reconnectAttempt = 0;
+        var retryBudget = new ReconnectRetryBudget(MaximumReconnectAttempts);
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -137,10 +144,10 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
             await DisposeSocketAsync(socket).ConfigureAwait(false);
 
             ClientWebSocket? reconnected = null;
-            while (reconnected is null && reconnectAttempt < MaximumReconnectAttempts && !cancellationToken.IsCancellationRequested)
+            while (reconnected is null && retryBudget.TryUseAttempt() && !cancellationToken.IsCancellationRequested)
             {
                 SetState(TranscriberConnectionState.Reconnecting);
-                reconnectAttempt++;
+                var reconnectAttempt = retryBudget.AttemptsUsed;
                 try
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(250 * Math.Pow(2, reconnectAttempt - 1)), cancellationToken).ConfigureAwait(false);
@@ -168,6 +175,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
 
             socket = reconnected;
             _socket = socket;
+            retryBudget.Reset();
             SetState(TranscriberConnectionState.Listening);
         }
     }
@@ -193,7 +201,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         }
     }
 
-    private object CreateSessionUpdate() => new
+    internal object CreateSessionUpdate() => new
     {
         type = "session.update",
         session = new
@@ -208,8 +216,14 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                     transcription = new
                     {
                         model = _options.TranscriptionModel,
-                        language = _options.TranscriptionLanguage,
-                        prompt = "British employment HR meeting. Expect Occupational Health, redeployment, fit note, phased return, reasonable adjustments, capability, grievance and ACAS. Preserve names, dates and role titles."
+                        languages = new[] { _options.TranscriptionLanguage },
+                        prompt = "British employment HR meeting. Preserve names, dates and role titles.",
+                        keywords = new[]
+                        {
+                            "Occupational Health", "redeployment", "fit note", "phased return",
+                            "reasonable adjustments", "capability", "grievance", "ACAS"
+                        },
+                        delay = "low"
                     },
                     turn_detection = new
                     {
@@ -251,6 +265,40 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(payload);
         return socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cancellationToken);
+    }
+
+    private async Task<bool> SendFrameCoreAsync(AudioFrame frame, CancellationToken cancellationToken)
+    {
+        using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        sendCts.CancelAfter(AudioSendTimeout);
+        await _sendGate.WaitAsync(sendCts.Token).ConfigureAwait(false);
+        try
+        {
+            var socket = _socket;
+            if (socket?.State != WebSocketState.Open) return false;
+            var audio = Convert.ToBase64String(frame.Pcm16Bit24KhzMono.Span);
+            try
+            {
+                await SendJsonCoreAsync(socket, new { type = "input_audio_buffer.append", audio }, sendCts.Token).ConfigureAwait(false);
+                return true;
+            }
+            catch (Exception ex) when (ex is WebSocketException or OperationCanceledException)
+            {
+                try { socket.Abort(); } catch { }
+                if (ex is WebSocketException) RaiseFault(ex);
+                return false;
+            }
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
+    }
+
+    private void OnPumpDiagnosticsChanged(object? sender, TranscriberDiagnostics diagnostics)
+    {
+        _lastDiagnostics = diagnostics;
+        DiagnosticsChanged?.Invoke(this, diagnostics);
     }
 
     private async Task DisposeSocketAsync(ClientWebSocket? expected = null)
