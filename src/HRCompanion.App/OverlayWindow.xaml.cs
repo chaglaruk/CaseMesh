@@ -10,6 +10,8 @@ public partial class OverlayWindow : Window
     private AssistantResponse _current = AssistantResponse.NoAction();
     private int _historyIndex = -1;
 
+    public event EventHandler? RetryLastHrRequested;
+
     public OverlayWindow() => InitializeComponent();
 
     public void Render(AssistantResponse response)
@@ -20,6 +22,14 @@ public partial class OverlayWindow : Window
         RenderResponse(_current);
         UpdateNavigation();
     }
+
+    public void SetRetryEnabled(bool enabled)
+    {
+        RetryLastHrButton.IsEnabled = enabled;
+    }
+
+    private void RetryLastHr_Click(object sender, RoutedEventArgs e) =>
+        RetryLastHrRequested?.Invoke(this, EventArgs.Empty);
 
     private void Previous_Click(object sender, RoutedEventArgs e)
     {
