@@ -1,7 +1,7 @@
 <Window x:Class="HRCompanion.App.OverlayWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="HR Companion Overlay" Width="470" Height="430" Topmost="True" ShowInTaskbar="False"
+        Title="HR Companion Overlay" Width="470" Height="470" Topmost="True" ShowInTaskbar="False"
         WindowStyle="ToolWindow" ResizeMode="CanResizeWithGrip" WindowStartupLocation="Manual" Left="40" Top="80"
         ShowActivated="False" Focusable="False">
     <Border Padding="14" Background="#FCFCFC">
@@ -27,6 +27,8 @@
                         Click="RetryLastHr_Click" />
                 <TextBlock Text="SAY" FontWeight="Bold" />
                 <TextBlock x:Name="SayText" Margin="0,4,0,0" Text="—" TextWrapping="Wrap" FontSize="17" />
+                <TextBlock Text="NEXT" Margin="0,16,0,0" FontWeight="Bold" Foreground="#4C657A" />
+                <TextBlock x:Name="NextCueText" Margin="0,4,0,0" Text="—" TextWrapping="Wrap" />
                 <TextBlock Text="WATCH" Margin="0,16,0,0" FontWeight="Bold" Foreground="#8A5A00" />
                 <TextBlock x:Name="WatchText" Margin="0,4,0,0" Text="—" TextWrapping="Wrap" />
                 <TextBlock Text="ASK" Margin="0,16,0,0" FontWeight="Bold" Foreground="#245A8D" />
