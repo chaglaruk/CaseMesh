@@ -118,7 +118,7 @@ public sealed class MeetingAssistantOrchestrator
             return new(AssistantResponse.NoAction(analysis.Intent), null);
         }
 
-        var query = BuildRetrievalQuery(effectiveTurn.Text, analysis.RetrievalTerms);
+        var query = BuildRetrievalQuery(effectiveTurn.Text, analysis.RetrievalTerms, state.MeetingObjective);
         var retrievalStartedAt = DateTimeOffset.UtcNow;
         var evidenceTask = _repository.SearchAsync(query, 8, cancellationToken);
         var factsTask = _repository.GetFactsAsync(cancellationToken);
@@ -206,6 +206,21 @@ public sealed class MeetingAssistantOrchestrator
             terms);
     }
 
-    private static string BuildRetrievalQuery(string turnText, IReadOnlyList<string> terms) =>
-        terms.Count > 0 ? string.Join(' ', terms) : turnText;
+    private static string BuildRetrievalQuery(
+        string turnText,
+        IReadOnlyList<string> terms,
+        string meetingObjective)
+    {
+        var primary = terms.Count > 0 ? string.Join(' ', terms) : turnText;
+        if (terms.Count >= 2 || string.IsNullOrWhiteSpace(meetingObjective)) return primary;
+
+        // Generic live questions such as “what happens next?” can otherwise retrieve almost nothing.
+        // The meeting-scoped objective is user context, not evidence; it is used only to improve the
+        // search terms. Documentary claims still have to come from retrieved ordinary/current sources.
+        var objectiveWords = meetingObjective
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Where(word => word.Length >= 4)
+            .Take(16);
+        return string.Join(' ', new[] { primary }.Concat(objectiveWords));
+    }
 }
