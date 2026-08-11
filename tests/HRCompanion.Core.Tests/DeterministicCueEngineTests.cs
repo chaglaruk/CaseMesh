@@ -59,6 +59,27 @@ public sealed class DeterministicCueEngineTests
     }
 
     [Fact]
+    public void FilledPauseBeforeDirectQuestion_IsStillDetected()
+    {
+        var result = _sut.Analyze(
+            "Um, well, can you, uh, explain why you don't feel able to return to your current role");
+
+        Assert.Equal(MeetingIntent.Question, result.Intent);
+        Assert.True(result.NeedsAssistant);
+    }
+
+    [Fact]
+    public void ConversationalIndirectQuestionWithFillers_IsStillDetected()
+    {
+        var result = _sut.Analyze(
+            "I've reviewed the notes and I was just wondering, um, if you could explain why the current role still feels difficult. " +
+            "We can come back to the fit note afterwards.");
+
+        Assert.Equal(MeetingIntent.Question, result.Intent);
+        Assert.True(result.NeedsAssistant);
+    }
+
+    [Fact]
     public void AlternativeRole_ExpandsLocalHrRetrievalAliasesWithoutExtraModelCall()
     {
         var result = _sut.Analyze("Why haven't the alternative roles been suitable for you?");
