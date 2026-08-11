@@ -30,10 +30,10 @@ public sealed partial class DeterministicCueEngine
         (["grievance"], ["grievance"]),
         (["settlement", "without prejudice"], ["settlement", "without prejudice"]),
         (["sick pay", "ssp", "statutory sick pay", "company sick pay", "csp"],
-         ["company sick pay", "CSP", "service band", "entitlement", "ledger"]),
+         ["company sick pay", "CSP", "service band", "entitlement"]),
         (["payroll", "underpayment", "pay shortfall", "wage deduction", "deduction", "advance payment", "advance deduction",
           "unresolved about your pay", "outstanding about your pay", "still unresolved about your pay"],
-         ["payroll", "reconciliation", "payment discrepancy", "deduction", "advance", "correction", "ledger"]),
+         ["payroll", "reconciliation", "payment discrepancy", "payslip", "employer letter", "deduction", "advance", "correction"]),
         (["reporting line", "line manager", "report to", "manager"],
          ["reporting", "manager", "role"])
     ];
