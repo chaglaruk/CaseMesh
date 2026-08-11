@@ -8,6 +8,12 @@ public interface ICaseRepository
     Task<bool> HasDocumentHashAsync(string sha256, CancellationToken cancellationToken = default);
     Task SaveDocumentAsync(DocumentRecord document, IReadOnlyList<DocumentChunk> chunks, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<DocumentRecord>> GetDocumentsAsync(CancellationToken cancellationToken = default);
+    Task UpdateDocumentClassificationAsync(
+        Guid documentId,
+        EvidenceChannel channel,
+        EvidenceAuthority authority,
+        CancellationToken cancellationToken = default);
+    Task DeleteDocumentAsync(Guid documentId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<EvidenceSnippet>> SearchAsync(string query, int limit = 8, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<CaseFact>> GetFactsAsync(CancellationToken cancellationToken = default);
     Task SaveFactAsync(CaseFact fact, CancellationToken cancellationToken = default);
