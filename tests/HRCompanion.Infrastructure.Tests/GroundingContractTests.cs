@@ -101,6 +101,11 @@ public sealed class GroundingContractTests
         Assert.Contains("I’m not saying I won’t return", MeetingPromptBuilder.SpokenStyle, StringComparison.Ordinal);
         Assert.Contains("direct contemporaneous evidence", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("non-verbatim meeting note", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("When sources conflict, preserve the attribution", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("documentary evidence", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("employer assertion", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("your records say", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("original email, letter, payslip", MeetingPromptBuilder.SpokenStyle, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class StaticKeyStore : IApiKeyStore
