@@ -71,6 +71,9 @@ public sealed class DeterministicCueEngineTests
 
         Assert.Equal(MeetingIntent.Question, result.Intent);
         Assert.Contains(result.RetrievalTerms, x => x.Equals("return", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("safe return", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("not refusing", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("same environment", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.RetrievalTerms, x => x.Equals("Occupational Health", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.RetrievalTerms, x => x.Equals("reporting line", StringComparison.OrdinalIgnoreCase));
     }
