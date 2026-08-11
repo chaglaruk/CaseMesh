@@ -112,7 +112,7 @@ public sealed class RealtimeTransportTests
     }
 
     [Fact]
-    public void ClientSecretRequest_UserUsesNearFieldNoiseReductionAndStricterVad()
+    public void ClientSecretRequest_UserUsesFarFieldNoiseReductionAndDefaultVadThreshold()
     {
         var transcriber = new OpenAiRealtimeTranscriber(
             SpeakerRole.User,
@@ -124,9 +124,9 @@ public sealed class RealtimeTransportTests
         var turnDetection = input.GetProperty("turn_detection");
         var noiseReduction = input.GetProperty("noise_reduction");
 
-        Assert.Equal("near_field", noiseReduction.GetProperty("type").GetString());
+        Assert.Equal("far_field", noiseReduction.GetProperty("type").GetString());
         Assert.Equal("server_vad", turnDetection.GetProperty("type").GetString());
-        Assert.Equal(0.65, turnDetection.GetProperty("threshold").GetDouble(), 3);
+        Assert.Equal(0.5, turnDetection.GetProperty("threshold").GetDouble(), 3);
         Assert.Equal(300, turnDetection.GetProperty("prefix_padding_ms").GetInt32());
         Assert.Equal(500, turnDetection.GetProperty("silence_duration_ms").GetInt32());
         Assert.False(turnDetection.GetProperty("create_response").GetBoolean());
