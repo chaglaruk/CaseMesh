@@ -6,6 +6,7 @@ namespace HRCompanion.App;
 public partial class OverlayWindow : Window
 {
     private const int HistoryLimit = 5;
+    private const double LowConfidenceThreshold = 0.60;
     private readonly List<OverlayEntry> _history = [];
     private AssistantResponse _current = AssistantResponse.NoAction();
     private string? _currentHeard;
@@ -73,6 +74,9 @@ public partial class OverlayWindow : Window
         NextCueText.Text = entry.Response.Next ?? "—";
         WatchText.Text = entry.Response.Watch ?? "—";
         AskText.Text = entry.Response.Ask ?? "—";
+        ConfidenceText.Text = ResponseHasContent(entry.Response) && entry.Response.Confidence < LowConfidenceThreshold
+            ? "LOW CONFIDENCE — check HEARD before speaking; use Retry/manual correction if the transcript is wrong."
+            : string.Empty;
     }
 
     private void UpdateNavigation()
