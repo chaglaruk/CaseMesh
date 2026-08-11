@@ -42,8 +42,10 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
         {
             command.Transaction = (SqliteTransaction)transaction;
             command.CommandText = """
-                INSERT INTO documents(id, display_name, original_path, sha256, media_type, imported_at, source_date, chunk_count)
-                VALUES($id, $name, $path, $hash, $media, $imported, $sourceDate, $count);
+                INSERT INTO documents(
+                    id, display_name, original_path, sha256, media_type, imported_at, source_date, chunk_count,
+                    evidence_channel, evidence_authority)
+                VALUES($id, $name, $path, $hash, $media, $imported, $sourceDate, $count, $channel, $authority);
                 """;
             command.Parameters.AddWithValue("$id", document.Id.ToString("D"));
             command.Parameters.AddWithValue("$name", document.DisplayName);
@@ -53,6 +55,8 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
             command.Parameters.AddWithValue("$imported", ToSqlDate(document.ImportedAt));
             command.Parameters.AddWithValue("$sourceDate", document.SourceDate is null ? DBNull.Value : ToSqlDate(document.SourceDate.Value));
             command.Parameters.AddWithValue("$count", document.ChunkCount);
+            command.Parameters.AddWithValue("$channel", (int)document.Channel);
+            command.Parameters.AddWithValue("$authority", (int)document.Authority);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -84,7 +88,8 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, display_name, original_path, sha256, media_type, imported_at, source_date, chunk_count
+            SELECT id, display_name, original_path, sha256, media_type, imported_at, source_date, chunk_count,
+                   evidence_channel, evidence_authority
             FROM documents ORDER BY imported_at DESC;
             """;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -98,18 +103,57 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
                 reader.GetString(4),
                 ParseSqlDate(reader.GetString(5)),
                 reader.IsDBNull(6) ? null : ParseSqlDate(reader.GetString(6)),
-                reader.GetInt32(7)));
+                reader.GetInt32(7),
+                (EvidenceChannel)reader.GetInt32(8),
+                (EvidenceAuthority)reader.GetInt32(9)));
         }
         return results;
+    }
+
+    public async Task UpdateDocumentClassificationAsync(
+        Guid documentId,
+        EvidenceChannel channel,
+        EvidenceAuthority authority,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE documents
+            SET evidence_channel = $channel, evidence_authority = $authority
+            WHERE id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", documentId.ToString("D"));
+        command.Parameters.AddWithValue("$channel", (int)channel);
+        command.Parameters.AddWithValue("$authority", (int)authority);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task DeleteDocumentAsync(Guid documentId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await using (var fts = connection.CreateCommand())
+        {
+            fts.Transaction = (SqliteTransaction)transaction;
+            fts.CommandText = "DELETE FROM chunks_fts WHERE document_id = $id;";
+            fts.Parameters.AddWithValue("$id", documentId.ToString("D"));
+            await fts.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await using (var document = connection.CreateCommand())
+        {
+            document.Transaction = (SqliteTransaction)transaction;
+            document.CommandText = "DELETE FROM documents WHERE id = $id;";
+            document.Parameters.AddWithValue("$id", documentId.ToString("D"));
+            await document.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<EvidenceSnippet>> SearchAsync(string query, int limit = 8, CancellationToken cancellationToken = default)
     {
         var ftsQuery = ToFtsQuery(query);
-        if (string.IsNullOrWhiteSpace(ftsQuery))
-        {
-            return [];
-        }
+        if (string.IsNullOrWhiteSpace(ftsQuery)) return [];
 
         var results = new List<EvidenceSnippet>();
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -120,10 +164,14 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
             FROM chunks_fts f
             JOIN documents d ON d.id = f.document_id
             WHERE chunks_fts MATCH $query
+              AND d.evidence_channel = $ordinary
+              AND d.evidence_authority = $current
             ORDER BY rank ASC, d.source_date DESC
             LIMIT $candidateLimit;
             """;
         command.Parameters.AddWithValue("$query", ftsQuery);
+        command.Parameters.AddWithValue("$ordinary", (int)EvidenceChannel.OrdinaryHr);
+        command.Parameters.AddWithValue("$current", (int)EvidenceAuthority.CurrentFinal);
         var requestedLimit = Math.Clamp(limit, 1, 50);
         command.Parameters.AddWithValue("$candidateLimit", Math.Min(100, requestedLimit * 4));
         var seenText = new HashSet<string>(StringComparer.Ordinal);
@@ -155,12 +203,17 @@ public sealed partial class SqliteCaseRepository : ICaseRepository
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, statement, status, source_document_id, source_locator, effective_date, created_at
-            FROM facts
-            ORDER BY CASE status WHEN 2 THEN 0 WHEN 1 THEN 1 ELSE 2 END,
-                     effective_date DESC,
-                     created_at DESC;
+            SELECT f.id, f.statement, f.status, f.source_document_id, f.source_locator, f.effective_date, f.created_at
+            FROM facts f
+            LEFT JOIN documents d ON d.id = f.source_document_id
+            WHERE f.source_document_id IS NULL
+               OR (d.evidence_channel = $ordinary AND d.evidence_authority = $current)
+            ORDER BY CASE f.status WHEN 2 THEN 0 WHEN 1 THEN 1 ELSE 2 END,
+                     f.effective_date DESC,
+                     f.created_at DESC;
             """;
+        command.Parameters.AddWithValue("$ordinary", (int)EvidenceChannel.OrdinaryHr);
+        command.Parameters.AddWithValue("$current", (int)EvidenceAuthority.CurrentFinal);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
