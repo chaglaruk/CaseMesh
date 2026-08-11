@@ -6,18 +6,20 @@ namespace HRCompanion.App;
 public partial class OverlayWindow : Window
 {
     private const int HistoryLimit = 5;
-    private readonly List<AssistantResponse> _history = [];
+    private readonly List<OverlayEntry> _history = [];
     private AssistantResponse _current = AssistantResponse.NoAction();
+    private string? _currentHeard;
     private int _historyIndex = -1;
 
     public OverlayWindow() => InitializeComponent();
 
-    public void Render(AssistantResponse response)
+    public void Render(AssistantResponse response, string? heard = null)
     {
-        if (ResponseHasContent(_current) && !Equivalent(_current, response)) Archive(_current);
+        if (ResponseHasContent(_current) && !Equivalent(_current, response)) Archive(new(_current, _currentHeard));
         _current = response;
+        _currentHeard = string.IsNullOrWhiteSpace(heard) ? _currentHeard : heard.Trim();
         _historyIndex = -1;
-        RenderResponse(_current);
+        RenderEntry(new(_current, _currentHeard));
         UpdateNavigation();
     }
 
@@ -35,7 +37,7 @@ public partial class OverlayWindow : Window
     {
         if (_history.Count == 0) return;
         if (_historyIndex < _history.Count - 1) _historyIndex++;
-        RenderResponse(_history[_historyIndex]);
+        RenderEntry(_history[_historyIndex]);
         UpdateNavigation();
     }
 
@@ -45,30 +47,32 @@ public partial class OverlayWindow : Window
         if (_historyIndex == 0)
         {
             _historyIndex = -1;
-            RenderResponse(_current);
+            RenderEntry(new(_current, _currentHeard));
         }
         else
         {
             _historyIndex--;
-            RenderResponse(_history[_historyIndex]);
+            RenderEntry(_history[_historyIndex]);
         }
         UpdateNavigation();
     }
 
-    private void Archive(AssistantResponse response)
+    private void Archive(OverlayEntry entry)
     {
-        if (!ResponseHasContent(response)) return;
-        if (_history.Count > 0 && Equivalent(_history[0], response)) return;
-        _history.Insert(0, response);
+        if (!ResponseHasContent(entry.Response)) return;
+        if (_history.Count > 0 && Equivalent(_history[0].Response, entry.Response) &&
+            string.Equals(_history[0].Heard, entry.Heard, StringComparison.Ordinal)) return;
+        _history.Insert(0, entry);
         if (_history.Count > HistoryLimit) _history.RemoveAt(_history.Count - 1);
     }
 
-    private void RenderResponse(AssistantResponse response)
+    private void RenderEntry(OverlayEntry entry)
     {
-        SayText.Text = response.Say ?? "—";
-        NextCueText.Text = response.Next ?? "—";
-        WatchText.Text = response.Watch ?? "—";
-        AskText.Text = response.Ask ?? "—";
+        HeardText.Text = entry.Heard ?? "—";
+        SayText.Text = entry.Response.Say ?? "—";
+        NextCueText.Text = entry.Response.Next ?? "—";
+        WatchText.Text = entry.Response.Watch ?? "—";
+        AskText.Text = entry.Response.Ask ?? "—";
     }
 
     private void UpdateNavigation()
@@ -98,9 +102,13 @@ public partial class OverlayWindow : Window
         StatusIndicator.Foreground = status switch
         {
             "LISTENING" => System.Windows.Media.Brushes.SeaGreen,
+            "USER MIC PAUSED" => System.Windows.Media.Brushes.DarkOrange,
+            "HR AUDIO BLOCKED" => System.Windows.Media.Brushes.Firebrick,
             "RECONNECTING" => System.Windows.Media.Brushes.DarkOrange,
             "TRANSCRIPT ONLY" => System.Windows.Media.Brushes.DarkOrange,
             _ => System.Windows.Media.Brushes.DimGray
         };
     }
+
+    private sealed record OverlayEntry(AssistantResponse Response, string? Heard);
 }
