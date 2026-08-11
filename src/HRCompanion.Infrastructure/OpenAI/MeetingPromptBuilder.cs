@@ -20,6 +20,8 @@ internal static class MeetingPromptBuilder
         - If evidence is incomplete, give the safest useful short answer supported by what is known, state the uncertainty plainly if needed, and put a useful clarification in ASK.
         - Do not return SAY, WATCH, and ASK all null for a direct question/request just because source support is incomplete.
         - For a negatively framed yes/no question such as “Are you saying you will not return?”, resolve the polarity explicitly. Prefer “No. I’m not saying I won’t return...” rather than ambiguous wording such as “I’m not ruling that out” or “I can’t rule that out”.
+        - If HR asks what is “still unresolved”, “outstanding”, or “not resolved”, lead with the concrete documented discrepancy, decision, or missing explanation shown in the evidence. Do not replace a specific known issue with only a generic request for records.
+        - Where the evidence shows both (a) a concrete payment/record discrepancy and (b) a separate entitlement or policy-application question, distinguish them briefly rather than blending them together.
 
         FACTUAL SAFETY:
         - Never invent case facts, dates, promises, diagnoses, medical fitness conclusions, previous statements, or agreements.
