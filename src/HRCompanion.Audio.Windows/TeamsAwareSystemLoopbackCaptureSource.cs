@@ -115,7 +115,8 @@ public sealed class TeamsAwareSystemLoopbackCaptureSource : IAudioCaptureSource
             while (!cancellationToken.IsCancellationRequested)
             {
                 var contaminant = AudioContaminationPolicy.FindLoudestNonTeamsSession(
-                    RenderAudioSessionReader.Read(enumerator));
+                    RenderAudioSessionReader.Read(enumerator),
+                    ignoredProcessId: checked((uint)Environment.ProcessId));
                 var now = DateTimeOffset.UtcNow;
 
                 if (contaminant is not null)
@@ -176,9 +177,12 @@ internal static class AudioContaminationPolicy
 {
     internal const float MeaningfulPeak = 0.01f;
 
-    public static RenderAudioSessionSample? FindLoudestNonTeamsSession(IEnumerable<RenderAudioSessionSample> sessions) =>
+    public static RenderAudioSessionSample? FindLoudestNonTeamsSession(
+        IEnumerable<RenderAudioSessionSample> sessions,
+        uint? ignoredProcessId = null) =>
         sessions
             .Where(session => session.Peak >= MeaningfulPeak)
+            .Where(session => ignoredProcessId is null || session.ProcessId != ignoredProcessId.Value)
             .Where(session => !TeamsProcessLocator.IsTeamsProcessName(session.ProcessName))
             .OrderByDescending(session => session.Peak)
             .FirstOrDefault();
