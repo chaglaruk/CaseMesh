@@ -20,6 +20,6 @@ internal sealed class PdfTextExtractor : ITextExtractor
             }
         }
         var text = string.Join(Environment.NewLine, sections.Select(x => x.Text));
-        return Task.FromResult(new ExtractedDocument(Path.GetFileName(path), "application/pdf", text, File.GetLastWriteTimeUtc(path), sections));
+        return Task.FromResult(new ExtractedDocument(Path.GetFileName(path), "application/pdf", text, null, sections));
     }
 }
