@@ -10,7 +10,9 @@ public sealed record TranscriptionUpdate(
     string? ItemId = null,
     DateTimeOffset? StartedAt = null,
     string? PreviousItemId = null,
-    bool IsSpeechStarted = false);
+    bool IsSpeechStarted = false,
+    DateTimeOffset? EndedAt = null,
+    bool IsSpeechStopped = false);
 
 public sealed record TranscriberDiagnostics(
     long FramesAccepted,
