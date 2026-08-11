@@ -35,6 +35,30 @@ public sealed class DeterministicCueEngineTests
     }
 
     [Fact]
+    public void EmbeddedQuestionWithFollowingStatements_NeedsAssistant()
+    {
+        var result = _sut.Analyze(
+            "I want to cover a few points about your absence. What adjustment are you asking us to consider? " +
+            "We also need to discuss how the process will work from here.");
+
+        Assert.Equal(MeetingIntent.Question, result.Intent);
+        Assert.True(result.NeedsAssistant);
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("reasonable adjustments", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void EmbeddedQuestionWithoutQuestionMark_IsStillDetectedAtSentenceBoundary()
+    {
+        var result = _sut.Analyze(
+            "There are several things I want to cover. Can you explain why you cannot return to the same role. " +
+            "After that I will explain the next steps.");
+
+        Assert.Equal(MeetingIntent.Question, result.Intent);
+        Assert.True(result.NeedsAssistant);
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("same role", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void AlternativeRole_ExpandsLocalHrRetrievalAliasesWithoutExtraModelCall()
     {
         var result = _sut.Analyze("Why haven't the alternative roles been suitable for you?");
