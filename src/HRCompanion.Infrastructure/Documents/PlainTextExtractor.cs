@@ -19,7 +19,7 @@ internal sealed partial class PlainTextExtractor : ITextExtractor
         var text = extension.Equals(".html", StringComparison.OrdinalIgnoreCase) || extension.Equals(".htm", StringComparison.OrdinalIgnoreCase)
             ? WebUtility.HtmlDecode(HtmlTagRegex().Replace(raw, " "))
             : raw;
-        return new(Path.GetFileName(path), extension is ".html" or ".htm" ? "text/html" : "text/plain", text, File.GetLastWriteTimeUtc(path));
+        return new(Path.GetFileName(path), extension is ".html" or ".htm" ? "text/html" : "text/plain", text, null);
     }
 
     [GeneratedRegex("<[^>]+>", RegexOptions.Singleline)]
