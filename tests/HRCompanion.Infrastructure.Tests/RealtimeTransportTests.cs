@@ -81,7 +81,7 @@ public sealed class RealtimeTransportTests
     }
 
     [Fact]
-    public void ClientSecretRequest_HrUsesDigitalLoopbackVadWithoutNoiseReduction()
+    public void ClientSecretRequest_HrUsesLongerVadSilenceForNaturalThinkingPauses()
     {
         var transcriber = new OpenAiRealtimeTranscriber(
             SpeakerRole.Hr,
@@ -105,14 +105,15 @@ public sealed class RealtimeTransportTests
         Assert.Equal("server_vad", turnDetection.GetProperty("type").GetString());
         Assert.Equal(0.5, turnDetection.GetProperty("threshold").GetDouble(), 3);
         Assert.Equal(300, turnDetection.GetProperty("prefix_padding_ms").GetInt32());
-        Assert.Equal(500, turnDetection.GetProperty("silence_duration_ms").GetInt32());
+        Assert.Equal(OpenAiRealtimeTranscriber.HrSilenceDurationMs, turnDetection.GetProperty("silence_duration_ms").GetInt32());
+        Assert.Equal(900, turnDetection.GetProperty("silence_duration_ms").GetInt32());
         Assert.False(turnDetection.GetProperty("create_response").GetBoolean());
         Assert.False(turnDetection.GetProperty("interrupt_response").GetBoolean());
         Assert.Equal(System.Text.Json.JsonValueKind.Null, input.GetProperty("noise_reduction").ValueKind);
     }
 
     [Fact]
-    public void ClientSecretRequest_UserUsesFarFieldNoiseReductionAndDefaultVadThreshold()
+    public void ClientSecretRequest_UserUsesFarFieldNoiseReductionAndResponsiveVad()
     {
         var transcriber = new OpenAiRealtimeTranscriber(
             SpeakerRole.User,
@@ -128,6 +129,7 @@ public sealed class RealtimeTransportTests
         Assert.Equal("server_vad", turnDetection.GetProperty("type").GetString());
         Assert.Equal(0.5, turnDetection.GetProperty("threshold").GetDouble(), 3);
         Assert.Equal(300, turnDetection.GetProperty("prefix_padding_ms").GetInt32());
+        Assert.Equal(OpenAiRealtimeTranscriber.UserSilenceDurationMs, turnDetection.GetProperty("silence_duration_ms").GetInt32());
         Assert.Equal(500, turnDetection.GetProperty("silence_duration_ms").GetInt32());
         Assert.False(turnDetection.GetProperty("create_response").GetBoolean());
         Assert.False(turnDetection.GetProperty("interrupt_response").GetBoolean());
