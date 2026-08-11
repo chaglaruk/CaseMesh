@@ -16,7 +16,9 @@ public static class DatabaseInitializer
             media_type TEXT NOT NULL,
             imported_at TEXT NOT NULL,
             source_date TEXT NULL,
-            chunk_count INTEGER NOT NULL
+            chunk_count INTEGER NOT NULL,
+            evidence_channel INTEGER NOT NULL DEFAULT 0,
+            evidence_authority INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS chunks (
@@ -80,12 +82,24 @@ public static class DatabaseInitializer
         command.CommandText = Schema;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
-        if (!await HasColumnAsync(connection, "transcript_turns", "provider_item_id", cancellationToken).ConfigureAwait(false))
-        {
-            await using var migration = connection.CreateCommand();
-            migration.CommandText = "ALTER TABLE transcript_turns ADD COLUMN provider_item_id TEXT NULL;";
-            await migration.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
+        await EnsureColumnAsync(
+            connection,
+            "transcript_turns",
+            "provider_item_id",
+            "ALTER TABLE transcript_turns ADD COLUMN provider_item_id TEXT NULL;",
+            cancellationToken).ConfigureAwait(false);
+        await EnsureColumnAsync(
+            connection,
+            "documents",
+            "evidence_channel",
+            "ALTER TABLE documents ADD COLUMN evidence_channel INTEGER NOT NULL DEFAULT 0;",
+            cancellationToken).ConfigureAwait(false);
+        await EnsureColumnAsync(
+            connection,
+            "documents",
+            "evidence_authority",
+            "ALTER TABLE documents ADD COLUMN evidence_authority INTEGER NOT NULL DEFAULT 0;",
+            cancellationToken).ConfigureAwait(false);
 
         await using var index = connection.CreateCommand();
         index.CommandText = """
@@ -94,6 +108,19 @@ public static class DatabaseInitializer
             WHERE provider_item_id IS NOT NULL;
             """;
         await index.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task EnsureColumnAsync(
+        SqliteConnection connection,
+        string table,
+        string column,
+        string migrationSql,
+        CancellationToken cancellationToken)
+    {
+        if (await HasColumnAsync(connection, table, column, cancellationToken).ConfigureAwait(false)) return;
+        await using var migration = connection.CreateCommand();
+        migration.CommandText = migrationSql;
+        await migration.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<bool> HasColumnAsync(
