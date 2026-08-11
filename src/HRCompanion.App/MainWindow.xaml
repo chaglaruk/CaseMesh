@@ -25,10 +25,11 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                    <TextBlock Text="Microsoft Teams" FontWeight="SemiBold" />
+                    <TextBlock Text="Microsoft Teams (automatic)" FontWeight="SemiBold" />
                     <DockPanel Margin="0,5,0,0">
                         <Button DockPanel.Dock="Right" Margin="6,0,0,0" Padding="9,4" Content="Refresh" Click="RefreshDevices_Click" />
-                        <ComboBox x:Name="TeamsProcessBox" DisplayMemberPath="DisplayName" MinWidth="250" />
+                        <ComboBox x:Name="TeamsProcessBox" DisplayMemberPath="DisplayName" MinWidth="250" IsEnabled="False"
+                                  ToolTip="Teams is detected automatically. The displayed PID is diagnostic only and is not used for live audio capture." />
                     </DockPanel>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Margin="0,0,12,0">
