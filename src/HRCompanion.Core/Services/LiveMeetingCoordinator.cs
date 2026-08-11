@@ -8,6 +8,11 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
 {
     public static readonly TimeSpan DefaultAssistanceTimeout = TimeSpan.FromSeconds(8);
     public static readonly TimeSpan DefaultIngestionDrainTimeout = TimeSpan.FromSeconds(3);
+    private static readonly HashSet<string> Backchannels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "yeah", "yes", "yep", "okay", "ok", "right", "mhm", "mm hmm", "mm-hmm", "uh huh", "uh-huh",
+        "i see", "got it", "sure", "fine", "understood", "all right", "alright", "thanks", "thank you"
+    };
 
     private readonly MeetingState _state;
     private readonly MeetingAssistantOrchestrator _orchestrator;
@@ -223,7 +228,8 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
 
         var startedAt = update.StartedAt ?? (_turnStarts.TryRemove(itemKey, out var start) ? start : update.OccurredAt);
         _turnStarts.TryRemove(itemKey, out _);
-        var turn = TranscriptTurn.Final(_state.MeetingId, speaker, update.Text, startedAt, update.OccurredAt, source, update.ItemId);
+        var endedAt = update.EndedAt ?? update.OccurredAt;
+        var turn = TranscriptTurn.Final(_state.MeetingId, speaker, update.Text, startedAt, endedAt, source, update.ItemId);
         TrackIngestion(ProcessFinalTurnAsync(turn, generation));
     }
 
@@ -246,23 +252,14 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
 
     private long RegisterConversationActivity(SpeakerRole speaker, DateTimeOffset speechStartedAt)
     {
-        long generation;
         lock (_lifecycleSync)
         {
             if (speechStartedAt < _latestSpeechStartedAt) return _activityGeneration;
             _latestSpeechStartedAt = speechStartedAt;
-            generation = ++_activityGeneration;
+            var generation = ++_activityGeneration;
             CancelAssistanceLocked();
+            return generation;
         }
-
-        // User speech still supersedes/cancels an in-flight answer so stale advice cannot appear after
-        // the conversation has moved on. But once an answer has already rendered, keep it visible while
-        // the user reads/speaks it. A new HR turn is the point at which displayed assistance becomes stale.
-        if (speaker == SpeakerRole.Hr)
-        {
-            AssistanceInvalidated?.Invoke(this, EventArgs.Empty);
-        }
-        return generation;
     }
 
     private async Task<TranscriptPersistenceResult> ProcessFinalTurnAsync(TranscriptTurn turn, long generation)
@@ -292,9 +289,21 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
 
         if (turn.Speaker == SpeakerRole.Hr && isLatestConversationTurn && IsCurrent(generation))
         {
+            if (IsLikelyBackchannel(turn.Text)) return persistence;
+            AssistanceInvalidated?.Invoke(this, EventArgs.Empty);
             StartAssistance(turn, persistence.PersistedAt!.Value, generation);
         }
         return persistence;
+    }
+
+    internal static bool IsLikelyBackchannel(string text)
+    {
+        var normalized = string.Join(' ', text
+            .Trim()
+            .Trim('.', ',', '!', '?', ';', ':', '-', '—')
+            .ToLowerInvariant()
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized.Length > 0 && normalized.Split(' ').Length <= 4 && Backchannels.Contains(normalized);
     }
 
     private void StartAssistance(TranscriptTurn turn, DateTimeOffset persistedAt, long generation)
@@ -330,7 +339,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
             lock (_lifecycleSync) _assistantDegraded = false;
             PublishHealth();
             var response = result.Response;
-            if (response.Say is null && response.Watch is null && response.Ask is null) return;
+            if (response.Say is null && response.Next is null && response.Watch is null && response.Ask is null) return;
 
             AssistantUpdated?.Invoke(this, response);
             if (result.Timing is not null)
