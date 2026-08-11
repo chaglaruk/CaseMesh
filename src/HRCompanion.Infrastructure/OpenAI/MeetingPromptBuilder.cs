@@ -90,6 +90,13 @@ internal static class MeetingPromptBuilder
         var sb = new StringBuilder();
         sb.AppendLine("CURRENT CASE:");
         sb.AppendLine(state.CaseName);
+
+        if (!string.IsNullOrWhiteSpace(state.MeetingObjective))
+        {
+            sb.AppendLine();
+            sb.AppendLine("CURRENT MEETING OBJECTIVE / USER_POSITION (meeting-scoped, not documentary evidence):");
+            sb.AppendLine(state.MeetingObjective);
+        }
         sb.AppendLine();
 
         sb.AppendLine("CASE FACT / POSITION LEDGER (trust order: VERIFIED > USER_POSITION > UNVERIFIED):");
@@ -117,7 +124,7 @@ internal static class MeetingPromptBuilder
         }
 
         sb.AppendLine();
-        sb.AppendLine("RETRIEVED SOURCE EVIDENCE:");
+        sb.AppendLine("RETRIEVED ORDINARY CURRENT SOURCE EVIDENCE:");
         foreach (var item in evidence)
         {
             sb.Append("[EVIDENCE ").Append(item.EvidenceId).Append("] ")
