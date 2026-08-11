@@ -212,7 +212,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         var generation = _activityGeneration;
         if (update.IsSpeechStarted || !string.IsNullOrWhiteSpace(update.Text))
         {
-            generation = RegisterConversationActivity(speechStartedAt);
+            generation = RegisterConversationActivity(speaker, speechStartedAt);
         }
 
         var itemKey = !string.IsNullOrWhiteSpace(update.ItemId)
@@ -237,14 +237,14 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         }
 
         var now = DateTimeOffset.UtcNow;
-        var generation = RegisterConversationActivity(now);
+        var generation = RegisterConversationActivity(SpeakerRole.Hr, now);
         var turn = TranscriptTurn.Final(_state.MeetingId, SpeakerRole.Hr, text, now, now, "manual-live");
         var task = ProcessFinalTurnAsync(turn, generation);
         TrackIngestion(task);
         return task;
     }
 
-    private long RegisterConversationActivity(DateTimeOffset speechStartedAt)
+    private long RegisterConversationActivity(SpeakerRole speaker, DateTimeOffset speechStartedAt)
     {
         long generation;
         lock (_lifecycleSync)
@@ -254,7 +254,14 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
             generation = ++_activityGeneration;
             CancelAssistanceLocked();
         }
-        AssistanceInvalidated?.Invoke(this, EventArgs.Empty);
+
+        // User speech still supersedes/cancels an in-flight answer so stale advice cannot appear after
+        // the conversation has moved on. But once an answer has already rendered, keep it visible while
+        // the user reads/speaks it. A new HR turn is the point at which displayed assistance becomes stale.
+        if (speaker == SpeakerRole.Hr)
+        {
+            AssistanceInvalidated?.Invoke(this, EventArgs.Empty);
+        }
         return generation;
     }
 
