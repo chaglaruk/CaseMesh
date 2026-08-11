@@ -79,7 +79,7 @@ public partial class MainWindow : Window
     private async void StartMeeting_Click(object sender, RoutedEventArgs e)
     {
         if (_coordinator is not null) return;
-        if (TeamsProcessBox.SelectedItem is not TeamsProcessInfo teams)
+        if (TeamsProcessBox.SelectedItem is not TeamsProcessInfo)
         {
             SetLiveStatus("MANUAL", "Start Teams and refresh process detection, or use manual assistance.");
             return;
@@ -108,14 +108,14 @@ public partial class MainWindow : Window
         StopMeetingButton.IsEnabled = true;
         _timings.Clear();
         LatencyText.Text = string.Empty;
-        SetLiveStatus("LISTENING", "Connecting separate Teams and microphone transcription sessions...");
+        SetLiveStatus("LISTENING", "Connecting guarded Teams system audio and microphone transcription sessions...");
 
         var previousMeeting = _meeting;
         _meeting = new MeetingState(Guid.NewGuid(), "HR Case", DateTimeOffset.UtcNow);
         await _repository.CompleteMeetingAsync(previousMeeting.MeetingId);
         await _repository.StartMeetingAsync(_meeting);
 
-        var remoteAudio = new TeamsProcessLoopbackCaptureSource(teams.ProcessId);
+        var remoteAudio = new TeamsAwareSystemLoopbackCaptureSource();
         var userAudio = new MicrophoneCaptureSource(microphone.DeviceNumber);
         var remoteTranscriber = new OpenAiRealtimeTranscriber(SpeakerRole.Hr, _keyStore, _openAiOptions);
         var userTranscriber = new OpenAiRealtimeTranscriber(SpeakerRole.User, _keyStore, _openAiOptions);
@@ -133,7 +133,7 @@ public partial class MainWindow : Window
         {
             using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             await coordinator.StartAsync(startCts.Token);
-            SetLiveStatus("LISTENING", "Teams/HR and microphone/USER are live as separate sources.");
+            SetLiveStatus("LISTENING", "Teams/HR system audio is guarded against unrelated render audio; microphone/USER is live separately.");
             EnsureOverlay();
             _overlay?.RenderStatus("LISTENING");
         }
