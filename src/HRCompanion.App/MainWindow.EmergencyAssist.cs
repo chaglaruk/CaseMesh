@@ -30,8 +30,10 @@ public partial class MainWindow
                 DateTimeOffset.UtcNow,
                 retryCts.Token);
 
+            LatestHrText.Text = turn.Text;
             Render(result.Response);
-            StatusText.Text = result.Response.Say is null && result.Response.Watch is null && result.Response.Ask is null
+            StatusText.Text = result.Response.Say is null && result.Response.Next is null &&
+                              result.Response.Watch is null && result.Response.Ask is null
                 ? "The latest HR turn was treated as informational/small-talk. Wait for the next substantive HR turn."
                 : "Retry assistance ready from the latest HR turn.";
         }
