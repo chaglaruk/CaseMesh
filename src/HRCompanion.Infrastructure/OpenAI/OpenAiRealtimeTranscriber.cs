@@ -261,10 +261,11 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                     {
                         model = _options.TranscriptionModel
                     },
+                    noise_reduction = Speaker == SpeakerRole.User ? new { type = "near_field" } : null,
                     turn_detection = new
                     {
                         type = "server_vad",
-                        threshold = 0.5,
+                        threshold = Speaker == SpeakerRole.User ? 0.65 : 0.5,
                         prefix_padding_ms = 300,
                         silence_duration_ms = 500,
                         create_response = false,
