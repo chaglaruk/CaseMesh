@@ -19,6 +19,6 @@ internal sealed class DocxTextExtractor : ITextExtractor
                 .Where(x => x.Length > 0)
                 .ToArray();
         var text = string.Join(Environment.NewLine, paragraphs);
-        return Task.FromResult(new ExtractedDocument(Path.GetFileName(path), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", text, File.GetLastWriteTimeUtc(path)));
+        return Task.FromResult(new ExtractedDocument(Path.GetFileName(path), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", text, null));
     }
 }
