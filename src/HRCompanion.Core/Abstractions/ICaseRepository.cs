@@ -12,8 +12,8 @@ public interface ICaseRepository
         Guid documentId,
         EvidenceChannel channel,
         EvidenceAuthority authority,
-        CancellationToken cancellationToken = default);
-    Task DeleteDocumentAsync(Guid documentId, CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default) => Task.CompletedTask;
+    Task DeleteDocumentAsync(Guid documentId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     Task<IReadOnlyList<EvidenceSnippet>> SearchAsync(string query, int limit = 8, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<CaseFact>> GetFactsAsync(CancellationToken cancellationToken = default);
     Task SaveFactAsync(CaseFact fact, CancellationToken cancellationToken = default);
