@@ -51,13 +51,14 @@ public sealed partial class DeterministicCueEngine
         var writtenFollowUp = lower.Contains("in writing", StringComparison.Ordinal) ||
                               lower.Contains("come back to you", StringComparison.Ordinal) ||
                               lower.Contains("get back to you", StringComparison.Ordinal);
+        var containsDirectQuestion = ContainsDirectQuestion(normalized, lower);
 
         MeetingIntent intent;
-        if (potentialCommitment && (normalized.EndsWith('?') || lower.StartsWith("can you") || lower.StartsWith("will you")))
+        if (potentialCommitment && containsDirectQuestion)
         {
             intent = MeetingIntent.CommitmentRequest;
         }
-        else if (normalized.EndsWith('?') || StartsLikeQuestion(lower))
+        else if (containsDirectQuestion)
         {
             intent = MeetingIntent.Question;
         }
@@ -77,8 +78,11 @@ public sealed partial class DeterministicCueEngine
         return new(intent, importance, needsAssistant, potentialCommitment, writtenFollowUp, terms);
     }
 
+    private static bool ContainsDirectQuestion(string text, string lower) =>
+        text.Contains('?') || StartsLikeQuestion(lower) || EmbeddedDirectQuestionRegex().IsMatch(text);
+
     private static bool StartsLikeQuestion(string lower) =>
-        new[] { "why ", "what ", "when ", "where ", "who ", "how ", "could you", "would you", "do you", "are you", "is it", "have you" }
+        new[] { "why ", "what ", "when ", "where ", "who ", "how ", "can you", "could you", "would you", "will you", "do you", "are you", "is it", "have you" }
             .Any(prefix => lower.StartsWith(prefix, StringComparison.Ordinal));
 
     private static IReadOnlyList<string> ExtractRetrievalTerms(string text)
@@ -114,6 +118,9 @@ public sealed partial class DeterministicCueEngine
             .Take(12)
             .ToArray();
     }
+
+    [GeneratedRegex(@"(?:^|[.!;]\s+)(?:(?:so|and|but)[,\s]+)?(?:why|what|when|where|who|how|can you|could you|would you|will you|do you|are you|is it|have you)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex EmbeddedDirectQuestionRegex();
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex CollapseWhitespaceRegex();
