@@ -66,6 +66,7 @@ public partial class OverlayWindow : Window
     private void RenderResponse(AssistantResponse response)
     {
         SayText.Text = response.Say ?? "—";
+        NextCueText.Text = response.Next ?? "—";
         WatchText.Text = response.Watch ?? "—";
         AskText.Text = response.Ask ?? "—";
     }
@@ -81,11 +82,13 @@ public partial class OverlayWindow : Window
 
     private static bool ResponseHasContent(AssistantResponse response) =>
         !string.IsNullOrWhiteSpace(response.Say) ||
+        !string.IsNullOrWhiteSpace(response.Next) ||
         !string.IsNullOrWhiteSpace(response.Watch) ||
         !string.IsNullOrWhiteSpace(response.Ask);
 
     private static bool Equivalent(AssistantResponse left, AssistantResponse right) =>
         string.Equals(left.Say, right.Say, StringComparison.Ordinal) &&
+        string.Equals(left.Next, right.Next, StringComparison.Ordinal) &&
         string.Equals(left.Watch, right.Watch, StringComparison.Ordinal) &&
         string.Equals(left.Ask, right.Ask, StringComparison.Ordinal);
 
