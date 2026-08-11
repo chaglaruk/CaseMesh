@@ -13,22 +13,26 @@ public sealed partial class DeterministicCueEngine
 
     private static readonly (string[] Triggers, string[] RetrievalTerms)[] HrConceptAliases =
     [
-        (["alternative role", "alternative position", "another role", "redeploy", "redeployment", "suitable role"],
-         ["redeployment", "alternative", "role", "suitable", "Occupational Health"]),
-        (["return to work", "return date", "come back to work", "start back", "phased return"],
-         ["return", "fit note", "phased return", "Occupational Health"]),
+        (["alternative role", "alternative position", "another role", "redeploy", "redeployment", "suitable role",
+          "vacancy", "vacancies", "internal role", "internal application", "apply for", "applied for"],
+         ["redeployment", "alternative", "role", "suitable", "vacancy", "internal application", "Occupational Health"]),
+        (["return to work", "return date", "come back to work", "start back", "phased return", "return to your current role",
+          "return to the same role", "return to the same site", "will not return", "won't return", "refuse to return", "refusing to return"],
+         ["return", "fit note", "phased return", "role", "location", "reporting line", "Occupational Health"]),
         (["occupational health", "oh report", "oh recommendation"],
          ["Occupational Health", "recommendation", "redeployment", "phased return"]),
         (["fit note", "sick note", "fitness for work", "fit for work"],
          ["fit note", "fitness", "work", "Occupational Health"]),
         (["reasonable adjustment", "reasonable adjustments", "adjustment"],
-         ["reasonable adjustments", "Occupational Health", "work"]),
+         ["reasonable adjustments", "Occupational Health", "work", "role", "location"]),
         (["capability", "capability process", "capability procedure"],
-         ["capability", "procedure", "Occupational Health"]),
+         ["capability", "procedure", "Occupational Health", "reasonable adjustments", "redeployment"]),
         (["grievance"], ["grievance"]),
         (["settlement", "without prejudice"], ["settlement", "without prejudice"]),
-        (["sick pay", "ssp", "statutory sick pay", "company sick pay"],
-         ["sick pay", "SSP", "company sick pay"]),
+        (["sick pay", "ssp", "statutory sick pay", "company sick pay", "csp"],
+         ["sick pay", "SSP", "CSP", "company sick pay"]),
+        (["payroll", "underpayment", "pay shortfall", "wage deduction", "deduction", "advance payment", "advance deduction"],
+         ["payroll", "underpayment", "deduction", "advance", "reconciliation"]),
         (["reporting line", "line manager", "report to", "manager"],
          ["reporting", "manager", "role"])
     ];
@@ -91,7 +95,6 @@ public sealed partial class DeterministicCueEngine
             .Take(8)
             .ToArray();
     }
-
 
     private static IReadOnlyList<string> ExpandRetrievalTerms(string text, IReadOnlyList<string> baseTerms)
     {
