@@ -5,6 +5,10 @@ namespace HRCompanion.Core.Services;
 
 public sealed class MeetingAssistantOrchestrator
 {
+    private const int MaximumHrFloorSegments = 6;
+    private const int MaximumHrFloorCharacters = 3000;
+    private static readonly TimeSpan MaximumInterSegmentGap = TimeSpan.FromSeconds(5);
+
     private readonly ICaseRepository _repository;
     private readonly IMeetingAiService _ai;
     private readonly DeterministicCueEngine _cues;
@@ -75,13 +79,16 @@ public sealed class MeetingAssistantOrchestrator
         DateTimeOffset persistedAt,
         CancellationToken cancellationToken = default)
     {
-
         if (turn.Speaker != SpeakerRole.Hr)
         {
             return new(AssistantResponse.NoAction(), null);
         }
 
-        var deterministic = _cues.Analyze(turn.Text);
+        // Realtime VAD can split one natural HR speaking turn at a thinking pause. Recombine the
+        // immediately consecutive HR floor (until the user speaks or a real gap occurs) so a question
+        // asked in the middle is not lost merely because HR continues with explanatory sentences.
+        var effectiveTurn = BuildCurrentHrFloor(state, turn);
+        var deterministic = _cues.Analyze(effectiveTurn.Text);
         MeetingAnalysis analysis = deterministic;
         DateTimeOffset? analysisStartedAt = null;
         DateTimeOffset? analysisCompletedAt = null;
@@ -89,10 +96,10 @@ public sealed class MeetingAssistantOrchestrator
         // Keep the common live path to one model round-trip. Use Luna only when local intent/retrieval is genuinely ambiguous.
         var ambiguous = deterministic.Intent == MeetingIntent.Unknown ||
                         (deterministic.NeedsAssistant && deterministic.RetrievalTerms.Count < 2);
-        if (ambiguous && turn.Text.Length >= 20)
+        if (ambiguous && effectiveTurn.Text.Length >= 20)
         {
             analysisStartedAt = DateTimeOffset.UtcNow;
-            var aiAnalysis = await _ai.AnalyzeTurnAsync(state, turn, cancellationToken).ConfigureAwait(false);
+            var aiAnalysis = await _ai.AnalyzeTurnAsync(state, effectiveTurn, cancellationToken).ConfigureAwait(false);
             analysisCompletedAt = DateTimeOffset.UtcNow;
             analysis = Merge(deterministic, aiAnalysis);
         }
@@ -104,7 +111,7 @@ public sealed class MeetingAssistantOrchestrator
             return new(AssistantResponse.NoAction(analysis.Intent), null);
         }
 
-        var query = BuildRetrievalQuery(turn.Text, analysis.RetrievalTerms);
+        var query = BuildRetrievalQuery(effectiveTurn.Text, analysis.RetrievalTerms);
         var retrievalStartedAt = DateTimeOffset.UtcNow;
         var evidenceTask = _repository.SearchAsync(query, 8, cancellationToken);
         var factsTask = _repository.GetFactsAsync(cancellationToken);
@@ -114,7 +121,7 @@ public sealed class MeetingAssistantOrchestrator
         var answerRequestStartedAt = DateTimeOffset.UtcNow;
         var response = await _ai.CreateAssistantResponseAsync(
             state,
-            turn,
+            effectiveTurn,
             analysis,
             await factsTask.ConfigureAwait(false),
             await evidenceTask.ConfigureAwait(false),
@@ -130,6 +137,45 @@ public sealed class MeetingAssistantOrchestrator
             analysisCompletedAt,
             answerRequestStartedAt,
             responseCompletedAt));
+    }
+
+    private static TranscriptTurn BuildCurrentHrFloor(MeetingState state, TranscriptTurn latest)
+    {
+        if (latest.Speaker != SpeakerRole.Hr || state.Turns.Count < 2) return latest;
+
+        var latestIndex = -1;
+        for (var index = state.Turns.Count - 1; index >= 0; index--)
+        {
+            if (state.Turns[index].Id != latest.Id) continue;
+            latestIndex = index;
+            break;
+        }
+        if (latestIndex < 0) return latest;
+
+        var segments = new List<TranscriptTurn> { latest };
+        var characterCount = latest.Text.Length;
+        var next = latest;
+        for (var index = latestIndex - 1; index >= 0 && segments.Count < MaximumHrFloorSegments; index--)
+        {
+            var candidate = state.Turns[index];
+            if (candidate.Speaker != SpeakerRole.Hr) break;
+            if (next.StartedAt - candidate.EndedAt > MaximumInterSegmentGap) break;
+            if (characterCount + candidate.Text.Length + 1 > MaximumHrFloorCharacters) break;
+
+            segments.Add(candidate);
+            characterCount += candidate.Text.Length + 1;
+            next = candidate;
+        }
+
+        if (segments.Count == 1) return latest;
+        segments.Reverse();
+        var combined = string.Join(' ', segments.Select(segment => segment.Text));
+        return latest with
+        {
+            Text = combined,
+            StartedAt = segments[0].StartedAt,
+            Source = "hr-floor"
+        };
     }
 
     private static MeetingAnalysis Merge(MeetingAnalysis local, MeetingAnalysis ai)
