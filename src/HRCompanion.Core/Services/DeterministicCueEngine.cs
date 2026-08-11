@@ -14,6 +14,9 @@ public sealed partial class DeterministicCueEngine
 
     private static readonly (string[] Triggers, string[] RetrievalTerms)[] HrConceptAliases =
     [
+        (["capability", "capability process", "capability procedure", "health capability", "ill health capability", "capability hearing",
+          "dismissal on the basis of capability", "dismissal on capability", "may result in dismissal", "could result in dismissal"],
+         ["health related capability", "capability", "procedure", "medical evidence", "Occupational Health", "reasonable adjustments", "redeployment", "last resort"]),
         (["alternative role", "alternative position", "another role", "redeploy", "redeployment", "suitable role",
           "vacancy", "vacancies", "internal role", "internal application", "apply for", "applied for", "secured an alternative role",
           "successfully secured an alternative role"],
@@ -30,9 +33,6 @@ public sealed partial class DeterministicCueEngine
          ["fit note", "not fit for work", "fitness", "work", "current", "Occupational Health", "medical advice"]),
         (["reasonable adjustment", "reasonable adjustments", "adjustment", "adjusted duties", "temporary adjustment"],
          ["reasonable adjustments", "Occupational Health", "work", "role", "location", "reporting line", "phased return"]),
-        (["capability", "capability process", "capability procedure", "health capability", "ill health capability", "capability hearing",
-          "dismissal on the basis of capability", "dismissal on capability", "may result in dismissal", "could result in dismissal"],
-         ["health related capability", "capability", "procedure", "medical evidence", "Occupational Health", "reasonable adjustments", "redeployment", "last resort"]),
         (["grievance"], ["grievance"]),
         (["settlement", "without prejudice"], ["settlement", "without prejudice"]),
         (["sick pay", "ssp", "statutory sick pay", "company sick pay", "csp"],
