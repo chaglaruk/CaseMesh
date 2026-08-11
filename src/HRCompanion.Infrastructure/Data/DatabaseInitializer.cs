@@ -101,6 +101,15 @@ public static class DatabaseInitializer
             "ALTER TABLE documents ADD COLUMN evidence_authority INTEGER NOT NULL DEFAULT 0;",
             cancellationToken).ConfigureAwait(false);
 
+        // Earlier builds used filesystem LastWriteTime as SourceDate for PDF/DOCX/TXT/HTML.
+        // That is not an evidential document date and can make an old copied file look newer than it is.
+        // EML is retained because its SourceDate comes from the message Date header.
+        await using (var sourceDateMigration = connection.CreateCommand())
+        {
+            sourceDateMigration.CommandText = "UPDATE documents SET source_date = NULL WHERE media_type <> 'message/rfc822';";
+            await sourceDateMigration.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await using var index = connection.CreateCommand();
         index.CommandText = """
             CREATE UNIQUE INDEX IF NOT EXISTS ux_transcript_provider_item
