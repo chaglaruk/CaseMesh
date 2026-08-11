@@ -15,6 +15,8 @@ internal static class MeetingPromptBuilder
 
         ANSWER THE LIVE TURN:
         - The LATEST HR TURN is the turn you are helping the user answer now. Earlier transcript turns are context only.
+        - A long HR turn may contain background statements before and after a direct question. The question does not have to be the final sentence. Identify and answer a direct question wherever it appears in the latest HR turn.
+        - If the latest HR turn contains several direct questions, prioritise the most recent question that needs an answer, unless an earlier question carries materially greater commitment/legal risk; keep the spoken answer concise.
         - Do not leave the latest direct question unanswered merely because earlier HR turns in the transcript were unanswered.
         - For Question, Request, or CommitmentRequest, SAY should normally be non-null and directly answer the latest turn.
         - If evidence is incomplete, give the safest useful short answer supported by what is known, state the uncertainty plainly if needed, and put a useful clarification in ASK.
@@ -59,6 +61,8 @@ internal static class MeetingPromptBuilder
 
     public const string AnalysisInstructions = """
         Classify the latest HR turn for a live employment meeting. Do not answer it.
+        A direct question can occur in the middle of a multi-sentence turn; surrounding statements do not make the turn informational.
+        If several direct questions occur, classify the turn based on the most recent question that needs an answer, unless an earlier question carries materially greater commitment risk.
         Keep retrieval terms short and case-specific.
         Intent must be one of: Unknown, SmallTalk, Information, Question, Request, Proposal, CommitmentRequest.
         A CommitmentRequest includes requests to agree, accept, confirm, resign, withdraw, consent, sign,
@@ -89,7 +93,7 @@ internal static class MeetingPromptBuilder
 
         sb.AppendLine();
         sb.AppendLine("CURRENT MEETING - RECENT ACTUAL TRANSCRIPT:");
-        foreach (var turn in state.RecentTurns().Where(turn => turn.Id != latest.Id))
+        foreach (var turn in RecentContextTurns(state, latest))
         {
             sb.Append(turn.Speaker == SpeakerRole.User ? "USER_ACTUALLY_SAID" : turn.Speaker == SpeakerRole.Hr ? "HR_SAID" : "UNKNOWN")
               .Append(": ").AppendLine(turn.Text);
@@ -125,8 +129,7 @@ internal static class MeetingPromptBuilder
 
     public static string BuildAnalysisInput(MeetingState state, TranscriptTurn latest)
     {
-        var recent = string.Join(Environment.NewLine, state.RecentTurns(7)
-            .Where(t => t.Id != latest.Id)
+        var recent = string.Join(Environment.NewLine, RecentContextTurns(state, latest)
             .TakeLast(6)
             .Select(t => $"{t.Speaker}: {t.Text}"));
         return $$"""
@@ -136,5 +139,16 @@ internal static class MeetingPromptBuilder
             LATEST HR TURN:
             {{latest.Text}}
             """;
+    }
+
+    private static IEnumerable<TranscriptTurn> RecentContextTurns(MeetingState state, TranscriptTurn latest)
+    {
+        var recent = state.RecentTurns().Where(turn => turn.Id != latest.Id);
+        if (!string.Equals(latest.Source, "hr-floor", StringComparison.Ordinal)) return recent;
+
+        return recent.Where(turn =>
+            turn.Speaker != SpeakerRole.Hr ||
+            turn.StartedAt < latest.StartedAt ||
+            turn.EndedAt > latest.EndedAt);
     }
 }
