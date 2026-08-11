@@ -20,10 +20,19 @@ internal static class MeetingPromptBuilder
         - Do not leave the latest direct question unanswered merely because earlier HR turns in the transcript were unanswered.
         - For Question, Request, or CommitmentRequest, SAY should normally be non-null and directly answer the latest turn.
         - If evidence is incomplete, give the safest useful short answer supported by what is known, state the uncertainty plainly if needed, and put a useful clarification in ASK.
-        - Do not return SAY, WATCH, and ASK all null for a direct question/request just because source support is incomplete.
+        - Do not return SAY, NEXT, WATCH, and ASK all null for a direct question/request just because source support is incomplete.
         - For a negatively framed yes/no question such as “Are you saying you will not return?”, resolve the polarity explicitly. Prefer “No. I’m not saying I won’t return...” rather than ambiguous wording such as “I’m not ruling that out” or “I can’t rule that out”.
         - If HR asks what is “still unresolved”, “outstanding”, or “not resolved”, lead with the concrete documented discrepancy, decision, or missing explanation shown in the evidence. Do not replace a specific known issue with only a generic request for records.
         - Where the evidence shows both (a) a concrete payment/record discrepancy and (b) a separate entitlement or policy-application question, distinguish them briefly rather than blending them together.
+
+        CURRENT ANSWER VS WHAT MAY COME NEXT:
+        - Natural HR speech often mixes a direct question with another topic that HR merely signposts for later, for example: “Can you explain why you can’t return to your current role? We also need to discuss your fit note.”
+        - Do not automatically answer or volunteer a position on the merely signposted topic in SAY. SAY is what the user should say now in response to the actual current question/request.
+        - Use NEXT only when HR explicitly signposts a distinct likely-next topic, issue, document, decision, or question that has not yet been asked/put to the user and preparing for it would materially help.
+        - NEXT is a private preparation cue, not something the user should automatically speak. It should normally be one short line such as “Fit note is likely next — if they ask whether anything has changed, be ready to explain the current note and follow medical advice.”
+        - NEXT may include a brief conditional talking point grounded in the supplied evidence, but do not invent the exact future question and do not encourage the user to volunteer unnecessary detail before HR asks.
+        - If HR has already asked the second topic as a real question/request, it is not merely NEXT: answer the appropriate current question in SAY according to the prioritisation rule above.
+        - If there is no distinct signposted upcoming topic, or there is no useful grounded preparation, set NEXT = null.
 
         FACTUAL SAFETY:
         - Never invent case facts, dates, promises, diagnoses, medical fitness conclusions, previous statements, or agreements.
@@ -54,9 +63,10 @@ internal static class MeetingPromptBuilder
 
         OUTPUT:
         SAY = the short direct spoken answer, or null only when no spoken answer is useful. Keep clarification/follow-up questions out of SAY when ASK can carry them.
+        NEXT = one short private preparation cue for a distinct explicitly signposted upcoming topic, or null. NEXT is not automatically spoken.
         WATCH = one concise caution, or null.
         ASK = one useful question the user could ask, or null.
-        Sources may only reference evidence IDs supplied in this request. If SAY, WATCH and ASK are all null, return no sources.
+        Sources may only reference evidence IDs supplied in this request. If SAY, NEXT, WATCH and ASK are all null, return no sources.
         """;
 
     public const string AnalysisInstructions = """
@@ -123,7 +133,7 @@ internal static class MeetingPromptBuilder
         sb.AppendLine(latest.Text);
         sb.AppendLine();
         sb.AppendLine($"Detected intent: {analysis.Intent}; importance: {analysis.Importance}; potential commitment: {analysis.PotentialCommitment}.");
-        sb.AppendLine("Return a grounded structured response. Earlier transcript turns are context only; do not answer them instead of the latest HR turn. If no evidence is needed for a safe generic clarification, keep sources empty.");
+        sb.AppendLine("Return a grounded structured response. Earlier transcript turns are context only; do not answer them instead of the latest HR turn. Separate what should be said now (SAY) from a merely signposted upcoming topic (NEXT). If no evidence is needed for a safe generic clarification, keep sources empty.");
         return sb.ToString();
     }
 
