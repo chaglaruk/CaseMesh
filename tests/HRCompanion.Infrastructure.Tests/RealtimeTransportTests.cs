@@ -81,7 +81,7 @@ public sealed class RealtimeTransportTests
     }
 
     [Fact]
-    public void ClientSecretRequest_CreatesMinimalTranscriptionSessionAtConnectionTime()
+    public void ClientSecretRequest_CreatesServerVadTranscriptionSessionAtConnectionTime()
     {
         var transcriber = new OpenAiRealtimeTranscriber(
             SpeakerRole.Hr,
@@ -93,6 +93,7 @@ public sealed class RealtimeTransportTests
         var session = root.GetProperty("session");
         var input = session.GetProperty("audio").GetProperty("input");
         var transcription = input.GetProperty("transcription");
+        var turnDetection = input.GetProperty("turn_detection");
 
         Assert.Equal("created_at", root.GetProperty("expires_after").GetProperty("anchor").GetString());
         Assert.Equal(120, root.GetProperty("expires_after").GetProperty("seconds").GetInt32());
@@ -101,8 +102,12 @@ public sealed class RealtimeTransportTests
         Assert.Equal(24000, input.GetProperty("format").GetProperty("rate").GetInt32());
         Assert.Equal("gpt-live-transcribe", transcription.GetProperty("model").GetString());
         Assert.Single(transcription.EnumerateObject());
-        Assert.True(input.TryGetProperty("turn_detection", out var turnDetection));
-        Assert.Equal(System.Text.Json.JsonValueKind.Null, turnDetection.ValueKind);
+        Assert.Equal("server_vad", turnDetection.GetProperty("type").GetString());
+        Assert.Equal(0.5, turnDetection.GetProperty("threshold").GetDouble(), 3);
+        Assert.Equal(300, turnDetection.GetProperty("prefix_padding_ms").GetInt32());
+        Assert.Equal(500, turnDetection.GetProperty("silence_duration_ms").GetInt32());
+        Assert.False(turnDetection.GetProperty("create_response").GetBoolean());
+        Assert.False(turnDetection.GetProperty("interrupt_response").GetBoolean());
         Assert.False(input.TryGetProperty("noise_reduction", out _));
     }
 
