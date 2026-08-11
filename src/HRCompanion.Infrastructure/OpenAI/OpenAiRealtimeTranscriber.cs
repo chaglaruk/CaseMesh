@@ -12,6 +12,8 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
 {
     private const int MaximumReconnectAttempts = 3;
     internal const int AudioQueueCapacity = 12;
+    internal const int HrSilenceDurationMs = 900;
+    internal const int UserSilenceDurationMs = 500;
     private static readonly TimeSpan AudioSendTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan SessionCreatedTimeout = TimeSpan.FromSeconds(5);
     private static readonly HttpClient ClientSecretHttpClient = new() { Timeout = TimeSpan.FromSeconds(10) };
@@ -267,7 +269,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                         type = "server_vad",
                         threshold = 0.5,
                         prefix_padding_ms = 300,
-                        silence_duration_ms = 500,
+                        silence_duration_ms = Speaker == SpeakerRole.Hr ? HrSilenceDurationMs : UserSilenceDurationMs,
                         create_response = false,
                         interrupt_response = false
                     }
