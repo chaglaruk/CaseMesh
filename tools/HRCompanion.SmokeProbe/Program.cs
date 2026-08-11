@@ -18,9 +18,12 @@ if (args.Contains("--credential-check", StringComparer.OrdinalIgnoreCase))
     Console.WriteLine("Credential Manager preflight: OK. No API request was made.");
     return 0;
 }
-if (args.Length != 2)
+
+var connectCheck = args.Contains("--connect-check", StringComparer.OrdinalIgnoreCase);
+if (!connectCheck && args.Length != 2)
 {
-    Console.Error.WriteLine("Usage: HRCompanion.SmokeProbe <hr-24khz-mono.wav> <user-24khz-mono.wav>");
+    Console.Error.WriteLine("Usage: HRCompanion.SmokeProbe --connect-check");
+    Console.Error.WriteLine("   or: HRCompanion.SmokeProbe <hr-24khz-mono.wav> <user-24khz-mono.wav>");
     return 64;
 }
 
@@ -39,6 +42,14 @@ user.Faulted += OnFault;
 try
 {
     await Task.WhenAll(hr.StartAsync(), user.StartAsync());
+    if (connectCheck)
+    {
+        Console.WriteLine("Realtime transcription connect check: PASS");
+        Console.WriteLine($"Model: {options.Value.TranscriptionModel}");
+        Console.WriteLine("Both HR and USER transcription sessions reached Listening. No audio was sent.");
+        return 0;
+    }
+
     var realtime = Stopwatch.StartNew();
     await Task.WhenAll(StreamWaveAndCommitAsync(hr, args[0]), StreamWaveAndCommitAsync(user, args[1]));
     var finals = await Task.WhenAll(
