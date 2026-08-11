@@ -100,7 +100,7 @@ public sealed class RealtimeTransportTests
         Assert.Equal("transcription", session.GetProperty("type").GetString());
         Assert.Equal("audio/pcm", input.GetProperty("format").GetProperty("type").GetString());
         Assert.Equal(24000, input.GetProperty("format").GetProperty("rate").GetInt32());
-        Assert.Equal("gpt-live-transcribe", transcription.GetProperty("model").GetString());
+        Assert.Equal("gpt-4o-mini-transcribe", transcription.GetProperty("model").GetString());
         Assert.Single(transcription.EnumerateObject());
         Assert.Equal("server_vad", turnDetection.GetProperty("type").GetString());
         Assert.Equal(0.5, turnDetection.GetProperty("threshold").GetDouble(), 3);
