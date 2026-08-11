@@ -81,7 +81,7 @@ public sealed class RealtimeTransportTests
     }
 
     [Fact]
-    public void ClientSecretRequest_CreatesServerVadTranscriptionSessionAtConnectionTime()
+    public void ClientSecretRequest_HrUsesDigitalLoopbackVadWithoutNoiseReduction()
     {
         var transcriber = new OpenAiRealtimeTranscriber(
             SpeakerRole.Hr,
@@ -108,7 +108,29 @@ public sealed class RealtimeTransportTests
         Assert.Equal(500, turnDetection.GetProperty("silence_duration_ms").GetInt32());
         Assert.False(turnDetection.GetProperty("create_response").GetBoolean());
         Assert.False(turnDetection.GetProperty("interrupt_response").GetBoolean());
-        Assert.False(input.TryGetProperty("noise_reduction", out _));
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, input.GetProperty("noise_reduction").ValueKind);
+    }
+
+    [Fact]
+    public void ClientSecretRequest_UserUsesNearFieldNoiseReductionAndStricterVad()
+    {
+        var transcriber = new OpenAiRealtimeTranscriber(
+            SpeakerRole.User,
+            new EmptyKeyStore(),
+            Options.Create(new OpenAiOptions()));
+        var json = System.Text.Json.JsonSerializer.Serialize(transcriber.CreateClientSecretRequest());
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        var input = document.RootElement.GetProperty("session").GetProperty("audio").GetProperty("input");
+        var turnDetection = input.GetProperty("turn_detection");
+        var noiseReduction = input.GetProperty("noise_reduction");
+
+        Assert.Equal("near_field", noiseReduction.GetProperty("type").GetString());
+        Assert.Equal("server_vad", turnDetection.GetProperty("type").GetString());
+        Assert.Equal(0.65, turnDetection.GetProperty("threshold").GetDouble(), 3);
+        Assert.Equal(300, turnDetection.GetProperty("prefix_padding_ms").GetInt32());
+        Assert.Equal(500, turnDetection.GetProperty("silence_duration_ms").GetInt32());
+        Assert.False(turnDetection.GetProperty("create_response").GetBoolean());
+        Assert.False(turnDetection.GetProperty("interrupt_response").GetBoolean());
     }
 
     [Fact]
