@@ -33,6 +33,7 @@ public sealed class DeterministicCueEngineTests
         Assert.True(result.NeedsAssistant);
         Assert.Contains(result.RetrievalTerms, x => x.Equals("alternative", StringComparison.OrdinalIgnoreCase));
     }
+
     [Fact]
     public void AlternativeRole_ExpandsLocalHrRetrievalAliasesWithoutExtraModelCall()
     {
@@ -42,4 +43,35 @@ public sealed class DeterministicCueEngineTests
         Assert.Contains(result.RetrievalTerms, x => x.Equals("Occupational Health", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void VacancyQuestion_ExpandsRedeploymentAliases()
+    {
+        var result = _sut.Analyze("Why do you say applying for vacancies isn't enough support?");
+
+        Assert.Equal(MeetingIntent.Question, result.Intent);
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("redeployment", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("internal application", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void CspQuestion_ExpandsSickPayAliases()
+    {
+        var result = _sut.Analyze("What is still unresolved about CSP and payroll deductions?");
+
+        Assert.Equal(MeetingIntent.Question, result.Intent);
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("company sick pay", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("payroll", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("reconciliation", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RefusalToReturnQuestion_ExpandsSafeReturnAliases()
+    {
+        var result = _sut.Analyze("Are you refusing to return to the same site?");
+
+        Assert.Equal(MeetingIntent.Question, result.Intent);
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("return", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("Occupational Health", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("reporting line", StringComparison.OrdinalIgnoreCase));
+    }
 }
