@@ -19,11 +19,13 @@ public sealed class MeetingState
     {
         get { lock (_sync) return _turns.ToArray(); }
     }
+    public string MeetingObjective { get { lock (_sync) return _meetingObjective; } }
     public string RollingSummary { get { lock (_sync) return _rollingSummary; } }
     public IReadOnlyList<string> OpenQuestions { get { lock (_sync) return _openQuestions.ToArray(); } }
     public IReadOnlyList<string> Commitments { get { lock (_sync) return _commitments.ToArray(); } }
     public IReadOnlyList<string> WrittenFollowUps { get { lock (_sync) return _writtenFollowUps.ToArray(); } }
 
+    private string _meetingObjective = string.Empty;
     private string _rollingSummary = string.Empty;
     private readonly List<string> _openQuestions = [];
     private readonly List<string> _commitments = [];
@@ -50,6 +52,11 @@ public sealed class MeetingState
                 _turns.Insert(insertAt, turn);
             }
         }
+    }
+
+    public void SetMeetingObjective(string objective)
+    {
+        lock (_sync) _meetingObjective = objective.Trim();
     }
 
     public void SetRollingSummary(string summary)
