@@ -1,5 +1,28 @@
 namespace HRCompanion.Core.Models;
 
+public enum EvidenceChannel
+{
+    OrdinaryHr = 0,
+    AcasWithoutPrejudice = 1
+}
+
+public enum EvidenceAuthority
+{
+    CurrentFinal = 0,
+    Historical = 1
+}
+
+public sealed record DocumentImportOptions(
+    EvidenceChannel Channel,
+    EvidenceAuthority Authority)
+{
+    public static DocumentImportOptions OrdinaryCurrent { get; } =
+        new(EvidenceChannel.OrdinaryHr, EvidenceAuthority.CurrentFinal);
+
+    public static DocumentImportOptions RestrictedAcasWithoutPrejudice { get; } =
+        new(EvidenceChannel.AcasWithoutPrejudice, EvidenceAuthority.CurrentFinal);
+}
+
 public sealed record DocumentRecord(
     Guid Id,
     string DisplayName,
@@ -8,7 +31,9 @@ public sealed record DocumentRecord(
     string MediaType,
     DateTimeOffset ImportedAt,
     DateTimeOffset? SourceDate,
-    int ChunkCount);
+    int ChunkCount,
+    EvidenceChannel Channel = EvidenceChannel.OrdinaryHr,
+    EvidenceAuthority Authority = EvidenceAuthority.CurrentFinal);
 
 public sealed record DocumentChunk(
     Guid Id,
