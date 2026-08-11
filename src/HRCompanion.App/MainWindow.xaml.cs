@@ -24,6 +24,11 @@ public partial class MainWindow : Window
     private OverlayWindow? _overlay;
     private AssistantResponse _latest = AssistantResponse.NoAction();
     private bool _closingAfterStop;
+    private MicrophoneCaptureSource? _liveMicrophone;
+    private TeamsAwareSystemLoopbackCaptureSource? _liveRemoteAudio;
+    private LiveMeetingHealth? _lastHealth;
+    private bool _hrAudioBlocked;
+    private string? _hrAudioBlockDetail;
 
     public MainWindow(
         ICaseRepository repository,
@@ -111,12 +116,15 @@ public partial class MainWindow : Window
         SetLiveStatus("LISTENING", "Connecting guarded Teams system audio and microphone transcription sessions...");
 
         var previousMeeting = _meeting;
+        var previousObjective = previousMeeting.MeetingObjective;
         _meeting = new MeetingState(Guid.NewGuid(), "HR Case", DateTimeOffset.UtcNow);
+        if (!string.IsNullOrWhiteSpace(previousObjective)) _meeting.SetMeetingObjective(previousObjective);
         await _repository.CompleteMeetingAsync(previousMeeting.MeetingId);
         await _repository.StartMeetingAsync(_meeting);
 
         var remoteAudio = new TeamsAwareSystemLoopbackCaptureSource();
         var userAudio = new MicrophoneCaptureSource(microphone.DeviceNumber);
+        AttachLiveSafety(remoteAudio, userAudio);
         var remoteTranscriber = new OpenAiRealtimeTranscriber(SpeakerRole.Hr, _keyStore, _openAiOptions);
         var userTranscriber = new OpenAiRealtimeTranscriber(SpeakerRole.User, _keyStore, _openAiOptions);
         var coordinator = new LiveMeetingCoordinator(
@@ -133,9 +141,8 @@ public partial class MainWindow : Window
         {
             using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             await coordinator.StartAsync(startCts.Token);
-            SetLiveStatus("LISTENING", "Teams/HR system audio is guarded against unrelated render audio; microphone/USER is live separately.");
+            RenderLiveHealth();
             EnsureOverlay();
-            _overlay?.RenderStatus("LISTENING");
         }
         catch (Exception ex)
         {
@@ -143,6 +150,7 @@ public partial class MainWindow : Window
             SetLiveStatus("MANUAL", "Live audio is unavailable. Paste the latest HR turn below.");
             await DisposeCoordinatorAsync(coordinator);
             _coordinator = null;
+            ResetLiveSafety();
             await _repository.CompleteMeetingAsync(_meeting.MeetingId);
             StartMeetingButton.IsEnabled = true;
             StopMeetingButton.IsEnabled = false;
@@ -171,6 +179,7 @@ public partial class MainWindow : Window
         {
             await _repository.CompleteMeetingAsync(_meeting.MeetingId);
             await DisposeCoordinatorAsync(coordinator);
+            ResetLiveSafety();
             StartMeetingButton.IsEnabled = true;
             SetLiveStatus("MANUAL", "Meeting stopped. The local transcript and manual assistance remain available.");
         }
@@ -178,7 +187,11 @@ public partial class MainWindow : Window
 
     private void Attach(LiveMeetingCoordinator coordinator)
     {
-        coordinator.FinalTurn += (_, _) => Dispatcher.Invoke(RenderRecentTranscript);
+        coordinator.FinalTurn += (_, turn) => Dispatcher.Invoke(() =>
+        {
+            RenderRecentTranscript();
+            if (turn.Speaker == SpeakerRole.Hr) LatestHrText.Text = turn.Text;
+        });
         coordinator.AssistantUpdated += (_, response) => Dispatcher.Invoke(() => Render(response));
         coordinator.AssistanceInvalidated += (_, _) => Dispatcher.Invoke(() => Render(AssistantResponse.NoAction()));
         coordinator.HealthChanged += (_, health) => Dispatcher.Invoke(() => OnHealthChanged(health));
@@ -190,38 +203,14 @@ public partial class MainWindow : Window
         {
             _timings.Add(timing);
             var summary = LatencySummary.Calculate(_timings);
-            if (summary is not null) LatencyText.Text = $"median {summary.MedianMs:F0} ms · p95 {summary.P95Ms:F0} ms";
+            if (summary is not null) LatencyText.Text = $"speech-end→SAY median {summary.MedianMs:F0} ms · p95 {summary.P95Ms:F0} ms";
         });
     }
 
     private void OnHealthChanged(LiveMeetingHealth health)
     {
-        var statusSuffix = health.HasTranscriptionGap ? " + GAP" : string.Empty;
-        var gapDetail = health.HasTranscriptionGap
-            ? $" Historical transcription gap: HR dropped {health.HrDiagnostics.FramesDropped}, " +
-              $"USER dropped {health.UserDiagnostics.FramesDropped}; the transcript may be incomplete."
-            : string.Empty;
-        switch (health.State)
-        {
-            case LiveMeetingHealthState.FullListening:
-                SetLiveStatus("LISTENING" + statusSuffix, "Teams/HR and microphone/USER transcription are currently healthy." + gapDetail);
-                break;
-            case LiveMeetingHealthState.HrReconnecting:
-                SetLiveStatus("HR RECONNECTING" + statusSuffix, "Teams/HR transcription is reconnecting; USER transcription remains independently tracked." + gapDetail);
-                break;
-            case LiveMeetingHealthState.UserReconnecting:
-                SetLiveStatus("USER RECONNECTING" + statusSuffix, "Microphone/USER transcription is reconnecting; HR transcription remains independently tracked." + gapDetail);
-                break;
-            case LiveMeetingHealthState.TranscriptionDegraded:
-                SetLiveStatus("TRANSCRIPTION DEGRADED" + statusSuffix, "At least one actual-speech source is unavailable. Use manual fallback for missing turns." + gapDetail);
-                break;
-            case LiveMeetingHealthState.AssistantDegraded:
-                SetLiveStatus("ASSISTANT DEGRADED" + statusSuffix, "Live transcription remains healthy, but SAY/WATCH/ASK generation is unavailable." + gapDetail);
-                break;
-            case LiveMeetingHealthState.Manual:
-                SetLiveStatus("MANUAL", "Live capture is stopped. Manual assistance remains available.");
-                break;
-        }
+        _lastHealth = health;
+        RenderLiveHealth();
     }
 
     private void SetLiveStatus(string status, string detail)
@@ -287,7 +276,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            StatusText.Text = "Importing case material...";
+            StatusText.Text = "Importing ordinary current case material...";
             var result = await _importer.ImportPathsAsync(paths);
             StatusText.Text = $"Imported {result.Imported}; duplicates {result.SkippedDuplicate}; unsupported {result.Unsupported}; errors {result.Errors.Count}.";
             if (result.Errors.Count > 0)
@@ -316,22 +305,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void SaveContext_Click(object sender, RoutedEventArgs e)
+    private void SaveContext_Click(object sender, RoutedEventArgs e)
     {
         var text = ContextBox.Text.Trim();
         if (text.Length == 0) return;
-        try
-        {
-            await _repository.SaveFactAsync(new(
-                Guid.NewGuid(), text, FactStatus.UserPosition, null, "manual context", null, DateTimeOffset.UtcNow));
-            ContextBox.Clear();
-            StatusText.Text = "Case context saved locally as USER_POSITION.";
-            await RefreshPreflightAsync();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(ex.Message, "Could not save context", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
+        _meeting.SetMeetingObjective(text);
+        ContextBox.Clear();
+        StatusText.Text = "Meeting objective applied to this meeting only; it was not added to the evidence ledger.";
     }
 
     private async void Assist_Click(object sender, RoutedEventArgs e)
@@ -343,6 +323,7 @@ public partial class MainWindow : Window
         try
         {
             await _repository.StartMeetingAsync(_meeting);
+            LatestHrText.Text = text;
             if (_coordinator is not null)
             {
                 StatusText.Text = "Storing manual live HR turn...";
@@ -388,7 +369,8 @@ public partial class MainWindow : Window
         SourcesText.Text = response.Sources.Count == 0
             ? "—"
             : string.Join(Environment.NewLine, response.Sources.Select(source => $"{source.SourceName}{(source.Locator is null ? string.Empty : " — " + source.Locator)}"));
-        _overlay?.Render(response);
+        var heard = LatestHrText.Text == "—" ? null : LatestHrText.Text;
+        _overlay?.Render(response, heard);
     }
 
     private void ShowOverlay_Click(object sender, RoutedEventArgs e) => EnsureOverlay();
@@ -401,7 +383,9 @@ public partial class MainWindow : Window
             _overlay.Closed += (_, _) => _overlay = null;
             _overlay.Show();
         }
-        _overlay.Render(_latest);
+        var heard = LatestHrText.Text == "—" ? null : LatestHrText.Text;
+        _overlay.Render(_latest, heard);
+        RenderLiveHealth();
     }
 
     private async Task RefreshPreflightAsync()
@@ -410,16 +394,24 @@ public partial class MainWindow : Window
         var databaseAccessible = false;
         var sourceCount = 0;
         var factCount = 0;
+        var ordinaryCurrent = 0;
+        var restricted = 0;
+        var historical = 0;
         try { keyPresent = !string.IsNullOrWhiteSpace(await _keyStore.GetAsync()); } catch { }
         try
         {
             var documentsTask = _repository.GetDocumentsAsync();
             var factsTask = _repository.GetFactsAsync();
             await Task.WhenAll(documentsTask, factsTask);
-            sourceCount = (await documentsTask).Count;
+            var documents = await documentsTask;
+            sourceCount = documents.Count;
             factCount = (await factsTask).Count;
+            ordinaryCurrent = documents.Count(document =>
+                document.Channel == EvidenceChannel.OrdinaryHr && document.Authority == EvidenceAuthority.CurrentFinal);
+            restricted = documents.Count(document => document.Channel == EvidenceChannel.AcasWithoutPrejudice);
+            historical = documents.Count(document => document.Authority == EvidenceAuthority.Historical);
             databaseAccessible = true;
-            DocumentCountText.Text = $"{sourceCount} source document(s); {factCount} context/fact record(s) stored locally";
+            DocumentCountText.Text = $"{sourceCount} documents: {ordinaryCurrent} ordinary/current used in meetings, {restricted} ACAS/WP restricted, {historical} historical; {factCount} active context/fact record(s)";
         }
         catch
         {
@@ -431,7 +423,7 @@ public partial class MainWindow : Window
             $"Teams {(TeamsProcessBox.SelectedItem is null ? "MISSING" : "OK")}",
             $"microphone {(MicrophoneBox.SelectedItem is null ? "MISSING" : "OK")}",
             $"Case Brain {(databaseAccessible ? "OK" : "ERROR")}",
-            sourceCount + factCount == 0 ? "sources EMPTY (allowed)" : $"sources {sourceCount + factCount}");
+            sourceCount + factCount == 0 ? "sources EMPTY (allowed)" : $"ordinary/current {ordinaryCurrent}");
     }
 
     protected override async void OnClosing(CancelEventArgs e)
