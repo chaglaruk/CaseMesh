@@ -28,6 +28,7 @@ if (args.Contains("--list", StringComparer.OrdinalIgnoreCase)) return;
 var selfTest = args.Contains("--self-test", StringComparer.OrdinalIgnoreCase);
 var isolationSelfTest = args.Contains("--isolation-self-test", StringComparer.OrdinalIgnoreCase);
 var discoverAudioSessions = args.Contains("--audio-sessions", StringComparer.OrdinalIgnoreCase);
+var useGuardedSystem = args.Contains("--guarded-system", StringComparer.OrdinalIgnoreCase);
 var durationSeconds = ReadIntArgument("--seconds", selfTest || isolationSelfTest ? 5 : 15);
 var microphoneNumber = ReadIntArgument("--microphone", 0);
 var useSystemFallback = args.Contains("--system-fallback", StringComparer.OrdinalIgnoreCase);
@@ -43,7 +44,7 @@ var selectedProcess = requestedProcessId is null
     ? teams.FirstOrDefault()
     : teams.FirstOrDefault(process => process.ProcessId == requestedProcessId.Value);
 
-if (!useSystemFallback && !selfTest && !isolationSelfTest && selectedProcess is null)
+if (!useSystemFallback && !useGuardedSystem && !selfTest && !isolationSelfTest && selectedProcess is null)
 {
     Console.Error.WriteLine();
     Console.Error.WriteLine("No selected Teams process is running. Start Teams, then run:");
@@ -54,10 +55,27 @@ if (!useSystemFallback && !selfTest && !isolationSelfTest && selectedProcess is 
 
 using var silentTarget = isolationSelfTest ? StartSilentTarget(durationSeconds + 5) : null;
 await using IAudioCaptureSource microphone = new MicrophoneCaptureSource(microphoneNumber);
-await using IAudioCaptureSource remote = useSystemFallback
-    ? new SystemLoopbackCaptureSource()
-    : new TeamsProcessLoopbackCaptureSource(
-        selfTest ? Environment.ProcessId : isolationSelfTest ? silentTarget!.Id : selectedProcess!.ProcessId);
+await using IAudioCaptureSource remote = useGuardedSystem
+    ? new TeamsAwareSystemLoopbackCaptureSource()
+    : useSystemFallback
+        ? new SystemLoopbackCaptureSource()
+        : new TeamsProcessLoopbackCaptureSource(
+            selfTest ? Environment.ProcessId : isolationSelfTest ? silentTarget!.Id : selectedProcess!.ProcessId);
+
+if (remote is TeamsAwareSystemLoopbackCaptureSource guarded)
+{
+    guarded.ContaminationChanged += (_, change) =>
+    {
+        if (change.IsBlocked)
+        {
+            Console.WriteLine($"AUDIO GUARD: BLOCKED by {change.ProcessName ?? "unknown"} PID={change.ProcessId} peak={change.Peak:F6}");
+        }
+        else
+        {
+            Console.WriteLine("AUDIO GUARD: RESUMED — no meaningful non-Teams render audio detected.");
+        }
+    };
+}
 
 long microphoneBytes = 0;
 long remoteBytes = 0;
@@ -80,9 +98,11 @@ remote.Faulted += (_, error) => captureFailure ??= error;
 Console.WriteLine();
 Console.WriteLine($"Microphone/USER: {microphone.DisplayName}");
 Console.WriteLine($"Remote/HR:       {remote.DisplayName}");
-Console.WriteLine(useSystemFallback
-    ? "DEGRADED: system loopback includes unrelated audio and cannot verify Gate 1."
-    : "ISOLATED MODE: Windows includes only the selected process tree; verify this with unrelated audio playing.");
+Console.WriteLine(useGuardedSystem
+    ? "GUARDED SYSTEM MODE: non-Teams render activity blocks HR frames to prevent misattribution."
+    : useSystemFallback
+        ? "DEGRADED: system loopback includes unrelated audio and cannot verify Gate 1."
+        : "ISOLATED MODE: Windows includes only the selected process tree; verify this with unrelated audio playing.");
 Console.WriteLine($"Capturing for {durationSeconds} seconds...");
 
 try
