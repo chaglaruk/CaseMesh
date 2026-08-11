@@ -14,6 +14,7 @@ public partial class MainWindow
         {
             StopMeetingButton.IsEnabled = false;
             StartMeetingButton.IsEnabled = true;
+            ResetLiveSafety();
             return;
         }
 
@@ -69,6 +70,7 @@ public partial class MainWindow
         }
         finally
         {
+            ResetLiveSafety();
             StopMeetingButton.Content = "Stop";
             StopMeetingButton.IsEnabled = false;
             StartMeetingButton.IsEnabled = stopped;
