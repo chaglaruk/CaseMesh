@@ -18,7 +18,7 @@ public sealed partial class DeterministicCueEngine
          ["redeployment", "alternative", "role", "suitable", "vacancy", "internal application", "Occupational Health"]),
         (["return to work", "return date", "come back to work", "start back", "phased return", "return to your current role",
           "return to the same role", "return to the same site", "will not return", "won't return", "refuse to return", "refusing to return"],
-         ["return", "fit note", "phased return", "role", "location", "reporting line", "Occupational Health"]),
+         ["return", "safe return", "not refusing", "same role", "same environment", "reporting line", "Occupational Health"]),
         (["occupational health", "oh report", "oh recommendation"],
          ["Occupational Health", "recommendation", "redeployment", "phased return"]),
         (["fit note", "sick note", "fitness for work", "fit for work"],
