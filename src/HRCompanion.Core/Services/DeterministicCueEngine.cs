@@ -79,7 +79,10 @@ public sealed partial class DeterministicCueEngine
     }
 
     private static bool ContainsDirectQuestion(string text, string lower) =>
-        text.Contains('?') || StartsLikeQuestion(lower) || EmbeddedDirectQuestionRegex().IsMatch(text);
+        text.Contains('?') ||
+        StartsLikeQuestion(lower) ||
+        EmbeddedDirectQuestionRegex().IsMatch(text) ||
+        ConversationalQuestionRegex().IsMatch(text);
 
     private static bool StartsLikeQuestion(string lower) =>
         new[] { "why ", "what ", "when ", "where ", "who ", "how ", "can you", "could you", "would you", "will you", "do you", "are you", "is it", "have you" }
@@ -119,8 +122,11 @@ public sealed partial class DeterministicCueEngine
             .ToArray();
     }
 
-    [GeneratedRegex(@"(?:^|[.!;]\s+)(?:(?:so|and|but)[,\s]+)?(?:why|what|when|where|who|how|can you|could you|would you|will you|do you|are you|is it|have you)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?:^|[.!;,:]\s+)(?:(?:(?:so|and|but|well)|(?:um+|uh+|erm+|er+|ah+|hmm+))[,\s]+)*(?:why|what|when|where|who|how|can you|could you|would you|will you|do you|are you|is it|have you)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex EmbeddedDirectQuestionRegex();
+
+    [GeneratedRegex(@"\b(?:wondering|wanted to ask|want to ask|need to understand|trying to understand|help me understand)\b.{0,140}?\b(?:why|what|when|where|who|how|whether|if|can you|could you|would you|will you|do you|are you|have you)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ConversationalQuestionRegex();
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex CollapseWhitespaceRegex();
