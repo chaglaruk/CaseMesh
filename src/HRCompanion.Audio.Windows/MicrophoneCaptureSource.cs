@@ -9,6 +9,7 @@ public sealed class MicrophoneCaptureSource : IAudioCaptureSource
     private readonly int _deviceNumber;
     private WaveInEvent? _capture;
     private AudioFrameConverter? _converter;
+    private int _paused;
 
     public MicrophoneCaptureSource(int deviceNumber = 0) => _deviceNumber = deviceNumber;
 
@@ -16,9 +17,12 @@ public sealed class MicrophoneCaptureSource : IAudioCaptureSource
     public string DisplayName => _deviceNumber >= 0 && _deviceNumber < WaveIn.DeviceCount
         ? WaveIn.GetCapabilities(_deviceNumber).ProductName
         : "Microphone";
+    public bool IsPaused => Volatile.Read(ref _paused) == 1;
 
     public event EventHandler<AudioFrame>? FrameReady;
     public event EventHandler<Exception>? Faulted;
+
+    public void SetPaused(bool paused) => Volatile.Write(ref _paused, paused ? 1 : 0);
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -26,6 +30,7 @@ public sealed class MicrophoneCaptureSource : IAudioCaptureSource
         if (_capture is not null) return Task.CompletedTask;
         if (WaveIn.DeviceCount == 0) throw new InvalidOperationException("No microphone capture device is available.");
 
+        SetPaused(false);
         _capture = new WaveInEvent
         {
             DeviceNumber = _deviceNumber,
@@ -43,6 +48,7 @@ public sealed class MicrophoneCaptureSource : IAudioCaptureSource
     public Task StopAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        SetPaused(false);
         if (_capture is null) return Task.CompletedTask;
         _capture.DataAvailable -= OnDataAvailable;
         _capture.RecordingStopped -= OnRecordingStopped;
@@ -65,7 +71,7 @@ public sealed class MicrophoneCaptureSource : IAudioCaptureSource
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
     {
-        if (_converter is null) return;
+        if (_converter is null || IsPaused) return;
         foreach (var frame in _converter.Push(e.Buffer, e.BytesRecorded, DateTimeOffset.UtcNow))
         {
             if (RemoteSpeechMicrophoneGate.ShouldSuppressUserFrame()) continue;
