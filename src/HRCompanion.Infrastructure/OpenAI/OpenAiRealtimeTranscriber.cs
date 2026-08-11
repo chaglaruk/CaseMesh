@@ -261,7 +261,15 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
                     {
                         model = _options.TranscriptionModel
                     },
-                    turn_detection = (object?)null
+                    turn_detection = new
+                    {
+                        type = "server_vad",
+                        threshold = 0.5,
+                        prefix_padding_ms = 300,
+                        silence_duration_ms = 500,
+                        create_response = false,
+                        interrupt_response = false
+                    }
                 }
             }
         }
