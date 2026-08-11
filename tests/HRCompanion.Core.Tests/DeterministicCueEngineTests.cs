@@ -65,6 +65,8 @@ public sealed class DeterministicCueEngineTests
         Assert.Contains(result.RetrievalTerms, x => x.Equals("payroll", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.RetrievalTerms, x => x.Equals("reconciliation", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.RetrievalTerms, x => x.Equals("payment discrepancy", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("payslip", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("employer letter", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
