@@ -49,6 +49,7 @@ public sealed class TeamsAwareSystemLoopbackCaptureSource : IAudioCaptureSource
             if (_monitorTask is not null) return;
         }
 
+        RemoteSpeechMicrophoneGate.Reset();
         Volatile.Write(ref _blocked, 1);
         _inner.FrameReady += OnInnerFrameReady;
         _inner.Faulted += OnInnerFaulted;
@@ -67,6 +68,7 @@ public sealed class TeamsAwareSystemLoopbackCaptureSource : IAudioCaptureSource
         {
             _inner.FrameReady -= OnInnerFrameReady;
             _inner.Faulted -= OnInnerFaulted;
+            RemoteSpeechMicrophoneGate.Reset();
             throw;
         }
     }
@@ -104,6 +106,7 @@ public sealed class TeamsAwareSystemLoopbackCaptureSource : IAudioCaptureSource
         _inner.Faulted -= OnInnerFaulted;
         await _inner.StopAsync(cancellationToken).ConfigureAwait(false);
         Volatile.Write(ref _blocked, 1);
+        RemoteSpeechMicrophoneGate.Reset();
     }
 
     private async Task MonitorSessionsAsync(CancellationToken cancellationToken)
@@ -159,7 +162,9 @@ public sealed class TeamsAwareSystemLoopbackCaptureSource : IAudioCaptureSource
 
     private void OnInnerFrameReady(object? sender, AudioFrame frame)
     {
-        if (!IsBlocked) FrameReady?.Invoke(this, frame);
+        if (IsBlocked) return;
+        RemoteSpeechMicrophoneGate.ObserveRemoteFrame(frame);
+        FrameReady?.Invoke(this, frame);
     }
 
     private void OnInnerFaulted(object? sender, Exception error) => Faulted?.Invoke(this, error);
