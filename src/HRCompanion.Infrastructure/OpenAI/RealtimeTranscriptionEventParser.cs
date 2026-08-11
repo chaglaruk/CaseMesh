@@ -13,6 +13,7 @@ internal sealed class RealtimeTranscriptionEventParser
     private readonly List<string> _commitOrder = [];
     private readonly Dictionary<string, PendingCompletion> _completed = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTimeOffset> _started = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTimeOffset> _stopped = new(StringComparer.Ordinal);
     private readonly HashSet<string> _emitted = new(StringComparer.Ordinal);
     private int _nextToEmit;
 
@@ -25,6 +26,7 @@ internal sealed class RealtimeTranscriptionEventParser
         return type switch
         {
             "input_audio_buffer.speech_started" => OnSpeechStarted(root, receivedAt),
+            "input_audio_buffer.speech_stopped" => OnSpeechStopped(root, receivedAt),
             "input_audio_buffer.committed" => OnCommitted(root, receivedAt),
             "conversation.item.input_audio_transcription.delta" => OnDelta(root, receivedAt),
             "conversation.item.input_audio_transcription.completed" => OnCompleted(root, receivedAt),
@@ -39,6 +41,7 @@ internal sealed class RealtimeTranscriptionEventParser
         _commitOrder.Clear();
         _completed.Clear();
         _started.Clear();
+        _stopped.Clear();
         _nextToEmit = 0;
     }
 
@@ -47,6 +50,13 @@ internal sealed class RealtimeTranscriptionEventParser
         if (!TryGetString(root, "item_id", out var itemId)) return new([]);
         _started.TryAdd(itemId, receivedAt);
         return new([new(string.Empty, false, receivedAt, itemId, receivedAt, null, true)]);
+    }
+
+    private RealtimeParseResult OnSpeechStopped(JsonElement root, DateTimeOffset receivedAt)
+    {
+        if (!TryGetString(root, "item_id", out var itemId) || _emitted.Contains(itemId)) return new([]);
+        _stopped[itemId] = receivedAt;
+        return new([new(string.Empty, false, receivedAt, itemId, _started.GetValueOrDefault(itemId), null, false, receivedAt, true)]);
     }
 
     private RealtimeParseResult OnCommitted(JsonElement root, DateTimeOffset receivedAt)
@@ -88,10 +98,9 @@ internal sealed class RealtimeTranscriptionEventParser
         IReadOnlyList<TranscriptionUpdate> updates = [];
         if (TryGetString(root, "item_id", out var itemId) && !_emitted.Contains(itemId))
         {
-            // A failed item is terminal. Mark it resolved so one failed transcription cannot
-            // permanently block later completed items that are waiting behind it in commit order.
             _completed.Remove(itemId);
             _started.Remove(itemId);
+            _stopped.Remove(itemId);
             _emitted.Add(itemId);
             updates = DrainCompleted();
         }
@@ -137,14 +146,20 @@ internal sealed class RealtimeTranscriptionEventParser
             _emitted.Add(itemId);
             if (!string.IsNullOrWhiteSpace(completion.Text))
             {
+                var startedAt = _started.GetValueOrDefault(itemId, completion.CompletedAt);
+                var endedAt = _stopped.GetValueOrDefault(itemId, completion.CompletedAt);
                 updates.Add(new(
                     completion.Text,
                     true,
                     completion.CompletedAt,
                     itemId,
-                    _started.GetValueOrDefault(itemId, completion.CompletedAt),
-                    _nextToEmit > 1 ? _commitOrder[_nextToEmit - 2] : null));
+                    startedAt,
+                    _nextToEmit > 1 ? _commitOrder[_nextToEmit - 2] : null,
+                    false,
+                    endedAt));
             }
+            _started.Remove(itemId);
+            _stopped.Remove(itemId);
         }
         return updates;
     }
