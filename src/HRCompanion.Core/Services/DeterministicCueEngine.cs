@@ -8,25 +8,31 @@ public sealed partial class DeterministicCueEngine
     private static readonly string[] CommitmentTerms =
     [
         "agree", "accept", "confirm", "resign", "withdraw", "sign", "consent",
-        "start on", "return on", "final decision", "settlement", "capability"
+        "start on", "return on", "return by", "final decision", "settlement", "capability",
+        "dismissal", "dismiss", "terminate", "termination"
     ];
 
     private static readonly (string[] Triggers, string[] RetrievalTerms)[] HrConceptAliases =
     [
         (["alternative role", "alternative position", "another role", "redeploy", "redeployment", "suitable role",
-          "vacancy", "vacancies", "internal role", "internal application", "apply for", "applied for"],
+          "vacancy", "vacancies", "internal role", "internal application", "apply for", "applied for", "secured an alternative role",
+          "successfully secured an alternative role"],
          ["redeployment", "alternative", "role", "suitable", "vacancy", "internal application", "Occupational Health"]),
         (["return to work", "return date", "come back to work", "start back", "phased return", "return to your current role",
-          "return to the same role", "return to the same site", "will not return", "won't return", "refuse to return", "refusing to return"],
-         ["return", "safe return", "not refusing", "same role", "same environment", "reporting line", "Occupational Health"]),
-        (["occupational health", "oh report", "oh recommendation"],
-         ["Occupational Health", "recommendation", "redeployment", "phased return"]),
-        (["fit note", "sick note", "fitness for work", "fit for work"],
-         ["fit note", "fitness", "work", "Occupational Health"]),
-        (["reasonable adjustment", "reasonable adjustments", "adjustment"],
-         ["reasonable adjustments", "Occupational Health", "work", "role", "location"]),
-        (["capability", "capability process", "capability procedure"],
-         ["capability", "procedure", "Occupational Health", "reasonable adjustments", "redeployment"]),
+          "return to the same role", "return to the same site", "will not return", "won't return", "refuse to return", "refusing to return",
+          "resume your role", "resuming your role", "resume work", "resuming work", "when will you be resuming", "intend to return",
+          "do not intend to return", "don't intend to return"],
+         ["return", "safe return", "not fit for work", "not refusing", "same role", "same environment", "reporting line", "Occupational Health", "fit note"]),
+        (["occupational health", "oh report", "oh recommendation", "medical advice", "medical evidence", "medical information"],
+         ["Occupational Health", "recommendation", "not fit for work", "redeployment", "phased return", "reasonable adjustments"]),
+        (["fit note", "sick note", "fitness for work", "fit for work", "not fit for work", "doctor's note", "doctors note",
+          "medical certificate", "certificate", "current fit note", "latest fit note"],
+         ["fit note", "not fit for work", "fitness", "work", "current", "Occupational Health", "medical advice"]),
+        (["reasonable adjustment", "reasonable adjustments", "adjustment", "adjusted duties", "temporary adjustment"],
+         ["reasonable adjustments", "Occupational Health", "work", "role", "location", "reporting line", "phased return"]),
+        (["capability", "capability process", "capability procedure", "health capability", "ill health capability", "capability hearing",
+          "dismissal on the basis of capability", "dismissal on capability", "may result in dismissal", "could result in dismissal"],
+         ["health related capability", "capability", "procedure", "medical evidence", "Occupational Health", "reasonable adjustments", "redeployment", "last resort"]),
         (["grievance"], ["grievance"]),
         (["settlement", "without prejudice"], ["settlement", "without prejudice"]),
         (["sick pay", "ssp", "statutory sick pay", "company sick pay", "csp"],
