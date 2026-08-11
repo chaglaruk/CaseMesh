@@ -14,17 +14,23 @@
 
         <StackPanel Grid.Row="0">
             <TextBlock Text="HR Companion" FontSize="28" FontWeight="SemiBold" />
-            <TextBlock Margin="0,4,0,16" Foreground="#555" Text="Local case context + fast grounded meeting assistance. No account or sync. · build meeting-fix-4" />
+            <TextBlock Margin="0,4,0,16" Foreground="#555" Text="Local case context + fast grounded meeting assistance. No account or sync. · build meeting-fix-5" />
         </StackPanel>
 
         <Border Grid.Row="1" Background="#F5F7F8" BorderBrush="#CCD3D8" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,12">
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="2*" />
                     <ColumnDefinition Width="2*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+
+                <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,12,0">
                     <TextBlock Text="Microsoft Teams (automatic)" FontWeight="SemiBold" />
                     <DockPanel Margin="0,5,0,0">
                         <Button DockPanel.Dock="Right" Margin="6,0,0,0" Padding="9,4" Content="Refresh" Click="RefreshDevices_Click" />
@@ -32,21 +38,25 @@
                                   ToolTip="Teams is detected automatically. The displayed PID is diagnostic only and is not used for live audio capture." />
                     </DockPanel>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Margin="0,0,12,0">
+
+                <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,12,0">
                     <TextBlock Text="Microphone" FontWeight="SemiBold" />
                     <ComboBox x:Name="MicrophoneBox" DisplayMemberPath="DisplayName" Margin="0,5,0,0" MinWidth="220" />
                 </StackPanel>
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom">
-                    <Button x:Name="StartMeetingButton" Content="Start meeting" Click="StartMeeting_Click" />
-                    <Button x:Name="StopMeetingButton" Content="Stop" Click="StopMeetingSafe_Click" IsEnabled="False" />
+
+                <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom">
+                    <Button x:Name="StartMeetingButton" MinWidth="96" MinHeight="32" Content="Start meeting" Click="StartMeeting_Click" />
+                    <Button x:Name="StopMeetingButton" MinWidth="64" MinHeight="32" Content="Stop" Click="StopMeetingSafe_Click" IsEnabled="False" />
                 </StackPanel>
-                <StackPanel Grid.ColumnSpan="3" Margin="0,58,0,0" Orientation="Horizontal">
+
+                <StackPanel Grid.Row="1" Grid.ColumnSpan="3" Margin="0,10,0,0" Orientation="Horizontal">
                     <TextBlock x:Name="LiveStatusText" Text="MANUAL" FontWeight="Bold" Foreground="#555" />
                     <TextBlock Text="  Recent: " Foreground="#555" />
                     <TextBlock x:Name="RecentTranscriptText" Text="—" TextTrimming="CharacterEllipsis" MaxWidth="650" />
                     <TextBlock x:Name="LatencyText" Margin="12,0,0,0" Foreground="#555" />
                 </StackPanel>
-                <TextBlock x:Name="PreflightText" Grid.ColumnSpan="3" Margin="0,82,0,0" Foreground="#555"
+
+                <TextBlock x:Name="PreflightText" Grid.Row="2" Grid.ColumnSpan="3" Margin="0,6,0,0" Foreground="#555"
                            Text="Preflight: checking local dependencies..." TextWrapping="Wrap" />
             </Grid>
         </Border>
@@ -69,48 +79,50 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="3">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="3*" />
-                <ColumnDefinition Width="2*" />
-            </Grid.ColumnDefinitions>
+        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Grid Margin="0,0,4,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="3*" />
+                    <ColumnDefinition Width="2*" />
+                </Grid.ColumnDefinitions>
 
-            <StackPanel Grid.Column="0" Margin="0,0,14,0">
-                <TextBlock Text="Manual fallback / rehearsal" FontWeight="SemiBold" />
-                <TextBlock Margin="0,4,0,8" Foreground="#555" TextWrapping="Wrap"
-                           Text="Paste the latest HR turn here. This remains usable even if live audio is unavailable." />
-                <TextBox x:Name="HrTurnBox" Height="130" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-                <Button x:Name="AssistButton" Margin="0,10,0,0" HorizontalAlignment="Left" Content="Get assistance" Click="Assist_Click" />
+                <StackPanel Grid.Column="0" Margin="0,0,14,8">
+                    <TextBlock Text="Manual fallback / rehearsal" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,4,0,8" Foreground="#555" TextWrapping="Wrap"
+                               Text="Paste the latest HR turn here. This remains usable even if live audio is unavailable." />
+                    <TextBox x:Name="HrTurnBox" Height="130" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
+                    <Button x:Name="AssistButton" Margin="0,10,0,0" HorizontalAlignment="Left" Content="Get assistance" Click="Assist_Click" />
 
-                <TextBlock Margin="0,22,0,4" Text="API key" FontWeight="SemiBold" />
-                <TextBlock Foreground="#555" Text="Stored in Windows Credential Manager, not in the database." />
-                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                    <PasswordBox x:Name="ApiKeyBox" Width="360" />
-                    <Button Margin="8,0,0,0" Content="Save key" Click="SaveKey_Click" />
+                    <TextBlock Margin="0,22,0,4" Text="API key" FontWeight="SemiBold" />
+                    <TextBlock Foreground="#555" Text="Stored in Windows Credential Manager, not in the database." />
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <PasswordBox x:Name="ApiKeyBox" Width="360" />
+                        <Button Margin="8,0,0,0" Content="Save key" Click="SaveKey_Click" />
+                    </StackPanel>
+
+                    <TextBlock Margin="0,22,0,4" Text="Meeting position / objective (optional)" FontWeight="SemiBold" />
+                    <TextBlock Foreground="#555" TextWrapping="Wrap"
+                               Text="Add a meeting-specific position or objective the assistant should keep in mind, for example a preference for redeployment or not agreeing to a fixed return date today. It is saved as USER_POSITION, not verified evidence." />
+                    <TextBox x:Name="ContextBox" Margin="0,8,0,0" Height="72" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
+                    <Button Margin="0,8,0,0" HorizontalAlignment="Left" Content="Save position / objective" Click="SaveContext_Click" />
                 </StackPanel>
 
-                <TextBlock Margin="0,22,0,4" Text="Case context / objective" FontWeight="SemiBold" />
-                <TextBlock Foreground="#555" TextWrapping="Wrap"
-                           Text="Save a position or objective the assistant should know. This is labelled USER_POSITION, not a verified fact." />
-                <TextBox x:Name="ContextBox" Margin="0,8,0,0" Height="72" AcceptsReturn="True" TextWrapping="Wrap" />
-                <Button Margin="0,8,0,0" HorizontalAlignment="Left" Content="Save context" Click="SaveContext_Click" />
-            </StackPanel>
-
-            <Border Grid.Column="1" Background="#FAFAFA" BorderBrush="#DDD" BorderThickness="1" CornerRadius="8" Padding="14">
-                <StackPanel>
-                    <TextBlock Text="Latest assistance" FontWeight="SemiBold" FontSize="16" />
-                    <TextBlock Margin="0,14,0,2" Text="SAY" FontWeight="Bold" />
-                    <TextBlock x:Name="SayText" Text="—" TextWrapping="Wrap" FontSize="16" />
-                    <TextBlock Margin="0,18,0,2" Text="WATCH" FontWeight="Bold" Foreground="#8A5A00" />
-                    <TextBlock x:Name="WatchText" Text="—" TextWrapping="Wrap" />
-                    <TextBlock Margin="0,18,0,2" Text="ASK" FontWeight="Bold" Foreground="#245A8D" />
-                    <TextBlock x:Name="AskText" Text="—" TextWrapping="Wrap" />
-                    <TextBlock Margin="0,18,0,2" Text="SOURCES" FontWeight="Bold" />
-                    <TextBlock x:Name="SourcesText" Text="—" TextWrapping="Wrap" Foreground="#555" />
-                    <Button Margin="0,14,0,0" HorizontalAlignment="Left" Content="Show overlay" Click="ShowOverlay_Click" />
-                </StackPanel>
-            </Border>
-        </Grid>
+                <Border Grid.Column="1" Background="#FAFAFA" BorderBrush="#DDD" BorderThickness="1" CornerRadius="8" Padding="14" VerticalAlignment="Top" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="Latest assistance" FontWeight="SemiBold" FontSize="16" />
+                        <TextBlock Margin="0,14,0,2" Text="SAY" FontWeight="Bold" />
+                        <TextBlock x:Name="SayText" Text="—" TextWrapping="Wrap" FontSize="16" />
+                        <TextBlock Margin="0,18,0,2" Text="WATCH" FontWeight="Bold" Foreground="#8A5A00" />
+                        <TextBlock x:Name="WatchText" Text="—" TextWrapping="Wrap" />
+                        <TextBlock Margin="0,18,0,2" Text="ASK" FontWeight="Bold" Foreground="#245A8D" />
+                        <TextBlock x:Name="AskText" Text="—" TextWrapping="Wrap" />
+                        <TextBlock Margin="0,18,0,2" Text="SOURCES" FontWeight="Bold" />
+                        <TextBlock x:Name="SourcesText" Text="—" TextWrapping="Wrap" Foreground="#555" />
+                        <Button Margin="0,14,0,0" HorizontalAlignment="Left" Content="Show overlay" Click="ShowOverlay_Click" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </ScrollViewer>
 
         <StatusBar Grid.Row="4" Margin="0,16,0,0">
             <StatusBarItem><TextBlock x:Name="StatusText" Text="Ready" /></StatusBarItem>
