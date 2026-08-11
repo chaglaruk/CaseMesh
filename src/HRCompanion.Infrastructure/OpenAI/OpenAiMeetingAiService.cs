@@ -84,6 +84,12 @@ public sealed class OpenAiMeetingAiService : IMeetingAiService
         {
             sourceIdItemSchema = new { type = "string", @enum = allowedIds.OrderBy(x => x, StringComparer.Ordinal).ToArray() };
         }
+
+        var directTurn = analysis.Intent is MeetingIntent.Question or MeetingIntent.Request or MeetingIntent.CommitmentRequest;
+        object saySchema = directTurn
+            ? new { type = "string", minLength = 1, maxLength = 700 }
+            : new { type = new[] { "string", "null" }, maxLength = 700 };
+
         var schema = new
         {
             type = "object",
@@ -92,7 +98,7 @@ public sealed class OpenAiMeetingAiService : IMeetingAiService
             {
                 intent = new { type = "string", @enum = Enum.GetNames<MeetingIntent>() },
                 importance = new { type = "string", @enum = Enum.GetNames<AssistantImportance>() },
-                say = new { type = new[] { "string", "null" }, maxLength = 700 },
+                say = saySchema,
                 watch = new { type = new[] { "string", "null" }, maxLength = 350 },
                 ask = new { type = new[] { "string", "null" }, maxLength = 350 },
                 needsWrittenFollowUp = new { type = "boolean" },
@@ -115,6 +121,12 @@ public sealed class OpenAiMeetingAiService : IMeetingAiService
         var root = doc.RootElement;
         Enum.TryParse<MeetingIntent>(root.GetProperty("intent").GetString(), true, out var intent);
         Enum.TryParse<AssistantImportance>(root.GetProperty("importance").GetString(), true, out var importance);
+        var say = GetNullableString(root, "say");
+        if (directTurn && string.IsNullOrWhiteSpace(say))
+        {
+            throw new InvalidDataException("The answer model returned no spoken answer for a direct HR turn.");
+        }
+
         var sourceIds = root.GetProperty("sourceIds").EnumerateArray()
             .Select(x => x.GetString())
             .Where(x => x is not null && allowedIds.Contains(x))
@@ -129,7 +141,7 @@ public sealed class OpenAiMeetingAiService : IMeetingAiService
         return new(
             intent,
             importance,
-            GetNullableString(root, "say"),
+            say,
             GetNullableString(root, "watch"),
             GetNullableString(root, "ask"),
             root.GetProperty("needsWrittenFollowUp").GetBoolean(),
