@@ -15,6 +15,12 @@ public sealed record AssistantResponse(
     double Confidence,
     IReadOnlyList<AssistantSource> Sources)
 {
+    /// <summary>
+    /// Optional preparation cue for a distinct topic HR explicitly signposted but has not yet
+    /// asked the user to answer. This is not part of SAY and should not be spoken automatically.
+    /// </summary>
+    public string? Next { get; init; }
+
     public static AssistantResponse NoAction(MeetingIntent intent = MeetingIntent.Information) =>
         new(intent, AssistantImportance.Low, null, null, null, false, 1.0, []);
 }
