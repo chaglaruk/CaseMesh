@@ -68,6 +68,7 @@ public sealed class MicrophoneCaptureSource : IAudioCaptureSource
         if (_converter is null) return;
         foreach (var frame in _converter.Push(e.Buffer, e.BytesRecorded, DateTimeOffset.UtcNow))
         {
+            if (RemoteSpeechMicrophoneGate.ShouldSuppressUserFrame()) continue;
             FrameReady?.Invoke(this, frame);
         }
     }
