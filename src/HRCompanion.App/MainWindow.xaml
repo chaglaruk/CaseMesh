@@ -38,7 +38,7 @@
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom">
                     <Button x:Name="StartMeetingButton" Content="Start meeting" Click="StartMeeting_Click" />
-                    <Button x:Name="StopMeetingButton" Content="Stop" Click="StopMeeting_Click" IsEnabled="False" />
+                    <Button x:Name="StopMeetingButton" Content="Stop" Click="StopMeetingSafe_Click" IsEnabled="False" />
                 </StackPanel>
                 <StackPanel Grid.ColumnSpan="3" Margin="0,58,0,0" Orientation="Horizontal">
                     <TextBlock x:Name="LiveStatusText" Text="MANUAL" FontWeight="Bold" Foreground="#555" />
