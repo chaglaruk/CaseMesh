@@ -1,5 +1,6 @@
 using HRCompanion.Audio.Windows;
 using HRCompanion.Core.Abstractions;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using System.Diagnostics;
@@ -26,10 +27,18 @@ if (args.Contains("--list", StringComparer.OrdinalIgnoreCase)) return;
 
 var selfTest = args.Contains("--self-test", StringComparer.OrdinalIgnoreCase);
 var isolationSelfTest = args.Contains("--isolation-self-test", StringComparer.OrdinalIgnoreCase);
+var discoverAudioSessions = args.Contains("--audio-sessions", StringComparer.OrdinalIgnoreCase);
 var durationSeconds = ReadIntArgument("--seconds", selfTest || isolationSelfTest ? 5 : 15);
 var microphoneNumber = ReadIntArgument("--microphone", 0);
 var useSystemFallback = args.Contains("--system-fallback", StringComparer.OrdinalIgnoreCase);
 var requestedProcessId = ReadNullableIntArgument("--teams");
+
+if (discoverAudioSessions)
+{
+    await DiscoverRenderAudioSessionsAsync(durationSeconds);
+    return;
+}
+
 var selectedProcess = requestedProcessId is null
     ? teams.FirstOrDefault()
     : teams.FirstOrDefault(process => process.ProcessId == requestedProcessId.Value);
@@ -120,6 +129,112 @@ else
     }
 }
 
+async Task DiscoverRenderAudioSessionsAsync(int seconds)
+{
+    Console.WriteLine();
+    Console.WriteLine("AUDIO SESSION DISCOVERY: polling all active Windows render endpoints.");
+    Console.WriteLine("Speak from the remote Teams participant during this window. No audio is captured or saved.");
+    Console.WriteLine($"Polling for {seconds} seconds...");
+
+    var observed = new Dictionary<string, SessionObservation>(StringComparer.Ordinal);
+    using var enumerator = new MMDeviceEnumerator();
+
+    for (var tick = 0; tick < seconds * 4; tick++)
+    {
+        var endpoints = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+        for (var endpointIndex = 0; endpointIndex < endpoints.Count; endpointIndex++)
+        {
+            using var endpoint = endpoints[endpointIndex];
+            try
+            {
+                endpoint.AudioSessionManager.RefreshSessions();
+                var sessions = endpoint.AudioSessionManager.Sessions;
+                for (var sessionIndex = 0; sessionIndex < sessions.Count; sessionIndex++)
+                {
+                    using var session = sessions[sessionIndex];
+                    uint pid;
+                    float peak;
+                    try
+                    {
+                        pid = session.GetProcessID;
+                        peak = session.AudioMeterInformation?.MasterPeakValue ?? 0f;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    var processName = ResolveProcessName(pid);
+                    var key = $"{endpoint.ID}|{pid}|{processName}";
+                    if (!observed.TryGetValue(key, out var observation))
+                    {
+                        observation = new SessionObservation(endpoint.FriendlyName, pid, processName, 0f);
+                    }
+
+                    if (peak > observation.MaxPeak)
+                    {
+                        observed[key] = observation with { MaxPeak = peak };
+                    }
+                    else if (!observed.ContainsKey(key))
+                    {
+                        observed[key] = observation;
+                    }
+                }
+            }
+            catch
+            {
+                // Endpoint/session may disappear while Teams changes devices; retry on the next poll.
+            }
+        }
+
+        await Task.Delay(250);
+        if ((tick + 1) % 4 == 0)
+        {
+            var elapsed = (tick + 1) / 4;
+            var loudest = observed.Values.OrderByDescending(item => item.MaxPeak).FirstOrDefault();
+            Console.WriteLine(loudest is null
+                ? $"{elapsed,3}s  no render sessions observed"
+                : $"{elapsed,3}s  loudest={loudest.ProcessName} PID={loudest.ProcessId} peak={loudest.MaxPeak:F6}");
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Observed render sessions ranked by maximum peak:");
+    var ranked = observed.Values
+        .OrderByDescending(item => item.MaxPeak)
+        .ThenBy(item => item.ProcessName, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(item => item.ProcessId)
+        .ToArray();
+
+    if (ranked.Length == 0)
+    {
+        Console.WriteLine("  <none>");
+        return;
+    }
+
+    foreach (var item in ranked)
+    {
+        Console.WriteLine($"  peak={item.MaxPeak:F6}  PID={item.ProcessId,-7} process={item.ProcessName}  endpoint={item.EndpointName}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Use the PID with a clear peak while the remote Teams participant is speaking as the next process-loopback candidate.");
+}
+
+string ResolveProcessName(uint processId)
+{
+    if (processId == 0) return "System Sounds";
+    try
+    {
+        using var process = Process.GetProcessById(checked((int)processId));
+        return process.ProcessName;
+    }
+    catch
+    {
+        return "<exited-or-unavailable>";
+    }
+}
+
 int ReadIntArgument(string name, int fallback) => ReadNullableIntArgument(name) ?? fallback;
 
 int? ReadNullableIntArgument(string name)
@@ -170,3 +285,5 @@ void InterlockedMax(ref long target, long value)
         if (value <= current) return;
     } while (Interlocked.CompareExchange(ref target, value, current) != current);
 }
+
+internal sealed record SessionObservation(string EndpointName, uint ProcessId, string ProcessName, float MaxPeak);
