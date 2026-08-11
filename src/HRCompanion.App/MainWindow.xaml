@@ -14,7 +14,7 @@
 
         <StackPanel Grid.Row="0">
             <TextBlock Text="HR Companion" FontSize="28" FontWeight="SemiBold" />
-            <TextBlock Margin="0,4,0,16" Foreground="#555" Text="Local case context + fast grounded meeting assistance. No account or sync. · build meeting-fix-2" />
+            <TextBlock Margin="0,4,0,16" Foreground="#555" Text="Local case context + fast grounded meeting assistance. No account or sync. · build meeting-fix-3" />
         </StackPanel>
 
         <Border Grid.Row="1" Background="#F5F7F8" BorderBrush="#CCD3D8" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,12">
