@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -9,6 +10,7 @@ namespace HRCompanion.Infrastructure.OpenAI;
 
 public sealed class OpenAiMeetingAiService : IMeetingAiService
 {
+    private const int MaximumSendAttempts = 2;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _http;
     private readonly IApiKeyStore _keys;
@@ -184,27 +186,40 @@ public sealed class OpenAiMeetingAiService : IMeetingAiService
                     strict = true,
                     schema
                 }
-            }
+            },
+            ["service_tier"] = _options.ServiceTier,
+            ["safety_identifier"] = "hrcompanion-local-user"
         };
-        body["service_tier"] = _options.ServiceTier;
-        body["safety_identifier"] = "hrcompanion-local-user";
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl.TrimEnd('/')}/responses")
+        var endpoint = $"{_options.BaseUrl.TrimEnd('/')}/responses";
+        for (var attempt = 1; attempt <= MaximumSendAttempts; attempt++)
         {
-            Content = JsonContent.Create(body, options: JsonOptions)
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+            {
+                Content = JsonContent.Create(body, options: JsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode) return ExtractOutputText(payload);
+
+            if (attempt < MaximumSendAttempts && IsTransient(response.StatusCode))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(180), cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
             throw new HttpRequestException(
                 $"OpenAI Responses API returned HTTP {(int)response.StatusCode}. Response content was suppressed to protect meeting data.",
                 null,
                 response.StatusCode);
         }
-        return ExtractOutputText(payload);
+
+        throw new InvalidOperationException("OpenAI Responses API retry loop ended unexpectedly.");
     }
+
+    internal static bool IsTransient(HttpStatusCode statusCode) =>
+        statusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests || (int)statusCode >= 500;
 
     internal static string ExtractOutputText(string responseJson)
     {
