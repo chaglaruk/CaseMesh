@@ -14,7 +14,7 @@ public partial class OverlayWindow : Window
 
     public void Render(AssistantResponse response)
     {
-        if (HasContent(_current) && !Equivalent(_current, response)) Archive(_current);
+        if (ResponseHasContent(_current) && !Equivalent(_current, response)) Archive(_current);
         _current = response;
         _historyIndex = -1;
         RenderResponse(_current);
@@ -47,7 +47,7 @@ public partial class OverlayWindow : Window
 
     private void Archive(AssistantResponse response)
     {
-        if (!HasContent(response)) return;
+        if (!ResponseHasContent(response)) return;
         if (_history.Count > 0 && Equivalent(_history[0], response)) return;
         _history.Insert(0, response);
         if (_history.Count > HistoryLimit) _history.RemoveAt(_history.Count - 1);
@@ -69,7 +69,7 @@ public partial class OverlayWindow : Window
             : $"HISTORY {_historyIndex + 1}/{_history.Count}";
     }
 
-    private static bool HasContent(AssistantResponse response) =>
+    private static bool ResponseHasContent(AssistantResponse response) =>
         !string.IsNullOrWhiteSpace(response.Say) ||
         !string.IsNullOrWhiteSpace(response.Watch) ||
         !string.IsNullOrWhiteSpace(response.Ask);
