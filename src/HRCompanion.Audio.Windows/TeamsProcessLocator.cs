@@ -15,6 +15,8 @@ public static class TeamsProcessLocator
         "ms-teams", "Teams", "MSTeams"
     };
 
+    public static bool IsTeamsProcessName(string processName) => CandidateNames.Contains(processName);
+
     public static IReadOnlyList<TeamsProcessInfo> Find()
     {
         var matches = new List<TeamsProcessInfo>();
@@ -24,7 +26,7 @@ public static class TeamsProcessLocator
             {
                 try
                 {
-                    if (!CandidateNames.Contains(process.ProcessName)) continue;
+                    if (!IsTeamsProcessName(process.ProcessName)) continue;
                     matches.Add(new(process.Id, process.ProcessName, string.IsNullOrWhiteSpace(process.MainWindowTitle) ? null : process.MainWindowTitle));
                 }
                 catch (InvalidOperationException)
