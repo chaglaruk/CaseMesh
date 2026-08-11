@@ -1,5 +1,5 @@
 using HRCompanion.Audio.Windows;
-using HRCompanion.Core.Models;
+using HRCompanion.Core.Abstractions;
 
 namespace HRCompanion.Infrastructure.Tests;
 
