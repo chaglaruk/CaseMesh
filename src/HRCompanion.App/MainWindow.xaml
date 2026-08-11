@@ -14,7 +14,7 @@
 
         <StackPanel Grid.Row="0">
             <TextBlock Text="HR Companion" FontSize="28" FontWeight="SemiBold" />
-            <TextBlock Margin="0,4,0,16" Foreground="#555" Text="Local case context + fast grounded meeting assistance. No account or sync. · build meeting-fix-5" />
+            <TextBlock Margin="0,4,0,16" Foreground="#555" Text="Local case context + fast grounded meeting assistance. No account or sync. · build meeting-fix-6" />
         </StackPanel>
 
         <Border Grid.Row="1" Background="#F5F7F8" BorderBrush="#CCD3D8" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,12">
@@ -112,6 +112,8 @@
                         <TextBlock Text="Latest assistance" FontWeight="SemiBold" FontSize="16" />
                         <TextBlock Margin="0,14,0,2" Text="SAY" FontWeight="Bold" />
                         <TextBlock x:Name="SayText" Text="—" TextWrapping="Wrap" FontSize="16" />
+                        <TextBlock Margin="0,18,0,2" Text="NEXT" FontWeight="Bold" Foreground="#4C657A" />
+                        <TextBlock x:Name="NextCueText" Text="—" TextWrapping="Wrap" />
                         <TextBlock Margin="0,18,0,2" Text="WATCH" FontWeight="Bold" Foreground="#8A5A00" />
                         <TextBlock x:Name="WatchText" Text="—" TextWrapping="Wrap" />
                         <TextBlock Margin="0,18,0,2" Text="ASK" FontWeight="Bold" Foreground="#245A8D" />
