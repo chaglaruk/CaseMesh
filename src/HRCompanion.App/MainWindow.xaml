@@ -14,7 +14,7 @@
 
         <StackPanel Grid.Row="0">
             <TextBlock Text="HR Companion" FontSize="28" FontWeight="SemiBold" />
-            <TextBlock Margin="0,4,0,16" Foreground="#555" Text="Local case context + fast grounded meeting assistance. No account or sync. · build meeting-fix-6" />
+            <TextBlock Margin="0,4,0,16" Foreground="#555" Text="Local case context + fast grounded meeting assistance. No account or sync. · build meeting-fix-7" />
         </StackPanel>
 
         <Border Grid.Row="1" Background="#F5F7F8" BorderBrush="#CCD3D8" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,12">
@@ -44,20 +44,26 @@
                     <ComboBox x:Name="MicrophoneBox" DisplayMemberPath="DisplayName" Margin="0,5,0,0" MinWidth="220" />
                 </StackPanel>
 
-                <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom">
+                <WrapPanel Grid.Row="0" Grid.Column="2" VerticalAlignment="Bottom">
                     <Button x:Name="StartMeetingButton" MinWidth="96" MinHeight="32" Content="Start meeting" Click="StartMeeting_Click" />
                     <Button x:Name="StopMeetingButton" MinWidth="64" MinHeight="32" Content="Stop" Click="StopMeetingSafe_Click" IsEnabled="False" />
-                </StackPanel>
+                    <Button x:Name="PauseUserMicButton" MinWidth="104" MinHeight="32" Margin="6,0,0,0"
+                            Content="Pause my mic" Click="PauseUserMic_Click" IsEnabled="False"
+                            ToolTip="Use this when you are muted in Teams or speaking privately. HR Companion otherwise hears the Windows microphone independently of Teams mute." />
+                </WrapPanel>
 
                 <StackPanel Grid.Row="1" Grid.ColumnSpan="3" Margin="0,10,0,0" Orientation="Horizontal">
                     <TextBlock x:Name="LiveStatusText" Text="MANUAL" FontWeight="Bold" Foreground="#555" />
                     <TextBlock Text="  Recent: " Foreground="#555" />
-                    <TextBlock x:Name="RecentTranscriptText" Text="—" TextTrimming="CharacterEllipsis" MaxWidth="650" />
+                    <TextBlock x:Name="RecentTranscriptText" Text="—" TextTrimming="CharacterEllipsis" MaxWidth="610" />
                     <TextBlock x:Name="LatencyText" Margin="12,0,0,0" Foreground="#555" />
                 </StackPanel>
 
-                <TextBlock x:Name="PreflightText" Grid.Row="2" Grid.ColumnSpan="3" Margin="0,6,0,0" Foreground="#555"
-                           Text="Preflight: checking local dependencies..." TextWrapping="Wrap" />
+                <StackPanel Grid.Row="2" Grid.ColumnSpan="3" Margin="0,6,0,0">
+                    <TextBlock x:Name="AudioGuardText" Foreground="#8A5A00" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock x:Name="PreflightText" Margin="0,4,0,0" Foreground="#555"
+                               Text="Preflight: checking local dependencies..." TextWrapping="Wrap" />
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -69,13 +75,16 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="Case Brain" FontWeight="SemiBold" />
-                    <TextBlock x:Name="DocumentCountText" Text="Loading…" Margin="0,4,0,0" />
+                    <TextBlock x:Name="DocumentCountText" Text="Loading…" Margin="0,4,0,0" TextWrapping="Wrap" />
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <WrapPanel Grid.Column="1" HorizontalAlignment="Right">
                     <Button Content="Import files" Click="ImportFiles_Click" />
                     <Button Content="Import folder" Click="ImportFolder_Click" />
+                    <Button Content="Import ACAS/WP" Click="ImportRestricted_Click"
+                            ToolTip="Imports restricted ACAS / Without Prejudice material. It is excluded from normal HR-meeting retrieval." />
+                    <Button Content="Review sources" Click="ReviewSources_Click" />
                     <Button Content="Import working context" Click="ImportWorkingContext_Click" />
-                </StackPanel>
+                </WrapPanel>
             </Grid>
         </Border>
 
@@ -102,17 +111,19 @@
 
                     <TextBlock Margin="0,22,0,4" Text="Meeting position / objective (optional)" FontWeight="SemiBold" />
                     <TextBlock Foreground="#555" TextWrapping="Wrap"
-                               Text="Add a meeting-specific position or objective the assistant should keep in mind, for example a preference for redeployment or not agreeing to a fixed return date today. It is saved as USER_POSITION, not verified evidence." />
+                               Text="Add a position or objective for this meeting only. It is sent as USER_POSITION context for this meeting, not stored as documentary evidence or a permanent Case Brain fact." />
                     <TextBox x:Name="ContextBox" Margin="0,8,0,0" Height="72" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-                    <Button Margin="0,8,0,0" HorizontalAlignment="Left" Content="Save position / objective" Click="SaveContext_Click" />
+                    <Button Margin="0,8,0,0" HorizontalAlignment="Left" Content="Use for this meeting" Click="SaveContext_Click" />
                 </StackPanel>
 
                 <Border Grid.Column="1" Background="#FAFAFA" BorderBrush="#DDD" BorderThickness="1" CornerRadius="8" Padding="14" VerticalAlignment="Top" Margin="0,0,0,8">
                     <StackPanel>
                         <TextBlock Text="Latest assistance" FontWeight="SemiBold" FontSize="16" />
+                        <TextBlock Margin="0,12,0,2" Text="HEARD" FontWeight="Bold" Foreground="#555" />
+                        <TextBlock x:Name="LatestHrText" Text="—" TextWrapping="Wrap" Foreground="#555" />
                         <TextBlock Margin="0,14,0,2" Text="SAY" FontWeight="Bold" />
                         <TextBlock x:Name="SayText" Text="—" TextWrapping="Wrap" FontSize="16" />
-                        <TextBlock Margin="0,18,0,2" Text="NEXT" FontWeight="Bold" Foreground="#4C657A" />
+                        <TextBlock Margin="0,18,0,2" Text="NEXT — DON'T SAY YET" FontWeight="Bold" Foreground="#4C657A" />
                         <TextBlock x:Name="NextCueText" Text="—" TextWrapping="Wrap" />
                         <TextBlock Margin="0,18,0,2" Text="WATCH" FontWeight="Bold" Foreground="#8A5A00" />
                         <TextBlock x:Name="WatchText" Text="—" TextWrapping="Wrap" />
