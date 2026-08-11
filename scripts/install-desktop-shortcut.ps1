@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $PublishScript = Join-Path $PSScriptRoot 'publish-local.ps1'
-$ExePath = Join-Path $RepoRoot 'artifacts\win-x64\HRCompanion.App.exe'
+$ExePath = Join-Path $RepoRoot 'artifacts\win-x64\HRCompanion.exe'
 
 Write-Host 'Publishing HR Companion...'
 & $PublishScript
