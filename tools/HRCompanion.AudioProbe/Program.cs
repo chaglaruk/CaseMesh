@@ -28,8 +28,9 @@ if (args.Contains("--list", StringComparer.OrdinalIgnoreCase)) return;
 var selfTest = args.Contains("--self-test", StringComparer.OrdinalIgnoreCase);
 var isolationSelfTest = args.Contains("--isolation-self-test", StringComparer.OrdinalIgnoreCase);
 var discoverAudioSessions = args.Contains("--audio-sessions", StringComparer.OrdinalIgnoreCase);
-var useGuardedSystem = args.Contains("--guarded-system", StringComparer.OrdinalIgnoreCase);
-var durationSeconds = ReadIntArgument("--seconds", selfTest || isolationSelfTest ? 5 : 15);
+var echoLeakageTest = args.Contains("--echo-leakage", StringComparer.OrdinalIgnoreCase);
+var useGuardedSystem = echoLeakageTest || args.Contains("--guarded-system", StringComparer.OrdinalIgnoreCase);
+var durationSeconds = ReadIntArgument("--seconds", selfTest || isolationSelfTest ? 5 : echoLeakageTest ? 30 : 15);
 var microphoneNumber = ReadIntArgument("--microphone", 0);
 var useSystemFallback = args.Contains("--system-fallback", StringComparer.OrdinalIgnoreCase);
 var requestedProcessId = ReadNullableIntArgument("--teams");
@@ -37,6 +38,14 @@ var requestedProcessId = ReadNullableIntArgument("--teams");
 if (discoverAudioSessions)
 {
     await DiscoverRenderAudioSessionsAsync(durationSeconds);
+    return;
+}
+
+if (echoLeakageTest && teams.Count == 0)
+{
+    Console.Error.WriteLine();
+    Console.Error.WriteLine("Echo-leakage test requires an active Teams meeting on this PC.");
+    Environment.ExitCode = 2;
     return;
 }
 
@@ -79,9 +88,22 @@ if (remote is TeamsAwareSystemLoopbackCaptureSource guarded)
 
 long microphoneBytes = 0;
 long remoteBytes = 0;
+long microphonePeak = 0;
 long remotePeak = 0;
+long microphoneWindowPeak = 0;
+long remoteWindowPeak = 0;
 Exception? captureFailure = null;
-microphone.FrameReady += (_, frame) => Interlocked.Add(ref microphoneBytes, frame.Pcm16Bit24KhzMono.Length);
+microphone.FrameReady += (_, frame) =>
+{
+    Interlocked.Add(ref microphoneBytes, frame.Pcm16Bit24KhzMono.Length);
+    var span = frame.Pcm16Bit24KhzMono.Span;
+    for (var index = 0; index + 1 < span.Length; index += 2)
+    {
+        var sample = Math.Abs((int)(short)(span[index] | span[index + 1] << 8));
+        InterlockedMax(ref microphonePeak, sample);
+        InterlockedMax(ref microphoneWindowPeak, sample);
+    }
+};
 remote.FrameReady += (_, frame) =>
 {
     Interlocked.Add(ref remoteBytes, frame.Pcm16Bit24KhzMono.Length);
@@ -90,6 +112,7 @@ remote.FrameReady += (_, frame) =>
     {
         var sample = Math.Abs((int)(short)(span[index] | span[index + 1] << 8));
         InterlockedMax(ref remotePeak, sample);
+        InterlockedMax(ref remoteWindowPeak, sample);
     }
 };
 microphone.Faulted += (_, error) => captureFailure ??= error;
@@ -98,11 +121,20 @@ remote.Faulted += (_, error) => captureFailure ??= error;
 Console.WriteLine();
 Console.WriteLine($"Microphone/USER: {microphone.DisplayName}");
 Console.WriteLine($"Remote/HR:       {remote.DisplayName}");
-Console.WriteLine(useGuardedSystem
-    ? "GUARDED SYSTEM MODE: non-Teams render activity blocks HR frames to prevent misattribution."
-    : useSystemFallback
-        ? "DEGRADED: system loopback includes unrelated audio and cannot verify Gate 1."
-        : "ISOLATED MODE: Windows includes only the selected process tree; verify this with unrelated audio playing.");
+if (echoLeakageTest)
+{
+    Console.WriteLine("ECHO LEAKAGE MODE: keep the laptop microphone enabled; do not speak during the remote-only segment.");
+    Console.WriteLine("Suggested 30s sequence: 0-10s silence, 10-20s remote phone speaks continuously, 20-30s you speak normally.");
+    Console.WriteLine("Compare per-second USER_peak with HR_peak; remote-only speech should not create a speech-level USER peak.");
+}
+else
+{
+    Console.WriteLine(useGuardedSystem
+        ? "GUARDED SYSTEM MODE: non-Teams render activity blocks HR frames to prevent misattribution."
+        : useSystemFallback
+            ? "DEGRADED: system loopback includes unrelated audio and cannot verify Gate 1."
+            : "ISOLATED MODE: Windows includes only the selected process tree; verify this with unrelated audio playing.");
+}
 Console.WriteLine($"Capturing for {durationSeconds} seconds...");
 
 try
@@ -113,7 +145,11 @@ try
     for (var second = 1; second <= durationSeconds && captureFailure is null; second++)
     {
         await Task.Delay(1000);
-        Console.WriteLine($"{second,3}s  USER={Interlocked.Read(ref microphoneBytes) / 1024.0:F1} KiB  HR={Interlocked.Read(ref remoteBytes) / 1024.0:F1} KiB");
+        var userSecondPeak = Interlocked.Exchange(ref microphoneWindowPeak, 0);
+        var hrSecondPeak = Interlocked.Exchange(ref remoteWindowPeak, 0);
+        Console.WriteLine(echoLeakageTest
+            ? $"{second,3}s  USER_peak={userSecondPeak,5}  HR_peak={hrSecondPeak,5}  USER={Interlocked.Read(ref microphoneBytes) / 1024.0:F1} KiB  HR={Interlocked.Read(ref remoteBytes) / 1024.0:F1} KiB"
+            : $"{second,3}s  USER={Interlocked.Read(ref microphoneBytes) / 1024.0:F1} KiB  HR={Interlocked.Read(ref remoteBytes) / 1024.0:F1} KiB");
     }
 }
 finally
@@ -131,7 +167,9 @@ if (captureFailure is not null)
 }
 else
 {
+    var userPeak = Interlocked.Read(ref microphonePeak);
     var peak = Interlocked.Read(ref remotePeak);
+    if (echoLeakageTest) Console.WriteLine($"Microphone/USER peak sample: {userPeak}");
     Console.WriteLine($"Remote peak sample: {peak}");
     if (selfTest && peak < 100)
     {
