@@ -84,11 +84,18 @@ public sealed class MeetingAssistantOrchestrator
             return new(AssistantResponse.NoAction(), null);
         }
 
-        // Realtime VAD can split one natural HR speaking turn at a thinking pause. Recombine the
-        // immediately consecutive HR floor (until the user speaks or a real gap occurs) so a question
-        // asked in the middle is not lost merely because HR continues with explanatory sentences.
-        var effectiveTurn = BuildCurrentHrFloor(state, turn);
-        var deterministic = _cues.Analyze(effectiveTurn.Text);
+        var latestOnly = _cues.Analyze(turn.Text);
+
+        // Realtime VAD can split one natural HR speaking turn at a thinking pause. If the newest
+        // segment is itself informational, recombine the immediately consecutive HR floor so a
+        // direct question asked just before it is not lost when HR continues explaining. If the
+        // newest segment already contains a question/request, keep it as the active turn so an older
+        // question cannot steal priority from the newer one.
+        var shouldCarryFloor = !latestOnly.NeedsAssistant &&
+                               !latestOnly.PotentialWrittenFollowUp &&
+                               !latestOnly.PotentialCommitment;
+        var effectiveTurn = shouldCarryFloor ? BuildCurrentHrFloor(state, turn) : turn;
+        var deterministic = ReferenceEquals(effectiveTurn, turn) ? latestOnly : _cues.Analyze(effectiveTurn.Text);
         MeetingAnalysis analysis = deterministic;
         DateTimeOffset? analysisStartedAt = null;
         DateTimeOffset? analysisCompletedAt = null;
