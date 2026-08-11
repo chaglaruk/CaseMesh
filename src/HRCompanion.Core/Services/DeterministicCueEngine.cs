@@ -30,10 +30,10 @@ public sealed partial class DeterministicCueEngine
         (["grievance"], ["grievance"]),
         (["settlement", "without prejudice"], ["settlement", "without prejudice"]),
         (["sick pay", "ssp", "statutory sick pay", "company sick pay", "csp"],
-         ["sick pay", "SSP", "CSP", "company sick pay", "service band", "entitlement", "rolling period", "ledger"]),
+         ["company sick pay", "CSP", "service band", "entitlement", "ledger"]),
         (["payroll", "underpayment", "pay shortfall", "wage deduction", "deduction", "advance payment", "advance deduction",
           "unresolved about your pay", "outstanding about your pay", "still unresolved about your pay"],
-         ["payroll", "underpayment", "deduction", "advance", "reconciliation", "correction", "payment discrepancy", "ledger"]),
+         ["payroll", "reconciliation", "payment discrepancy", "deduction", "advance", "correction", "ledger"]),
         (["reporting line", "line manager", "report to", "manager"],
          ["reporting", "manager", "role"])
     ];
@@ -100,12 +100,13 @@ public sealed partial class DeterministicCueEngine
     private static IReadOnlyList<string> ExpandRetrievalTerms(string text, IReadOnlyList<string> baseTerms)
     {
         var lower = text.ToLowerInvariant();
-        var terms = new List<string>(baseTerms);
+        var terms = new List<string>();
         foreach (var (triggers, aliases) in HrConceptAliases)
         {
             if (!triggers.Any(trigger => lower.Contains(trigger, StringComparison.Ordinal))) continue;
             terms.AddRange(aliases);
         }
+        terms.AddRange(baseTerms);
 
         return terms
             .Where(x => !string.IsNullOrWhiteSpace(x))
