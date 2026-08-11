@@ -32,6 +32,65 @@ public sealed class MeetingAssistantOrchestratorTests
     }
 
     [Fact]
+    public async Task ConsecutiveHrSegments_CarryEmbeddedQuestionIntoFinalSegment()
+    {
+        var repository = new FakeRepository();
+        var ai = new FakeAi();
+        var orchestrator = new MeetingAssistantOrchestrator(repository, ai, new DeterministicCueEngine());
+        var meeting = new MeetingState(Guid.NewGuid(), "Synthetic", DateTimeOffset.UtcNow);
+        var origin = DateTimeOffset.UtcNow;
+
+        var first = TranscriptTurn.Final(
+            meeting.MeetingId, SpeakerRole.Hr,
+            "I want to cover a few points about your return.",
+            origin, origin.AddSeconds(1), "synthetic");
+        var second = TranscriptTurn.Final(
+            meeting.MeetingId, SpeakerRole.Hr,
+            "What adjustment are you asking us to consider?",
+            origin.AddSeconds(1.2), origin.AddSeconds(2), "synthetic");
+        var third = TranscriptTurn.Final(
+            meeting.MeetingId, SpeakerRole.Hr,
+            "I also want to explain the process after that.",
+            origin.AddSeconds(2.2), origin.AddSeconds(3), "synthetic");
+
+        await orchestrator.AcceptFinalTurnAsync(meeting, first);
+        await orchestrator.AcceptFinalTurnAsync(meeting, second);
+        await orchestrator.AcceptFinalTurnAsync(meeting, third);
+
+        Assert.Equal(2, ai.ResponseCalls);
+        Assert.NotNull(ai.LastResponseTurnText);
+        Assert.Contains("What adjustment are you asking us to consider?", ai.LastResponseTurnText, StringComparison.Ordinal);
+        Assert.Contains("I also want to explain the process after that.", ai.LastResponseTurnText, StringComparison.Ordinal);
+        Assert.Equal("hr-floor", ai.LastResponseTurnSource);
+    }
+
+    [Fact]
+    public async Task UserTurn_BreaksHrFloorSoOldQuestionIsNotCarriedForward()
+    {
+        var repository = new FakeRepository();
+        var ai = new FakeAi();
+        var orchestrator = new MeetingAssistantOrchestrator(repository, ai, new DeterministicCueEngine());
+        var meeting = new MeetingState(Guid.NewGuid(), "Synthetic", DateTimeOffset.UtcNow);
+        var origin = DateTimeOffset.UtcNow;
+
+        await orchestrator.AcceptFinalTurnAsync(meeting, TranscriptTurn.Final(
+            meeting.MeetingId, SpeakerRole.Hr,
+            "What adjustment are you asking us to consider?",
+            origin, origin.AddSeconds(1), "synthetic"));
+        await orchestrator.AcceptFinalTurnAsync(meeting, TranscriptTurn.Final(
+            meeting.MeetingId, SpeakerRole.User,
+            "I need a safe return plan.",
+            origin.AddSeconds(1.2), origin.AddSeconds(2), "synthetic"));
+        var before = ai.ResponseCalls;
+        await orchestrator.AcceptFinalTurnAsync(meeting, TranscriptTurn.Final(
+            meeting.MeetingId, SpeakerRole.Hr,
+            "I will now explain the next administrative step.",
+            origin.AddSeconds(2.2), origin.AddSeconds(3), "synthetic"));
+
+        Assert.Equal(before, ai.ResponseCalls);
+    }
+
+    [Fact]
     public async Task PersistenceFailure_DoesNotMutateMeetingState()
     {
         var repository = new FakeRepository { Failure = new IOException("synthetic database failure") };
@@ -86,6 +145,8 @@ public sealed class MeetingAssistantOrchestratorTests
     {
         public int AnalysisCalls { get; private set; }
         public int ResponseCalls { get; private set; }
+        public string? LastResponseTurnText { get; private set; }
+        public string? LastResponseTurnSource { get; private set; }
 
         public Task<MeetingAnalysis> AnalyzeTurnAsync(
             MeetingState state,
@@ -111,6 +172,8 @@ public sealed class MeetingAssistantOrchestratorTests
             CancellationToken cancellationToken = default)
         {
             ResponseCalls++;
+            LastResponseTurnText = latestHrTurn.Text;
+            LastResponseTurnSource = latestHrTurn.Source;
             return Task.FromResult(new AssistantResponse(
                 analysis.Intent,
                 AssistantImportance.High,
