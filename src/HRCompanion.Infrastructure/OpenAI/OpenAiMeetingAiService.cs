@@ -99,13 +99,14 @@ public sealed class OpenAiMeetingAiService : IMeetingAiService
                 intent = new { type = "string", @enum = Enum.GetNames<MeetingIntent>() },
                 importance = new { type = "string", @enum = Enum.GetNames<AssistantImportance>() },
                 say = saySchema,
+                next = new { type = new[] { "string", "null" }, maxLength = 400 },
                 watch = new { type = new[] { "string", "null" }, maxLength = 350 },
                 ask = new { type = new[] { "string", "null" }, maxLength = 350 },
                 needsWrittenFollowUp = new { type = "boolean" },
                 confidence = new { type = "number", minimum = 0, maximum = 1 },
                 sourceIds = new { type = "array", items = sourceIdItemSchema, maxItems = Math.Min(8, allowedIds.Count) }
             },
-            required = new[] { "intent", "importance", "say", "watch", "ask", "needsWrittenFollowUp", "confidence", "sourceIds" }
+            required = new[] { "intent", "importance", "say", "next", "watch", "ask", "needsWrittenFollowUp", "confidence", "sourceIds" }
         };
 
         var json = await SendStructuredAsync(
@@ -146,7 +147,10 @@ public sealed class OpenAiMeetingAiService : IMeetingAiService
             GetNullableString(root, "ask"),
             root.GetProperty("needsWrittenFollowUp").GetBoolean(),
             root.GetProperty("confidence").GetDouble(),
-            sources);
+            sources)
+        {
+            Next = GetOptionalNullableString(root, "next")
+        };
     }
 
     private async Task<string> SendStructuredAsync(
@@ -231,5 +235,11 @@ public sealed class OpenAiMeetingAiService : IMeetingAiService
     {
         var element = root.GetProperty(name);
         return element.ValueKind == JsonValueKind.Null ? null : element.GetString();
+    }
+
+    private static string? GetOptionalNullableString(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var element) || element.ValueKind == JsonValueKind.Null) return null;
+        return element.GetString();
     }
 }
