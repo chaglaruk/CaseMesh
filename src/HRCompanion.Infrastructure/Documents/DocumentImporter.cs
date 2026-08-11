@@ -23,8 +23,17 @@ public sealed class DocumentImporter : IDocumentImporter
         ];
     }
 
-    public async Task<DocumentImportResult> ImportPathsAsync(IEnumerable<string> paths, CancellationToken cancellationToken = default)
+    public Task<DocumentImportResult> ImportPathsAsync(
+        IEnumerable<string> paths,
+        CancellationToken cancellationToken = default) =>
+        ImportPathsAsync(paths, DocumentImportOptions.OrdinaryCurrent, cancellationToken);
+
+    public async Task<DocumentImportResult> ImportPathsAsync(
+        IEnumerable<string> paths,
+        DocumentImportOptions options,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(options);
         var files = ExpandPaths(paths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var imported = 0;
         var duplicate = 0;
@@ -75,7 +84,9 @@ public sealed class DocumentImporter : IDocumentImporter
                     extracted.MediaType,
                     DateTimeOffset.UtcNow,
                     extracted.SourceDate,
-                    chunks.Count);
+                    chunks.Count,
+                    options.Channel,
+                    options.Authority);
 
                 await _repository.SaveDocumentAsync(document, chunks, cancellationToken).ConfigureAwait(false);
                 imported++;
