@@ -115,6 +115,20 @@ public sealed class DeterministicCueEngineTests
     }
 
     [Fact]
+    public void BroadUnresolvedPayQuestion_RetrievesPayrollAndCspEvidence()
+    {
+        var result = _sut.Analyze("What exactly is still unresolved about your pay?");
+
+        Assert.Equal(MeetingIntent.Question, result.Intent);
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("payroll", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("reconciliation", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("company sick pay", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("CSP", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("service band", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.RetrievalTerms, x => x.Equals("entitlement", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void RefusalToReturnQuestion_ExpandsSafeReturnAliases()
     {
         var result = _sut.Analyze("Are you refusing to return to the same site?");
