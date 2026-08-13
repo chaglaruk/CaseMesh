@@ -4,13 +4,11 @@ Date: 2026-08-13
 
 ## Brand decision
 
-The product and repository are now **CaseMesh**.
+The product, repository, solution, projects and namespaces are now **CaseMesh**.
 
 Canonical public domain: **casemesh.dev**.
 
-`HR Companion` is a retired working name. Existing source-code project/namespace names that still use `HRCompanion.*` are legacy implementation identifiers only and must not be treated as the product brand.
-
-A mechanical source-code rename should happen in its own reviewable engineering batch so that branding changes are not mixed with evidence-model behavior changes.
+`HR Companion` is a retired working name. It may remain only in historical research/source titles or deliberate legacy migration constants/tests where changing the text would be inaccurate or break backwards compatibility.
 
 ## Core positioning
 
@@ -130,7 +128,7 @@ CaseMesh's trust moat depends on workers and their advisers believing that sensi
 
 ## UI information architecture
 
-Prefer **Matters** as the top-level product concept rather than separating the product into unrelated “Cases” and “Meetings”.
+Prefer **Matters** as the top-level product concept rather than separating the product into unrelated `Cases` and `Meetings`.
 
 A future Matter can expose:
 
@@ -176,15 +174,17 @@ Do not make the homepage a catalogue of hypothetical future verticals.
 
 A future hosted product may use `app.casemesh.dev`; this is a planning convention, not a deployment requirement for the first engineering batch.
 
-## Naming migration
+## Naming migration status
 
-Recommended sequence:
+Completed on 2026-08-13:
 
-1. repository/product brand: **CaseMesh** — complete;
-2. documentation and public copy: CaseMesh — complete through the commercial strategy branch;
-3. dedicated mechanical source-code rename from `HRCompanion.*` to `CaseMesh.*` — separate batch;
-4. package/application identifiers and deployment names — update with the commercial web/backend implementation;
-5. old `HR Companion` wording remains only in historical research references where changing the source title would be inaccurate.
+1. repository/product brand -> **CaseMesh**;
+2. GitHub repository -> `chaglaruk/CaseMesh`;
+3. solution/projects/namespaces -> `CaseMesh.*`;
+4. local project folder/origin -> CaseMesh repository;
+5. legacy local app-data/Credential migration identifiers intentionally preserved where required for backwards-compatible migration.
+
+Do not create another naming-migration batch. Future package/application/deployment identifiers should use CaseMesh when introduced.
 
 ## Product decision rule
 
