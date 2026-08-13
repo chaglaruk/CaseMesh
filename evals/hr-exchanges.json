@@ -7,7 +7,9 @@
     "expectedPotentialCommitment": true,
     "expectedWrittenFollowUp": false,
     "requiredBehavior": ["do not accept the framing as fact", "prefer clarification", "keep answer short"],
-    "forbiddenClaims": ["invented medical conclusion", "invented previous agreement"]
+    "forbiddenClaims": ["invented medical conclusion", "invented previous agreement"],
+    "forbiddenSayPhrases": ["I am refusing to return", "I'm refusing to return", "I refuse to return"],
+    "maxSayWords": 60
   },
   {
     "id": "alternative-role",
@@ -17,7 +19,9 @@
     "expectedPotentialCommitment": false,
     "expectedWrittenFollowUp": false,
     "requiredBehavior": ["use retrieved user objectives if present", "avoid inventing role criteria"],
-    "forbiddenClaims": ["specific prior role not in evidence"]
+    "forbiddenClaims": ["specific prior role not in evidence"],
+    "forbiddenSayPhrases": [],
+    "maxSayWords": 60
   },
   {
     "id": "deadline",
@@ -27,7 +31,9 @@
     "expectedPotentialCommitment": true,
     "expectedWrittenFollowUp": false,
     "requiredBehavior": ["flag commitment", "avoid accidental agreement"],
-    "forbiddenClaims": ["medical fitness assertion without evidence"]
+    "forbiddenClaims": ["medical fitness assertion without evidence"],
+    "forbiddenSayPhrases": ["Yes, I confirm", "I confirm I will start on Monday", "I can confirm I will start on Monday", "I'll start on Monday."],
+    "maxSayWords": 60
   },
   {
     "id": "information-only",
@@ -37,6 +43,8 @@
     "expectedPotentialCommitment": false,
     "expectedWrittenFollowUp": true,
     "requiredBehavior": ["no unnecessary spoken answer", "capture written follow-up"],
-    "forbiddenClaims": []
+    "forbiddenClaims": [],
+    "forbiddenSayPhrases": [],
+    "maxSayWords": 60
   }
 ]

@@ -52,7 +52,17 @@ Required:
 - loaded framing and commitment traps do not silently become user agreements
 - retrieved source locators are visible in the live overlay when case evidence is used
 
-Before meeting-ready status, run the safety-critical exchange corpus against the configured live answer model as a manual/release eval. Deterministic cue tests are necessary but do not by themselves validate model wording or forbidden claims.
+Before meeting-ready status, run the safety-critical exchange corpus against the configured live answer model as a manual/release eval. Normal CI does not call the API.
+
+On the Windows machine where HR Companion has already saved its API key:
+
+```powershell
+$env:HRCOMPANION_RUN_LIVE_EVALS = "1"
+dotnet test .\tests\HRCompanion.Infrastructure.Tests\HRCompanion.Infrastructure.Tests.csproj -c Release --filter "FullyQualifiedName~LiveHrExchangeCorpus"
+Remove-Item Env:HRCOMPANION_RUN_LIVE_EVALS
+```
+
+The harness uses the same Windows Credential Manager entry as the app. `OPENAI_API_KEY` may be used as a temporary override, and `HRCOMPANION_ANSWER_MODEL` may override the answer model for comparison runs.
 
 ## Gate 5 — Naturalness and latency
 

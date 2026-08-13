@@ -6,9 +6,6 @@ public sealed class MeetingState
     private const int MaxRollingContextCharacters = 12000;
     private readonly object _sync = new();
     private readonly List<TranscriptTurn> _turns = [];
-    private readonly List<string> _openQuestions = [];
-    private readonly List<string> _commitments = [];
-    private readonly List<string> _writtenFollowUps = [];
     private string _rollingSummary = string.Empty;
 
     public MeetingState(Guid meetingId, string caseName, DateTimeOffset startedAt)
@@ -38,30 +35,6 @@ public sealed class MeetingState
         }
     }
 
-    public IReadOnlyList<string> OpenQuestions
-    {
-        get
-        {
-            lock (_sync) return _openQuestions.ToArray();
-        }
-    }
-
-    public IReadOnlyList<string> Commitments
-    {
-        get
-        {
-            lock (_sync) return _commitments.ToArray();
-        }
-    }
-
-    public IReadOnlyList<string> WrittenFollowUps
-    {
-        get
-        {
-            lock (_sync) return _writtenFollowUps.ToArray();
-        }
-    }
-
     public void AddTurn(TranscriptTurn turn)
     {
         if (turn.MeetingId != MeetingId)
@@ -85,26 +58,6 @@ public sealed class MeetingState
 
             RebuildRollingContextLocked();
         }
-    }
-
-    public void SetRollingSummary(string summary)
-    {
-        lock (_sync) _rollingSummary = summary.Trim();
-    }
-
-    public void ReplaceOpenQuestions(IEnumerable<string> items)
-    {
-        lock (_sync) Replace(_openQuestions, items);
-    }
-
-    public void ReplaceCommitments(IEnumerable<string> items)
-    {
-        lock (_sync) Replace(_commitments, items);
-    }
-
-    public void ReplaceWrittenFollowUps(IEnumerable<string> items)
-    {
-        lock (_sync) Replace(_writtenFollowUps, items);
     }
 
     public IReadOnlyList<TranscriptTurn> RecentTurns(int max = DefaultRecentTurnWindow)
@@ -145,10 +98,4 @@ public sealed class MeetingState
     };
 
     private static string CollapseWhitespace(string value) => string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-
-    private static void Replace(List<string> target, IEnumerable<string> source)
-    {
-        target.Clear();
-        target.AddRange(source.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()));
-    }
 }

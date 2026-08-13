@@ -31,7 +31,7 @@ Local case DB <---- import/chunk/FTS5 <---- documents/emails                |   
 Small, stable, explicit records: people, objectives, verified facts, user positions, important dates.
 
 ### Tier 2 — Current meeting state
-The most recent 32 actual transcript turns plus compacted earlier actual transcript. Compaction preserves speaker ownership, chronology, and the original spoken text; it is not an AI-generated factual summary. Open questions, commitments, and written follow-ups remain explicit state fields and must not be populated by guesswork.
+The most recent 32 actual transcript turns plus compacted earlier actual transcript. Compaction preserves speaker ownership, chronology, and the original spoken text; it is not an AI-generated factual summary. Structured open-question or commitment tracking is intentionally not claimed until a reliable extraction path is implemented and validated.
 
 ### Tier 3 — Retrieved evidence
 The few most relevant chunks from local source documents, plus source metadata.
