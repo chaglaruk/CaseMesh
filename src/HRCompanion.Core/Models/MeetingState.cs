@@ -4,7 +4,12 @@ public sealed class MeetingState
 {
     private const int DefaultRecentTurnWindow = 32;
     private const int MaxRollingContextCharacters = 12000;
+    private readonly object _sync = new();
     private readonly List<TranscriptTurn> _turns = [];
+    private readonly List<string> _openQuestions = [];
+    private readonly List<string> _commitments = [];
+    private readonly List<string> _writtenFollowUps = [];
+    private string _rollingSummary = string.Empty;
 
     public MeetingState(Guid meetingId, string caseName, DateTimeOffset startedAt)
     {
@@ -16,15 +21,46 @@ public sealed class MeetingState
     public Guid MeetingId { get; }
     public string CaseName { get; }
     public DateTimeOffset StartedAt { get; }
-    public IReadOnlyList<TranscriptTurn> Turns => _turns;
-    public string RollingSummary { get; private set; } = string.Empty;
-    public IReadOnlyList<string> OpenQuestions => _openQuestions;
-    public IReadOnlyList<string> Commitments => _commitments;
-    public IReadOnlyList<string> WrittenFollowUps => _writtenFollowUps;
 
-    private readonly List<string> _openQuestions = [];
-    private readonly List<string> _commitments = [];
-    private readonly List<string> _writtenFollowUps = [];
+    public IReadOnlyList<TranscriptTurn> Turns
+    {
+        get
+        {
+            lock (_sync) return _turns.ToArray();
+        }
+    }
+
+    public string RollingSummary
+    {
+        get
+        {
+            lock (_sync) return _rollingSummary;
+        }
+    }
+
+    public IReadOnlyList<string> OpenQuestions
+    {
+        get
+        {
+            lock (_sync) return _openQuestions.ToArray();
+        }
+    }
+
+    public IReadOnlyList<string> Commitments
+    {
+        get
+        {
+            lock (_sync) return _commitments.ToArray();
+        }
+    }
+
+    public IReadOnlyList<string> WrittenFollowUps
+    {
+        get
+        {
+            lock (_sync) return _writtenFollowUps.ToArray();
+        }
+    }
 
     public void AddTurn(TranscriptTurn turn)
     {
@@ -33,36 +69,60 @@ public sealed class MeetingState
             throw new InvalidOperationException("Transcript turn belongs to a different meeting.");
         }
 
-        var insertAt = _turns.FindIndex(existing =>
-            existing.StartedAt > turn.StartedAt ||
-            (existing.StartedAt == turn.StartedAt && existing.EndedAt > turn.EndedAt));
-        if (insertAt < 0)
+        lock (_sync)
         {
-            _turns.Add(turn);
-        }
-        else
-        {
-            _turns.Insert(insertAt, turn);
-        }
+            var insertAt = _turns.FindIndex(existing =>
+                existing.StartedAt > turn.StartedAt ||
+                (existing.StartedAt == turn.StartedAt && existing.EndedAt > turn.EndedAt));
+            if (insertAt < 0)
+            {
+                _turns.Add(turn);
+            }
+            else
+            {
+                _turns.Insert(insertAt, turn);
+            }
 
-        RebuildRollingContext();
+            RebuildRollingContextLocked();
+        }
     }
 
-    public void SetRollingSummary(string summary) => RollingSummary = summary.Trim();
+    public void SetRollingSummary(string summary)
+    {
+        lock (_sync) _rollingSummary = summary.Trim();
+    }
 
-    public void ReplaceOpenQuestions(IEnumerable<string> items) => Replace(_openQuestions, items);
-    public void ReplaceCommitments(IEnumerable<string> items) => Replace(_commitments, items);
-    public void ReplaceWrittenFollowUps(IEnumerable<string> items) => Replace(_writtenFollowUps, items);
+    public void ReplaceOpenQuestions(IEnumerable<string> items)
+    {
+        lock (_sync) Replace(_openQuestions, items);
+    }
 
-    public IReadOnlyList<TranscriptTurn> RecentTurns(int max = DefaultRecentTurnWindow) =>
-        _turns.Count <= max ? _turns : _turns.Skip(_turns.Count - max).ToArray();
+    public void ReplaceCommitments(IEnumerable<string> items)
+    {
+        lock (_sync) Replace(_commitments, items);
+    }
 
-    private void RebuildRollingContext()
+    public void ReplaceWrittenFollowUps(IEnumerable<string> items)
+    {
+        lock (_sync) Replace(_writtenFollowUps, items);
+    }
+
+    public IReadOnlyList<TranscriptTurn> RecentTurns(int max = DefaultRecentTurnWindow)
+    {
+        if (max <= 0) return [];
+        lock (_sync)
+        {
+            var start = Math.Max(0, _turns.Count - max);
+            return _turns.GetRange(start, _turns.Count - start).ToArray();
+        }
+    }
+
+    private void RebuildRollingContextLocked()
     {
         var olderTurnCount = Math.Max(0, _turns.Count - DefaultRecentTurnWindow);
         if (olderTurnCount == 0)
         {
-            RollingSummary = string.Empty;
+            _rollingSummary = string.Empty;
             return;
         }
 
@@ -74,7 +134,7 @@ public sealed class MeetingState
             context = "… earlier compacted context omitted …" + Environment.NewLine + context[^MaxRollingContextCharacters..];
         }
 
-        RollingSummary = context;
+        _rollingSummary = context;
     }
 
     private static string SpeakerLabel(SpeakerRole speaker) => speaker switch
