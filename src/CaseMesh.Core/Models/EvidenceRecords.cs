@@ -118,7 +118,7 @@ public sealed record Assertion
     public Guid? SupersededByAssertionId { get; }
     public bool IsSourceBacked => SourceSpanId.HasValue;
 
-    internal Assertion SupersededBy(Guid replacementId) => new(
+    internal Assertion WithDisputeState(DisputeState disputeState) => new(
         Id,
         MatterId,
         SubjectReference,
@@ -130,12 +130,12 @@ public sealed record Assertion
         SourceSpanId,
         OriginClass,
         AssertionClass,
-        DisputeState.Superseded,
+        disputeState,
         IntegrityState,
-        VerificationState.Rejected,
+        VerificationState,
         ExtractionConfidence,
         CreatedByModel,
-        replacementId);
+        SupersededByAssertionId);
 }
 
 public sealed record MatterEvent
@@ -187,7 +187,7 @@ public sealed record MatterEvent
         ParticipantIds,
         Label,
         EventStatus.Superseded,
-        VerificationState.Rejected,
+        VerificationState,
         SupersedesEventId,
         replacementId);
 }

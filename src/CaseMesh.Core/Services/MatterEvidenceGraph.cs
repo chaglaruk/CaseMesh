@@ -9,6 +9,7 @@ public sealed class MatterEvidenceGraph
 {
     private readonly Dictionary<Guid, DocumentVersionIdentity> _documentVersions = [];
     private readonly Dictionary<string, Guid> _originalObjectIdsByHash = new(StringComparer.Ordinal);
+    private readonly Dictionary<Guid, string> _hashesByOriginalObjectId = [];
     private readonly Dictionary<Guid, SourceSpan> _sourceSpans = [];
     private readonly Dictionary<Guid, Assertion> _assertions = [];
     private readonly Dictionary<Guid, MatterEvent> _events = [];
@@ -56,8 +57,15 @@ public sealed class MatterEvidenceGraph
 
         if (!_originalObjectIdsByHash.TryGetValue(normalizedHash, out var originalObjectId))
         {
+            if (_hashesByOriginalObjectId.TryGetValue(newOriginalObjectId, out var existingHash) &&
+                !string.Equals(existingHash, normalizedHash, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("An immutable original object cannot be registered with different content hashes.");
+            }
+
             originalObjectId = newOriginalObjectId;
             _originalObjectIdsByHash.Add(normalizedHash, originalObjectId);
+            _hashesByOriginalObjectId.Add(originalObjectId, normalizedHash);
         }
 
         var version = new DocumentVersionIdentity(Matter.Id, documentId, documentVersionId, originalObjectId, normalizedHash);
@@ -87,6 +95,11 @@ public sealed class MatterEvidenceGraph
         if (textStart.HasValue != textEnd.HasValue || textEnd < textStart)
         {
             throw new ArgumentException("Text offsets must be supplied as a valid start/end pair.");
+        }
+
+        if (!pageNumber.HasValue && !textStart.HasValue)
+        {
+            throw new ArgumentException("A source span requires a page number or text-offset address.");
         }
 
         if (documentVersion.MatterId != Matter.Id ||
@@ -148,6 +161,11 @@ public sealed class MatterEvidenceGraph
             throw new InvalidOperationException("A source-backed assertion cannot reference another Matter.");
         }
 
+        if (RequiresSourceSpan(originClass, assertionClass) && sourceSpan is null)
+        {
+            throw new InvalidOperationException("Documentary assertions require a source span registered to the same Matter.");
+        }
+
         var aiOrigin = originClass == EvidenceOriginClass.AiGeneratedInference;
         var aiAssertion = assertionClass == AssertionClass.AiInference;
         if (aiOrigin != aiAssertion)
@@ -163,6 +181,18 @@ public sealed class MatterEvidenceGraph
             }
 
             ArgumentException.ThrowIfNullOrWhiteSpace(createdByModel);
+        }
+        else
+        {
+            if (createdByModel is not null)
+            {
+                throw new InvalidOperationException("Only AI inference assertions can record a generating model.");
+            }
+
+            if (extractionConfidence.HasValue && sourceSpan is null)
+            {
+                throw new InvalidOperationException("Extraction confidence requires a source span.");
+            }
         }
 
         var assertion = new Assertion(
@@ -232,6 +262,14 @@ public sealed class MatterEvidenceGraph
         }
 
         EnsureAvailable(_links, id, "assertion/event link");
+        if (_links.Values.Any(existing =>
+                existing.AssertionId == assertionId &&
+                existing.EventId == eventId &&
+                existing.Relation == relation))
+        {
+            throw new InvalidOperationException("The assertion/event relationship already exists.");
+        }
+
         var link = new AssertionEventLink(id, Matter.Id, assertionId, eventId, relation);
         _links.Add(id, link);
         return link;
@@ -256,6 +294,13 @@ public sealed class MatterEvidenceGraph
 
         ArgumentException.ThrowIfNullOrWhiteSpace(detectedBy);
         EnsureAvailable(_contradictions, id, "contradiction");
+        if (_contradictions.Values.Any(existing =>
+                (existing.AssertionAId == assertionAId && existing.AssertionBId == assertionBId) ||
+                (existing.AssertionAId == assertionBId && existing.AssertionBId == assertionAId)))
+        {
+            throw new InvalidOperationException("A contradiction between these assertions already exists.");
+        }
+
         var contradiction = new Contradiction(
             id,
             Matter.Id,
@@ -267,6 +312,8 @@ public sealed class MatterEvidenceGraph
             null,
             createdAt,
             null);
+        _assertions[assertionAId] = assertionA.WithDisputeState(DisputeState.Contradicted);
+        _assertions[assertionBId] = assertionB.WithDisputeState(DisputeState.Contradicted);
         _contradictions.Add(id, contradiction);
         return contradiction;
     }
@@ -318,11 +365,13 @@ public sealed class MatterEvidenceGraph
         Guid correctedEventId,
         DateTimeOffset? correctedStartTime,
         DateTimeOffset? correctedEndTime,
+        string correctedLabel,
         Guid auditEventId,
         string actor,
         DateTimeOffset correctedAt)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(correctedLabel);
         RequireId(correctedEventId, nameof(correctedEventId));
         RequireId(auditEventId, nameof(auditEventId));
         if (correctedEndTime < correctedStartTime)
@@ -349,7 +398,7 @@ public sealed class MatterEvidenceGraph
             correctedStartTime,
             correctedEndTime,
             original.ParticipantIds,
-            original.Label,
+            correctedLabel,
             EventStatus.Candidate,
             VerificationState.NotReviewed,
             original.Id);
@@ -371,9 +420,13 @@ public sealed class MatterEvidenceGraph
         return new EventCorrectionResult(superseded, corrected, auditEvent);
     }
 
-    private static T RequireOwned<T>(IReadOnlyDictionary<Guid, T> records, Guid id, string label)
+    private static T RequireOwned<T>(
+        IReadOnlyDictionary<Guid, T> records,
+        Guid id,
+        string label,
+        [System.Runtime.CompilerServices.CallerArgumentExpression(nameof(id))] string? parameterName = null)
     {
-        RequireId(id, label);
+        RequireId(id, parameterName ?? nameof(id));
         if (!records.TryGetValue(id, out var record))
         {
             throw new InvalidOperationException($"The {label} is not registered to this Matter.");
@@ -409,6 +462,21 @@ public sealed class MatterEvidenceGraph
         {
             throw new ArgumentOutOfRangeException(nameof(extractionConfidence), "Extraction confidence must be between zero and one.");
         }
+    }
+
+    private static bool RequiresSourceSpan(EvidenceOriginClass originClass, AssertionClass assertionClass)
+    {
+        var documentaryOrigin = originClass is
+            EvidenceOriginClass.OriginalContemporaneousRecord or
+            EvidenceOriginClass.IndependentThirdPartyRecord or
+            EvidenceOriginClass.EmployerAuthoredDocument or
+            EvidenceOriginClass.EmployeeAuthoredDocument or
+            EvidenceOriginClass.TranscriptDerivedRecord or
+            EvidenceOriginClass.OcrDerivedRecord;
+        var documentaryAssertion = assertionClass is
+            AssertionClass.DirectlyDocumentedEvent or
+            AssertionClass.DirectQuotation;
+        return documentaryOrigin || documentaryAssertion;
     }
 
     private static string FormatTimeRange(DateTimeOffset? start, DateTimeOffset? end)

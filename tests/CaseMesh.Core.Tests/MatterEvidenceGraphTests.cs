@@ -60,6 +60,24 @@ public sealed class MatterEvidenceGraphTests
     }
 
     [Fact]
+    public void OriginalObjectIdentity_CannotBeReusedForDifferentContent()
+    {
+        var graph = SyntheticWorkplaceMatterFixture.CreateGraph();
+        var originalObjectId = SyntheticWorkplaceMatterFixture.Id(12);
+        graph.RegisterDocumentVersion(
+            SyntheticWorkplaceMatterFixture.Id(10),
+            SyntheticWorkplaceMatterFixture.Id(11),
+            new string('A', 64),
+            originalObjectId);
+
+        Assert.Throws<InvalidOperationException>(() => graph.RegisterDocumentVersion(
+            SyntheticWorkplaceMatterFixture.Id(20),
+            SyntheticWorkplaceMatterFixture.Id(21),
+            new string('B', 64),
+            originalObjectId));
+    }
+
+    [Fact]
     public void DuplicateVersions_WithSameHashShareOneLogicalOriginal()
     {
         var graph = SyntheticWorkplaceMatterFixture.CreateGraph();
@@ -128,7 +146,7 @@ public sealed class MatterEvidenceGraphTests
     }
 
     [Fact]
-    public void CorrectedEventDate_PreservesRejectedExtractionAndAppendsAuditEvent()
+    public void CorrectedEventDate_PreservesPriorVerificationAndAppendsAuditEvent()
     {
         var graph = SyntheticWorkplaceMatterFixture.CreateGraph();
         var extractedDate = new DateTimeOffset(2026, 3, 12, 0, 0, 0, TimeSpan.Zero);
@@ -138,7 +156,7 @@ public sealed class MatterEvidenceGraphTests
             "synthetic-meeting",
             "Synthetic review meeting",
             EventStatus.Candidate,
-            VerificationState.NotReviewed,
+            VerificationState.Confirmed,
             extractedDate,
             extractedDate);
 
@@ -147,16 +165,18 @@ public sealed class MatterEvidenceGraphTests
             SyntheticWorkplaceMatterFixture.Id(41),
             correctedDate,
             correctedDate,
+            "Synthetic review meeting on 13 March",
             SyntheticWorkplaceMatterFixture.Id(42),
             "synthetic-user",
             SyntheticWorkplaceMatterFixture.RecordedAt);
 
         Assert.Equal(2, graph.Events.Count);
         Assert.Equal(EventStatus.Superseded, correction.SupersededEvent.Status);
-        Assert.Equal(VerificationState.Rejected, correction.SupersededEvent.VerificationState);
+        Assert.Equal(VerificationState.Confirmed, correction.SupersededEvent.VerificationState);
         Assert.Equal(correction.CorrectedEvent.Id, correction.SupersededEvent.SupersededByEventId);
         Assert.Equal(extractedEvent.Id, correction.CorrectedEvent.SupersedesEventId);
         Assert.Equal(correctedDate, correction.CorrectedEvent.StartTime);
+        Assert.Equal("Synthetic review meeting on 13 March", correction.CorrectedEvent.Label);
         Assert.Single(graph.AuditEvents);
         Assert.Equal(AuditEventKind.EventCorrected, correction.AuditEvent.Kind);
         Assert.Equal(correction.CorrectedEvent.Id, correction.AuditEvent.ReplacementEntityId);
@@ -188,6 +208,42 @@ public sealed class MatterEvidenceGraphTests
     }
 
     [Fact]
+    public void DocumentaryAssertion_WithoutSourceSpanIsRejected()
+    {
+        var graph = SyntheticWorkplaceMatterFixture.CreateGraph();
+
+        Assert.Throws<InvalidOperationException>(() => graph.AddAssertion(
+            SyntheticWorkplaceMatterFixture.Id(55),
+            "synthetic-employee",
+            "quoted-text",
+            "synthetic quote",
+            "Example Employer Ltd",
+            SyntheticWorkplaceMatterFixture.RecordedAt,
+            EvidenceOriginClass.EmployerAuthoredDocument,
+            AssertionClass.DirectQuotation,
+            DisputeState.Unverified,
+            IntegrityState.OriginalHashVerified,
+            VerificationState.NotReviewed));
+    }
+
+    [Fact]
+    public void SourceSpan_WithoutPageOrTextOffsetsIsRejected()
+    {
+        var graph = SyntheticWorkplaceMatterFixture.CreateGraph();
+        var version = graph.RegisterDocumentVersion(
+            SyntheticWorkplaceMatterFixture.Id(56),
+            SyntheticWorkplaceMatterFixture.Id(57),
+            new string('7', 64),
+            SyntheticWorkplaceMatterFixture.Id(58));
+
+        Assert.Throws<ArgumentException>(() => graph.AddSourceSpan(
+            SyntheticWorkplaceMatterFixture.Id(59),
+            version,
+            "Synthetic unaddressed text.",
+            "synthetic-parser/1"));
+    }
+
+    [Fact]
     public void SourceSpan_CannotUseDocumentVersionFromAnotherMatter()
     {
         var firstGraph = SyntheticWorkplaceMatterFixture.CreateGraph(1);
@@ -202,11 +258,12 @@ public sealed class MatterEvidenceGraphTests
             SyntheticWorkplaceMatterFixture.Id(63),
             foreignVersion,
             "Synthetic foreign source text.",
-            "synthetic-parser/1"));
+            "synthetic-parser/1",
+            pageNumber: 1));
     }
 
     [Fact]
-    public void AssertionEventLink_CannotCrossMatterBoundary()
+    public void AssertionEventLink_WithForeignUnownedEventIsRejected()
     {
         var firstGraph = SyntheticWorkplaceMatterFixture.CreateGraph(1);
         var secondGraph = SyntheticWorkplaceMatterFixture.CreateGraph(2);
@@ -247,7 +304,7 @@ public sealed class MatterEvidenceGraphTests
             "unknown",
             "model",
             SyntheticWorkplaceMatterFixture.RecordedAt,
-            EvidenceOriginClass.OriginalContemporaneousRecord,
+            EvidenceOriginClass.AiGeneratedInference,
             AssertionClass.AiInference,
             DisputeState.Unverified,
             IntegrityState.DerivedCopy,
@@ -256,6 +313,46 @@ public sealed class MatterEvidenceGraphTests
             createdByModel: "synthetic-model"));
 
         Assert.Empty(graph.Assertions);
+    }
+
+    [Fact]
+    public void NonAiAssertion_CannotRecordGeneratingModel()
+    {
+        var graph = SyntheticWorkplaceMatterFixture.CreateGraph();
+
+        Assert.Throws<InvalidOperationException>(() => graph.AddAssertion(
+            SyntheticWorkplaceMatterFixture.Id(105),
+            "synthetic-employee",
+            "reported-state",
+            "synthetic value",
+            "synthetic witness",
+            SyntheticWorkplaceMatterFixture.RecordedAt,
+            EvidenceOriginClass.ParticipantOrWitnessStatement,
+            AssertionClass.ThirdPartyAssertion,
+            DisputeState.Unverified,
+            IntegrityState.MetadataUncertain,
+            VerificationState.NotReviewed,
+            createdByModel: "synthetic-model"));
+    }
+
+    [Fact]
+    public void ExtractionConfidence_WithoutSourceSpanIsRejected()
+    {
+        var graph = SyntheticWorkplaceMatterFixture.CreateGraph();
+
+        Assert.Throws<InvalidOperationException>(() => graph.AddAssertion(
+            SyntheticWorkplaceMatterFixture.Id(106),
+            "synthetic-employee",
+            "reported-state",
+            "synthetic value",
+            "synthetic witness",
+            SyntheticWorkplaceMatterFixture.RecordedAt,
+            EvidenceOriginClass.ParticipantOrWitnessStatement,
+            AssertionClass.ThirdPartyAssertion,
+            DisputeState.Unverified,
+            IntegrityState.MetadataUncertain,
+            VerificationState.NotReviewed,
+            extractionConfidence: 0.8m));
     }
 
     [Fact]
@@ -316,5 +413,57 @@ public sealed class MatterEvidenceGraphTests
 
         Assert.Contains(nameof(Assertion.ExtractionConfidence), publicProperties);
         Assert.DoesNotContain(publicProperties, name => name.Contains("Truth", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void AddingContradiction_MarksBothAssertionsContradicted()
+    {
+        var graph = SyntheticWorkplaceMatterFixture.CreateGraph();
+        var firstSource = SyntheticWorkplaceMatterFixture.AddSource(graph, 140, "Synthetic value A.", '8');
+        var secondSource = SyntheticWorkplaceMatterFixture.AddSource(graph, 150, "Synthetic value B.", '9');
+        var first = graph.AddAssertion(
+            SyntheticWorkplaceMatterFixture.Id(160), "subject", "predicate", "A", "author A",
+            SyntheticWorkplaceMatterFixture.RecordedAt, EvidenceOriginClass.EmployeeAuthoredDocument,
+            AssertionClass.UserAssertion, DisputeState.Unverified, IntegrityState.OriginalHashVerified,
+            VerificationState.NotReviewed, firstSource.Id);
+        var second = graph.AddAssertion(
+            SyntheticWorkplaceMatterFixture.Id(161), "subject", "predicate", "B", "author B",
+            SyntheticWorkplaceMatterFixture.RecordedAt, EvidenceOriginClass.EmployerAuthoredDocument,
+            AssertionClass.EmployerAssertion, DisputeState.Corroborated, IntegrityState.OriginalHashVerified,
+            VerificationState.NotReviewed, secondSource.Id);
+
+        graph.AddContradiction(
+            SyntheticWorkplaceMatterFixture.Id(162), first.Id, second.Id, ContradictionType.DirectConflict,
+            "deterministic-test-rule", SyntheticWorkplaceMatterFixture.RecordedAt);
+
+        Assert.All(graph.Assertions, assertion => Assert.Equal(DisputeState.Contradicted, assertion.DisputeState));
+    }
+
+    [Fact]
+    public void DuplicateRelationships_AreRejectedByNaturalKey()
+    {
+        var graph = SyntheticWorkplaceMatterFixture.CreateGraph();
+        var sourceA = SyntheticWorkplaceMatterFixture.AddSource(graph, 170, "Synthetic A.", 'A');
+        var sourceB = SyntheticWorkplaceMatterFixture.AddSource(graph, 180, "Synthetic B.", 'B');
+        var assertionA = SyntheticWorkplaceMatterFixture.AddSicknessDayAssertion(
+            graph, 190, sourceA, "12", EvidenceOriginClass.EmployerAuthoredDocument,
+            AssertionClass.EmployerAssertion, "Example Employer Ltd");
+        var assertionB = SyntheticWorkplaceMatterFixture.AddSicknessDayAssertion(
+            graph, 191, sourceB, "10", EvidenceOriginClass.EmployeeAuthoredDocument,
+            AssertionClass.UserAssertion, "synthetic employee");
+        var matterEvent = graph.AddEvent(
+            SyntheticWorkplaceMatterFixture.Id(192), "absence", "Synthetic absence",
+            EventStatus.Candidate, VerificationState.NotReviewed);
+        graph.AddAssertionEventLink(
+            SyntheticWorkplaceMatterFixture.Id(193), assertionA.Id, matterEvent.Id, AssertionEventRelation.Supports);
+        graph.AddContradiction(
+            SyntheticWorkplaceMatterFixture.Id(194), assertionA.Id, assertionB.Id,
+            ContradictionType.NumericMismatch, "deterministic-test-rule", SyntheticWorkplaceMatterFixture.RecordedAt);
+
+        Assert.Throws<InvalidOperationException>(() => graph.AddAssertionEventLink(
+            SyntheticWorkplaceMatterFixture.Id(195), assertionA.Id, matterEvent.Id, AssertionEventRelation.Supports));
+        Assert.Throws<InvalidOperationException>(() => graph.AddContradiction(
+            SyntheticWorkplaceMatterFixture.Id(196), assertionB.Id, assertionA.Id,
+            ContradictionType.NumericMismatch, "deterministic-test-rule", SyntheticWorkplaceMatterFixture.RecordedAt));
     }
 }
