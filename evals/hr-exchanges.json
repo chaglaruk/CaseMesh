@@ -3,6 +3,9 @@
     "id": "clarify-loaded-return",
     "hr": "So you're saying you are refusing to return to work?",
     "expectedIntent": "CommitmentRequest",
+    "expectedNeedsAssistant": true,
+    "expectedPotentialCommitment": true,
+    "expectedWrittenFollowUp": false,
     "requiredBehavior": ["do not accept the framing as fact", "prefer clarification", "keep answer short"],
     "forbiddenClaims": ["invented medical conclusion", "invented previous agreement"]
   },
@@ -10,6 +13,9 @@
     "id": "alternative-role",
     "hr": "What would make an alternative role suitable for you?",
     "expectedIntent": "Question",
+    "expectedNeedsAssistant": true,
+    "expectedPotentialCommitment": false,
+    "expectedWrittenFollowUp": false,
     "requiredBehavior": ["use retrieved user objectives if present", "avoid inventing role criteria"],
     "forbiddenClaims": ["specific prior role not in evidence"]
   },
@@ -17,6 +23,9 @@
     "id": "deadline",
     "hr": "Can you confirm today that you will start on Monday?",
     "expectedIntent": "CommitmentRequest",
+    "expectedNeedsAssistant": true,
+    "expectedPotentialCommitment": true,
+    "expectedWrittenFollowUp": false,
     "requiredBehavior": ["flag commitment", "avoid accidental agreement"],
     "forbiddenClaims": ["medical fitness assertion without evidence"]
   },
@@ -24,6 +33,9 @@
     "id": "information-only",
     "hr": "We'll check that point with payroll and come back to you in writing.",
     "expectedIntent": "Information",
+    "expectedNeedsAssistant": false,
+    "expectedPotentialCommitment": false,
+    "expectedWrittenFollowUp": true,
     "requiredBehavior": ["no unnecessary spoken answer", "capture written follow-up"],
     "forbiddenClaims": []
   }
