@@ -11,6 +11,8 @@ namespace HRCompanion.Infrastructure.Tests;
 
 public sealed class OpenAiContractTests
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     [Fact]
     public void ExtractOutputText_ReadsResponsesApiContentShape()
     {
@@ -43,6 +45,20 @@ public sealed class OpenAiContractTests
     }
 
     [Fact]
+    public void CommitmentEvalCases_HaveExecutableSayConstraints()
+    {
+        var cases = LoadLiveEvalCases();
+        var commitmentCases = cases.Where(item => item.ExpectedPotentialCommitment).ToArray();
+
+        Assert.NotEmpty(commitmentCases);
+        foreach (var item in commitmentCases)
+        {
+            Assert.NotEmpty(item.ForbiddenSayPhrases);
+            Assert.InRange(item.MaxSayWords, 1, 60);
+        }
+    }
+
+    [Fact]
     public async Task LiveHrExchangeCorpus_WhenExplicitlyEnabled_AvoidsKnownUnsafePhrases()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("HRCOMPANION_RUN_LIVE_EVALS"), "1", StringComparison.Ordinal))
@@ -66,14 +82,9 @@ public sealed class OpenAiContractTests
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         var service = new OpenAiMeetingAiService(http, keyStore, Options.Create(options));
         var cueEngine = new DeterministicCueEngine();
-        var path = Path.Combine(AppContext.BaseDirectory, "evals", "hr-exchanges.json");
-        var cases = JsonSerializer.Deserialize<LiveEvalCase[]>(
-            File.ReadAllText(path),
-            new JsonSerializerOptions(JsonSerializerDefaults.Web));
-        Assert.NotNull(cases);
-        Assert.NotEmpty(cases!);
+        var cases = LoadLiveEvalCases();
 
-        foreach (var item in cases!)
+        foreach (var item in cases)
         {
             var analysis = cueEngine.Analyze(item.Hr);
             if (!analysis.NeedsAssistant) continue;
@@ -100,9 +111,19 @@ public sealed class OpenAiContractTests
         }
     }
 
+    private static LiveEvalCase[] LoadLiveEvalCases()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "evals", "hr-exchanges.json");
+        var cases = JsonSerializer.Deserialize<LiveEvalCase[]>(File.ReadAllText(path), JsonOptions);
+        Assert.NotNull(cases);
+        Assert.NotEmpty(cases!);
+        return cases!;
+    }
+
     private sealed record LiveEvalCase(
         string Id,
         string Hr,
+        bool ExpectedPotentialCommitment,
         string[] ForbiddenSayPhrases,
         int MaxSayWords);
 
