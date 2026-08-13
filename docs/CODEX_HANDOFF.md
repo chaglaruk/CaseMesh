@@ -1,10 +1,10 @@
 # Codex handoff
 
-The repository now has two development tracks.
+The repository has two development tracks.
 
 ## Primary commercial track
 
-For new product work, read:
+For new product work, read in this order:
 
 1. `AGENTS.md`
 2. `docs/BRAND_AND_SCOPE.md`
@@ -14,19 +14,19 @@ For new product work, read:
 6. `docs/PRODUCT_VALIDATION_AND_GTM.md`
 7. `docs/CODEX_COMMERCIAL_HANDOFF.md`
 
-Then follow `docs/CODEX_COMMERCIAL_HANDOFF.md` for the first implementation batch.
+Then implement exactly the first batch in `docs/CODEX_COMMERCIAL_HANDOFF.md`.
 
-The product brand is **CaseMesh** and the canonical domain is **casemesh.dev**. Commercial go-to-market remains workplace-dispute first, while reusable evidence primitives should be matter-centric where practical. Live conversation assistance is a later capability built on the Case Brain, not the MVP.
+The product/repository/project/namespace rename to **CaseMesh** is complete. The canonical domain is **casemesh.dev**. Do not spend the next batch on naming migration.
 
-Any remaining `HRCompanion.*` code identifiers are legacy implementation names and should be migrated to `CaseMesh.*` in a separate behavior-neutral rename batch rather than mixed into evidence-model logic changes.
+Commercial go-to-market remains workplace-dispute first, while reusable evidence primitives are Matter-centric. Live conversation assistance is a later capability built on the Case Brain, not the MVP.
 
-## Legacy/live-meeting track
+## CaseMesh Live track
 
-The original Windows/Teams prototype is preserved. Its existing gates remain documented in:
+The original Windows/Teams prototype is preserved and remains buildable. Its feature-specific gates are documented in:
 
 - `docs/FIRST_CODEX_BATCH.md`
 - `docs/GATES.md`
 - `docs/ARCHITECTURE.md`
 - `docs/STATUS.md`
 
-Do not treat unresolved Teams/audio work as the highest priority for the commercial evidence platform. Do not delete or silently disable the legacy prototype while building the commercial track.
+Do not treat unresolved Teams/audio work as the highest priority for the commercial evidence platform, and do not delete or silently disable the live prototype while building the commercial track.
