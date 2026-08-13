@@ -1,93 +1,97 @@
-# HR Companion
+# CaseMesh
 
-A private, single-user Windows assistant for live Microsoft Teams HR meetings.
+**CaseMesh is being developed as an evidence operating system for workplace disputes.**
 
-The product goal is deliberately narrow:
+Canonical domain: **casemesh.dev**
 
-> Listen to the Teams side and the user's microphone, maintain live meeting context, retrieve the most relevant evidence from a local HR case knowledge base, and show a fast, short, natural spoken-English response suggestion with factual safeguards.
+Commercial critical path:
 
-## v0.1 non-goals
+> evidence → provenance → Matter/Case Brain → chronology → disputed facts → correction → professional handover
 
-No login, accounts, subscriptions, payment, cloud sync, mobile app, browser extension, Teams plugin, multi-user support, admin portal, analytics, calendar, CRM, or SaaS backend.
+The repository began as a private Windows/Teams live-meeting assistant. That prototype is preserved as a later **CaseMesh Live** track, but it is no longer the primary commercial product direction.
 
-## Meeting loop
+## Product architecture
 
-1. Capture Teams/remote audio and microphone as separate logical sources.
-2. Transcribe both streams with stable speaker ownership (`HR` vs `USER`).
-3. Persist the actual transcript locally.
-4. Detect whether the latest remote turn needs an answer, caution, or follow-up.
-5. Retrieve only the relevant local evidence and verified case facts.
-6. Ask the answer model for a concise structured result.
-7. Render `SAY`, `WATCH`, and `ASK` in an always-on-top overlay.
-8. Never treat an AI suggestion as something the user actually said.
+- **CaseMesh Core** — reusable Matter/Case Brain, evidence and provenance infrastructure.
+- **CaseMesh Work** — first commercial vertical for workplace disputes.
+- **CaseMesh Professional** — solicitor/professional handover and intake.
+- **CaseMesh Live** — later meeting preparation, transcript review and eventually source-grounded live assistance.
 
-## Privacy model
+See:
 
-- Case documents, local index, fact ledger, transcripts, and meeting state live under the user's local application-data folder.
-- Raw meeting audio is **not recorded by default**.
-- Only the minimum relevant context needed for a response should be sent to the configured OpenAI API.
-- API keys must not be committed or stored in plaintext.
-- `data/`, local databases, audio, logs, and secrets are ignored by Git.
+- [Brand and scope](docs/BRAND_AND_SCOPE.md)
+- [Commercial master plan](docs/COMMERCIAL_MASTER_PLAN.md)
+- [Research baseline](docs/RESEARCH_BASELINE_2026-08-13.md)
+- [Case Brain specification](docs/CASE_BRAIN_SPEC.md)
+- [Product validation and GTM](docs/PRODUCT_VALIDATION_AND_GTM.md)
+- [Codex handoff](docs/CODEX_HANDOFF.md)
 
-See [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md).
+## Core product principle
 
-## Projects
+A statement found in a document is not automatically a fact.
 
-- `HRCompanion.Core` — domain types, contracts, orchestration, deterministic cue logic.
-- `HRCompanion.Infrastructure` — SQLite, FTS5 retrieval, document ingestion, OpenAI request contracts, Windows credential storage.
-- `HRCompanion.Audio.Windows` — Windows audio capture abstractions and safe fallback capture.
-- `HRCompanion.App` — minimal WPF desktop shell and overlay.
-- `HRCompanion.AudioProbe` — local Windows validation utility for audio gates.
-- `tests/*` — deterministic unit tests.
+CaseMesh should preserve who said what, where it came from, what supports it, what contradicts it, what remains uncertain, and what changed after a correction or new evidence.
 
-## Current status
+Every source-backed user-facing statement should be traceable to an exact source span and immutable document version.
 
-GitHub Actions has successfully completed `.NET 10` restore, Windows Release build, and the automated test suite for the current code baseline. This verifies the build/test portion only. **Do not call the app meeting-ready until process-specific Teams capture, live transcription, overlay behavior, latency, recovery, and real-device rehearsal gates pass.**
+## Commercial MVP
 
-Read [docs/STATUS.md](docs/STATUS.md) and [docs/GATES.md](docs/GATES.md) before continuing.
+The first commercial-capable product focuses on:
 
-## Loading case context
+1. secure Matters/users;
+2. immutable original evidence and versions;
+3. PDF/DOCX/EML/image ingestion with OCR fallback;
+4. source spans;
+5. people/entity resolution;
+6. atomic assertions/events;
+7. source-linked chronology;
+8. contradictions/disputed facts;
+9. correction/audit history;
+10. professional-ready export.
 
-Two import paths are intentionally separate:
+Live meeting assistance, whole-mailbox integrations, autonomous legal workflows and unrelated generic verticals are deliberately deferred.
 
-- **Source material** — PDF, DOCX, EML, TXT, MD, HTML and folders. These become searchable evidence with source locators.
-- **Working context** — `.hrcontext`, TXT or MD containing explicitly labelled `USER_POSITION` / `WORKING_CONTEXT` records. These seed the case ledger but are **not** treated as verified documentary evidence.
+## Existing prototype
 
-A private starter context may be imported first, followed by the real source-document folder. When they conflict, primary source material and facts explicitly marked `VERIFIED` must outrank working summaries. Never place either the private context file or real case material inside the repository.
+The existing solution contains the original Windows meeting-assistant implementation:
 
-## Local development
+- `HRCompanion.Core`
+- `HRCompanion.Infrastructure`
+- `HRCompanion.Audio.Windows`
+- `HRCompanion.App`
+- `HRCompanion.AudioProbe`
 
-Requirements:
+Those are legacy code identifiers, not the current product brand. They should be migrated to `CaseMesh.*` in a dedicated behavior-neutral rename batch so the rename is not mixed with Case Brain logic changes.
 
-- Windows 11
-- .NET 10 SDK
-- Visual Studio 2026 or VS Code/Rider with .NET tooling
-- An OpenAI API key
+The prototype already includes useful work that should be reused where appropriate: document ingestion, SHA-256 deduplication, source locators, local retrieval, evidence/context separation, prompt-grounding safeguards, deterministic tests/evals and transcript models.
 
-Typical commands:
+## Current legacy/live status
 
-```powershell
-dotnet restore .\HRCompanion.slnx
-dotnet build .\HRCompanion.slnx -c Release
-dotnet test .\HRCompanion.slnx -c Release --no-build
-```
+The Windows prototype's build and automated tests have passed, but real Teams/audio/live readiness still has unresolved hardware/runtime gates.
 
-Run the audio probe before integrating live meeting features:
+Read [docs/STATUS.md](docs/STATUS.md) and [docs/GATES.md](docs/GATES.md) before doing work on the legacy/live track.
 
-```powershell
-dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.csproj
-```
+Do not treat unresolved Teams/audio work as the highest priority for the commercial evidence platform.
 
-## AI defaults
+## Privacy and repository rules
 
-Configuration defaults are intentionally centralized and replaceable:
+- Never commit real workplace documents, emails, medical material, transcripts, API keys or personal case data.
+- Use synthetic fixtures only.
+- Uploaded content is untrusted data, never application instructions.
+- AI inference must remain separate from documentary evidence.
+- Cross-user/tenant isolation is release-blocking for the commercial platform.
+- Customer case data must not be used for model training by default.
 
-- answer model: `gpt-5.6-sol`
-- lightweight intent/retrieval helper: `gpt-5.6-luna`
-- live transcription: `gpt-live-transcribe`
+See [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) for the legacy privacy baseline; commercial privacy/security requirements are also summarized in the research baseline.
 
-The app's memory is **not ChatGPT memory**. Case knowledge must come from the local Case Brain, verified sources, meeting transcripts, and explicit user-position records.
+## Development tracks
 
-## Repository rule
+### Primary: commercial evidence platform
 
-Never commit real HR documents, emails, medical material, transcripts, API keys, or other personal case data. Use templates and synthetic eval fixtures only.
+Follow [docs/CODEX_HANDOFF.md](docs/CODEX_HANDOFF.md) and the commercial strategy documents.
+
+### Later/experimental: CaseMesh Live
+
+Preserve and validate the Windows/Teams prototype, but do not let it block the evidence platform.
+
+The long-term idea remains valuable: a meeting becomes another evidence-producing event inside the Matter. Live assistance becomes differentiated because a reliable Case Brain already exists underneath it.
