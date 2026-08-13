@@ -28,7 +28,7 @@ Compilation or mocked audio is `AUTOMATED_ONLY`, never `VERIFIED`.
 Run the no-audio-persistence probe during a controlled Teams call:
 
 ```powershell
-dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.csproj -c Release -- --pid <TEAMS_ROOT_PID> --seconds 10
+dotnet run --project .\tools\CaseMesh.AudioProbe\CaseMesh.AudioProbe.csproj -c Release -- --pid <TEAMS_ROOT_PID> --seconds 10
 ```
 
 Play Teams remote speech, then separately play non-Teams system audio. Confirm Teams RMS rises only for the first, microphone RMS responds only to local speech, and both probe cycles complete. Repeat with mute/unmute, wired headphones and Bluetooth if available.
@@ -72,15 +72,15 @@ Required:
 
 Before meeting-ready status, run the safety-critical exchange corpus against the configured live answer model as a manual/release eval. Normal CI does not call the API.
 
-On the Windows machine where HR Companion has already saved its API key:
+On the Windows machine where CaseMesh has already saved its API key:
 
 ```powershell
-$env:HRCOMPANION_RUN_LIVE_EVALS = "1"
-dotnet test .\tests\HRCompanion.Infrastructure.Tests\HRCompanion.Infrastructure.Tests.csproj -c Release --filter "FullyQualifiedName~LiveHrExchangeCorpus"
-Remove-Item Env:HRCOMPANION_RUN_LIVE_EVALS
+$env:CASEMESH_RUN_LIVE_EVALS = "1"
+dotnet test .\tests\CaseMesh.Infrastructure.Tests\CaseMesh.Infrastructure.Tests.csproj -c Release --filter "FullyQualifiedName~LiveHrExchangeCorpus"
+Remove-Item Env:CASEMESH_RUN_LIVE_EVALS
 ```
 
-The harness uses the same Windows Credential Manager entry as the app. `OPENAI_API_KEY` may be used as a temporary override, and `HRCOMPANION_ANSWER_MODEL` may override the answer model for comparison runs.
+The harness uses the same Windows Credential Manager entry as the app. `OPENAI_API_KEY` may be used as a temporary override, and `CASEMESH_ANSWER_MODEL` may override the answer model for comparison runs.
 
 ## Gate 5 — Naturalness and latency
 

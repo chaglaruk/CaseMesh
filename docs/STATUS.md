@@ -26,7 +26,7 @@ Last update: 2026-08-13.
 
 - Run the process-loopback probe while a real Teams call produces remote audio; verify HR-only ownership, mute/unmute, headphones/Bluetooth, non-Teams exclusion and restart/reconnect.
 - Realtime reconnect/item ordering needs Windows/live API validation.
-- Save an HR Companion OpenAI credential, then run the opt-in live answer-model safety eval once before meeting-ready status.
+- Save a CaseMesh OpenAI credential, then run the opt-in live answer-model safety eval once before meeting-ready status.
 - Exercise Start Live / Stop Live and overlay focus behaviour in a real Teams session.
 - Run a 30+ minute realistic rehearsal and record latency/recovery observations.
 
