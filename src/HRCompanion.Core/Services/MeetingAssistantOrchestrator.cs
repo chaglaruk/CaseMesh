@@ -24,13 +24,27 @@ public sealed class MeetingAssistantOrchestrator
         TranscriptTurn turn,
         CancellationToken cancellationToken = default)
     {
-        if (!turn.IsFinal)
-        {
-            throw new ArgumentException("Only final transcript turns may enter the durable meeting state.", nameof(turn));
-        }
+        await RecordFinalTurnAsync(state, turn, cancellationToken).ConfigureAwait(false);
+        return await CreateAssistanceForRecordedTurnAsync(state, turn, cancellationToken).ConfigureAwait(false);
+    }
 
+    public async Task RecordFinalTurnAsync(
+        MeetingState state,
+        TranscriptTurn turn,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateFinalTurn(turn);
         state.AddTurn(turn);
         await _repository.SaveTranscriptTurnAsync(turn, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<AssistantResponse> CreateAssistanceForRecordedTurnAsync(
+        MeetingState state,
+        TranscriptTurn turn,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateFinalTurn(turn);
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (turn.Speaker != SpeakerRole.Hr)
         {
@@ -66,6 +80,14 @@ public sealed class MeetingAssistantOrchestrator
             await factsTask.ConfigureAwait(false),
             await evidenceTask.ConfigureAwait(false),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void ValidateFinalTurn(TranscriptTurn turn)
+    {
+        if (!turn.IsFinal)
+        {
+            throw new ArgumentException("Only final transcript turns may enter the durable meeting state.", nameof(turn));
+        }
     }
 
     private static MeetingAnalysis Merge(MeetingAnalysis local, MeetingAnalysis ai)
