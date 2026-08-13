@@ -1,10 +1,12 @@
-# Case Brain Specification
+# CaseMesh Case Brain Specification
 
 Date: 2026-08-13
 
 ## Purpose
 
-The Case Brain is the canonical structured state of a workplace-dispute case. Chat, summaries, timelines and exports are views over this state; none of them are the source of truth.
+The Case Brain is the canonical structured state behind a **Matter**. Chat, summaries, timelines, meeting preparation and exports are views over this state; none of them are the source of truth.
+
+CaseMesh launches with workplace disputes, but the reusable evidence core should not assume every Matter is an employment claim.
 
 ## Design goals
 
@@ -15,28 +17,30 @@ The Case Brain is the canonical structured state of a workplace-dispute case. Ch
 - support incremental updates;
 - support user/professional correction;
 - support reproducible AI analysis;
-- make professional handover auditable.
+- support professional handover;
+- allow employment-specific records to extend a generic matter core.
 
-## Core entities
+## Root aggregate: Matter
 
-### Case
-
-Fields should include:
+Core fields should include:
 
 - id;
 - tenant/user ownership;
-- jurisdiction;
-- employment status;
-- employer organisation id;
-- employment start/end dates when known;
-- case stage;
-- user objectives;
+- matter type;
+- jurisdiction where relevant;
+- status/stage;
+- title/label;
+- objectives;
 - created/updated timestamps.
+
+Employment-specific fields such as employer, employment dates and workplace-process stage belong in an employment extension/profile rather than the generic root.
+
+## Core entities
 
 ### Person
 
 - id;
-- case id;
+- matter id;
 - display name;
 - role labels;
 - organisation links;
@@ -47,7 +51,7 @@ Fields should include:
 ### Organisation
 
 - id;
-- case id;
+- matter id;
 - name;
 - type;
 - aliases;
@@ -55,10 +59,10 @@ Fields should include:
 
 ### Document
 
-Represents the logical evidence item.
+Represents a logical evidence item.
 
 - id;
-- case id;
+- matter id;
 - title;
 - document type;
 - origin channel;
@@ -103,21 +107,21 @@ The central epistemic object.
 Suggested fields:
 
 - id;
-- case id;
+- matter id;
 - subject entity/reference;
 - predicate;
 - object/value;
 - asserted by;
 - event time or time range;
 - assertion time;
-- source span id;
+- source span id when documentary;
 - origin class;
 - assertion class;
 - dispute state;
 - integrity state;
 - extraction confidence;
 - created-by model/provider/version when applicable;
-- user verification state;
+- user/professional verification state;
 - superseded-by reference where applicable.
 
 ### Event
@@ -125,19 +129,19 @@ Suggested fields:
 Represents something that may have happened, constructed from one or more assertions.
 
 - id;
-- case id;
+- matter id;
 - event type;
 - start/end time;
 - participants;
 - event status;
-- human-readable neutral label;
+- neutral human-readable label;
 - verification state.
 
 An event is not automatically true merely because assertions point to it.
 
 ### AssertionEventLink
 
-Links assertions to events with relation type such as:
+Links assertions to events with relation types such as:
 
 - supports;
 - contradicts;
@@ -145,10 +149,14 @@ Links assertions to events with relation type such as:
 - supersedes;
 - contextualizes.
 
+### Communication
+
+Represents an email, letter, message, meeting, transcript or other communication container without treating its contents as automatically true.
+
 ### Contradiction
 
 - id;
-- case id;
+- matter id;
 - assertion A;
 - assertion B;
 - contradiction type;
@@ -157,12 +165,20 @@ Links assertions to events with relation type such as:
 - resolution note/reference;
 - created/resolved timestamps.
 
+### Objective
+
+Stores what the user wants to achieve separately from evidence about what has happened.
+
+### Task
+
+Stores next actions/reminders and their provenance/derivation where relevant.
+
 ### AnalysisNode
 
 Stores AI interpretation separately from evidence.
 
 - id;
-- case id;
+- matter id;
 - analysis type;
 - retrieval/source ids used;
 - provider/model;
@@ -184,6 +200,21 @@ Examples:
 - assertion marked disputed;
 - document version superseded;
 - analysis regenerated after new evidence.
+
+## Employment-specific extension
+
+The first vertical may add records such as:
+
+- `EmploymentProfile`;
+- `EmploymentTerm`;
+- `HealthAbsenceEvent`;
+- `AdjustmentRequest`;
+- `WorkplaceProcess` for grievance/disciplinary/capability/appeal stages;
+- `AcasProcessState`;
+- `LegalAuthority` with jurisdiction/effective-date metadata;
+- `Deadline` only where deterministic rules are validated.
+
+These records may link to generic assertions/events/documents, but they must not redefine the provenance rules.
 
 ## Evidence classification
 
@@ -231,7 +262,7 @@ Avoid one scalar confidence score. Use orthogonal dimensions.
 - OcrUncertain
 - MetadataUncertain
 
-### User verification state
+### Verification state
 
 - NotReviewed
 - Confirmed
@@ -244,7 +275,7 @@ Every displayed evidence-based statement must be navigable through:
 
 `displayed statement -> assertion/event -> source span -> document version -> original object/hash`
 
-If any link is missing, the UI must not present the statement as source-backed.
+If any required link is missing, the UI must not present the statement as source-backed.
 
 ## Example
 
@@ -261,7 +292,7 @@ Correct state:
 
 ## Correction rules
 
-User corrections do not delete history.
+User/professional corrections do not delete history.
 
 Example flow:
 
@@ -274,19 +305,19 @@ Example flow:
 
 ## Incremental update rule
 
-Adding a new document should reprocess only affected entities/assertions/events plus dependent analyses. Do not regenerate the entire case state from a monolithic prompt.
+Adding a new document should reprocess only affected entities/assertions/events plus dependent analyses. Do not regenerate the entire Matter from a monolithic prompt.
 
 ## Retrieval domains
 
-Maintain two separate domains:
+Maintain two separate domains for the workplace vertical:
 
-### Case Evidence RAG
+### Matter Evidence RAG
 
-Contains only the user's case evidence and structured case state.
+Contains only the user's evidence and structured Matter state.
 
-### Legal/Process Authority RAG
+### External Authority RAG
 
-Contains validated external authorities with jurisdiction and effective-date metadata.
+Contains validated external law/process authorities with jurisdiction and effective-date metadata.
 
 The UI should clearly separate:
 
@@ -295,21 +326,30 @@ The UI should clearly separate:
 - what is uncertain;
 - what needs verification.
 
+## Meeting/transcript rule
+
+A meeting is evidence and context inside a Matter, not a parallel product universe.
+
+Uploaded or live transcripts create candidate communications/assertions/events. They do not directly overwrite existing evidence. Any CaseMesh Live feature must write through the same provenance and correction model.
+
 ## Initial persistence approach
 
-Use PostgreSQL as the system of record, relational link tables for the case graph, full-text search and pgvector for retrieval acceleration.
+Use PostgreSQL as the system of record, relational link tables for the matter graph, full-text search and pgvector for retrieval acceleration.
 
 Do not introduce a dedicated graph database until graph traversal is demonstrated to be a real bottleneck.
 
 ## Required tests
 
 - source-span chain cannot reference another tenant;
-- assertion cannot be marked source-backed without a valid source span;
+- source-backed assertion requires a valid source span;
 - AI inference cannot silently enter documentary evidence classes;
 - contradictions preserve both sides;
 - corrections create audit events;
 - superseded versions remain traceable;
 - duplicate file hashes do not create duplicate originals;
 - user-facing citation ids always resolve;
-- one new document does not mutate unrelated case records;
-- export contains stable references back to original evidence.
+- one new document does not mutate unrelated Matter records;
+- export contains stable references back to original evidence;
+- generic Matter entities do not require employment-specific fields;
+- employment extensions cannot bypass generic provenance rules;
+- transcript-derived assertions remain distinguishable from original documentary records.
