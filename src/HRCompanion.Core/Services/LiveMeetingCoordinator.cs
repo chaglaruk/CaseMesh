@@ -138,7 +138,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         var task = ProcessFinalTurnAsync(turn, generation);
         _processingTasks[generation] = task;
         _ = task.ContinueWith(
-            _ => _processingTasks.TryRemove(generation, out _),
+            completedTask => _processingTasks.TryRemove(generation, out _),
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
@@ -173,6 +173,11 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
             }
             catch (OperationCanceledException) when (assistantCts.IsCancellationRequested)
             {
+                if (!lifecycleToken.IsCancellationRequested && IsLatestGeneration(generation))
+                {
+                    NonFatalError?.Invoke(this, new TimeoutException(
+                        $"Live assistance exceeded the {LiveAssistanceBudget.TotalSeconds:0}-second latency budget."));
+                }
                 return;
             }
             finally
