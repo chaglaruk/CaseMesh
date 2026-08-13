@@ -2,6 +2,8 @@ namespace HRCompanion.Core.Models;
 
 public sealed class MeetingState
 {
+    private const int DefaultRecentTurnWindow = 32;
+    private const int MaxRollingContextCharacters = 12000;
     private readonly List<TranscriptTurn> _turns = [];
 
     public MeetingState(Guid meetingId, string caseName, DateTimeOffset startedAt)
@@ -42,6 +44,8 @@ public sealed class MeetingState
         {
             _turns.Insert(insertAt, turn);
         }
+
+        RebuildRollingContext();
     }
 
     public void SetRollingSummary(string summary) => RollingSummary = summary.Trim();
@@ -50,8 +54,37 @@ public sealed class MeetingState
     public void ReplaceCommitments(IEnumerable<string> items) => Replace(_commitments, items);
     public void ReplaceWrittenFollowUps(IEnumerable<string> items) => Replace(_writtenFollowUps, items);
 
-    public IReadOnlyList<TranscriptTurn> RecentTurns(int max = 32) =>
+    public IReadOnlyList<TranscriptTurn> RecentTurns(int max = DefaultRecentTurnWindow) =>
         _turns.Count <= max ? _turns : _turns.Skip(_turns.Count - max).ToArray();
+
+    private void RebuildRollingContext()
+    {
+        var olderTurnCount = Math.Max(0, _turns.Count - DefaultRecentTurnWindow);
+        if (olderTurnCount == 0)
+        {
+            RollingSummary = string.Empty;
+            return;
+        }
+
+        var lines = _turns.Take(olderTurnCount).Select(turn =>
+            $"[{turn.StartedAt:HH:mm:ss}] {SpeakerLabel(turn.Speaker)}: {CollapseWhitespace(turn.Text)}");
+        var context = string.Join(Environment.NewLine, lines);
+        if (context.Length > MaxRollingContextCharacters)
+        {
+            context = "… earlier compacted context omitted …" + Environment.NewLine + context[^MaxRollingContextCharacters..];
+        }
+
+        RollingSummary = context;
+    }
+
+    private static string SpeakerLabel(SpeakerRole speaker) => speaker switch
+    {
+        SpeakerRole.User => "USER_ACTUALLY_SAID",
+        SpeakerRole.Hr => "HR_SAID",
+        _ => "UNKNOWN"
+    };
+
+    private static string CollapseWhitespace(string value) => string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private static void Replace(List<string> target, IEnumerable<string> source)
     {
