@@ -28,8 +28,9 @@ public sealed class MeetingAssistantOrchestratorTests
 
         Assert.Equal(0, ai.AnalysisCalls);
         Assert.Equal(1, ai.AnswerCalls);
-        Assert.Equal(MeetingIntent.CommitmentRequest, ai.LastAnswerAnalysis?.Intent);
-        Assert.True(ai.LastAnswerAnalysis?.PotentialCommitment);
+        Assert.NotNull(ai.LastAnswerAnalysis);
+        Assert.Equal(MeetingIntent.CommitmentRequest, ai.LastAnswerAnalysis.Intent);
+        Assert.True(ai.LastAnswerAnalysis.PotentialCommitment);
     }
 
     [Fact]
@@ -55,7 +56,8 @@ public sealed class MeetingAssistantOrchestratorTests
 
         Assert.Equal(1, ai.AnalysisCalls);
         Assert.Equal(1, ai.AnswerCalls);
-        Assert.Equal(MeetingIntent.Question, ai.LastAnswerAnalysis?.Intent);
+        Assert.NotNull(ai.LastAnswerAnalysis);
+        Assert.Equal(MeetingIntent.Question, ai.LastAnswerAnalysis.Intent);
         Assert.False(overall.IsCancellationRequested);
     }
 
