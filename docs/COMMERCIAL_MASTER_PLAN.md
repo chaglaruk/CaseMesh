@@ -1,28 +1,30 @@
-# HR Companion — Commercial Master Plan
+# CaseMesh — Commercial Master Plan
 
 Date: 2026-08-13
 
 ## Direction
 
-The commercial product is an **evidence operating system for workplace disputes**.
+CaseMesh launches as an **evidence operating system for workplace disputes** on top of a reusable matter-centric evidence core.
 
-New critical path:
+Brand and scope decisions in `docs/BRAND_AND_SCOPE.md` take precedence over older working-name assumptions.
 
-`evidence -> provenance -> structured case state -> chronology -> dispute map -> correction -> professional handover`
+The commercial critical path is:
 
-The current Windows live-meeting prototype remains useful research and may return as a later feature, but it is no longer the first commercial wedge.
+`evidence -> provenance -> structured Matter/Case Brain -> chronology -> dispute map -> correction -> professional handover`
+
+The existing Windows live-meeting prototype remains useful research and may return later as **CaseMesh Live**, but it is no longer the first commercial wedge.
 
 ## First product surfaces
 
 ### Employee workspace
 
-- create a case;
+- create a Matter;
 - upload evidence;
 - inspect a source-linked timeline;
 - see who made each assertion;
 - see contradictions and missing evidence;
 - correct extraction;
-- ask case-grounded questions;
+- ask matter-grounded questions;
 - export a professional-ready pack.
 
 ### Professional handover
@@ -37,6 +39,19 @@ The current Windows live-meeting prototype remains useful research and may retur
 - downloadable structured bundle.
 
 First professional delivery should be Word/PDF/CSV/ZIP. A portal can wait until firms repeatedly request one.
+
+## Product architecture
+
+The platform has four conceptual layers:
+
+- **CaseMesh Core** — reusable Matter/Case Brain, evidence and provenance;
+- **CaseMesh Work** — first commercial vertical for workplace disputes;
+- **CaseMesh Professional** — solicitor/professional handover and intake;
+- **CaseMesh Live** — later preparation, transcript review and live grounded assistance.
+
+These are architectural layers, not launch pricing tiers.
+
+Architecture may be broader than go-to-market, but the roadmap stays workplace-dispute focused until product-market fit is demonstrated.
 
 ## Repository transition
 
@@ -54,14 +69,16 @@ Reuse:
 
 Generalize or replace:
 
-- single-user SQLite as the main system of record;
-- WPF as the primary UI;
+- single-user SQLite as the main commercial system of record;
+- WPF as the primary commercial UI;
 - the three-state `CaseFact` model;
 - meeting state as the central domain object;
 - live-audio gates as top repository priority;
 - FTS5-only retrieval as the long-term platform retriever.
 
 Do not delete the existing meeting projects during the first refactor. Keep them buildable and isolate them from the new commercial critical path.
+
+Remaining `HRCompanion.*` solution/project/namespace identifiers are legacy names. Rename them to `CaseMesh.*` in a separate behavior-neutral batch.
 
 ## Target architecture
 
@@ -86,11 +103,15 @@ Managed providers are preferred for the MVP, subject to the privacy/security and
 
 Avoid Kubernetes, microservices, Kafka, Neo4j, custom vector infrastructure and self-hosted foundation models initially.
 
-## Case Brain
+## Matter / Case Brain
 
-The new domain should contain at least:
+The root commercial aggregate is `Matter`.
 
-`Case`, `Person`, `Organisation`, `Document`, `DocumentVersion`, `SourceSpan`, `Assertion`, `Event`, `AssertionEventLink`, `Communication`, `EmploymentTerm`, `HealthAbsenceEvent`, `Request`, `Response`, `Issue`, `Contradiction`, `Deadline`, `LegalAuthority`, `Task`, `Objective`, `AnalysisNode`, `AuditEvent`.
+Core entities should contain at least:
+
+`Matter`, `Person`, `Organisation`, `Document`, `DocumentVersion`, `SourceSpan`, `Assertion`, `Event`, `AssertionEventLink`, `Communication`, `Contradiction`, `Task`, `Objective`, `AnalysisNode`, `AuditEvent`.
+
+Employment-specific records such as `EmploymentTerm`, `HealthAbsenceEvent`, workplace-process state, deadlines and legal authorities sit above this reusable core.
 
 The central evidence entity is `Assertion`, not a free-text `Fact`.
 
@@ -105,7 +126,8 @@ The central evidence entity is `Assertion`, not a free-text `Fact`.
 7. Corrections preserve audit history.
 8. Every evidence-based displayed statement resolves through `statement -> assertion/event -> source span -> document version -> original hash`.
 9. Vector search is never the system of record.
-10. Legal/process material and user case evidence are separate retrieval domains.
+10. Legal/process material and user evidence are separate retrieval domains.
+11. Generic Matter entities do not require employment-specific fields.
 
 ## AI processing pipeline
 
@@ -118,7 +140,7 @@ upload
  -> structured extraction
  -> entity/assertion/event normalization
  -> source-span verification
- -> Case Brain merge
+ -> Matter Brain merge
  -> retrieval
  -> stronger reasoning when needed
  -> citation verification
@@ -131,13 +153,20 @@ Keep authorization, tenancy, hashes, citation existence, date arithmetic, entitl
 
 ## MVP navigation
 
-1. Timeline
-2. Evidence
-3. People
-4. Disputed
-5. Questions
-6. Prepare
-7. Export
+Top level: **Matters**.
+
+Inside a Matter:
+
+1. Overview
+2. Timeline
+3. Evidence
+4. People
+5. Disputed
+6. Questions
+7. Prepare
+8. Export
+
+`Review` is added with meeting/transcript ingestion. `Live` is later.
 
 Every extracted statement supports `Correct`, `Wrong`, and `Needs context`.
 
@@ -156,39 +185,46 @@ Every extracted statement supports `Correct`, `Wrong`, and `Needs context`.
 
 ### Phase 0 — validation and operating model
 
-Finalize the Case Brain schema, build a clickable prototype, create synthetic eval data, interview employees and solicitors, prepare data-flow/compliance materials, and run a controlled concierge beta.
+Finalize Core vs workplace-extension boundaries, build a CaseMesh prototype, create synthetic eval data, interview employees and solicitors, prepare data-flow/compliance materials, and run a controlled concierge beta.
 
 ### Phase 1 — private evidence MVP
 
-Build authentication, cases, secure uploads, original hashes/versions, parsing/OCR, source spans, entities, assertions/events, chronology, contradictions, corrections/audit trail and professional export.
+Build authentication, Matters, secure uploads, original hashes/versions, parsing/OCR, source spans, entities, assertions/events, chronology, contradictions, corrections/audit trail and professional export.
 
 ### Phase 2 — commercial pilot
 
-Add quotas, the chosen commercial model, case-grounded Q&A, gap analysis, meeting preparation, mature export/delete/support processes and professional workflows.
+Add quotas, the chosen commercial model, matter-grounded Q&A, gap analysis, meeting preparation, mature export/delete/support processes and professional workflows.
 
 ### Phase 3 — public England & Wales launch
 
-Add refined onboarding, selected email forwarding, versioned guidance corpus where appropriate, reminders, accessibility, security testing and organic acquisition surfaces.
+Launch workplace-dispute positioning on `casemesh.dev` with refined onboarding, selected email forwarding, versioned guidance where appropriate, reminders, accessibility, security testing and organic acquisition surfaces.
 
 ### Phase 4 — professional ecosystem
 
 Add portal/annotations, organization roles, SSO, APIs and union/insurer pilots only after repeated demand.
 
-### Phase 5 — later capabilities
+### Phase 5 — CaseMesh Live
 
-Uploaded meeting recording/transcript analysis, consent-based live transcription, near-live copilot after safety evaluation, additional UK jurisdictions and international packs.
+Add uploaded meeting recording/transcript analysis, then consent-based live transcription and near-live source-grounded assistance only after safety, privacy, latency and legal gates pass.
+
+### Phase 6 — adjacent vertical experiments
+
+Test one adjacent high-context dispute/matter vertical at a time only after Core + Work prove product-market fit. Do not pre-build generic meeting, sales or interview products.
 
 ## Codex build order
 
-1. Commercial architecture scaffolding while keeping the existing build green.
-2. V2 epistemic domain and invariant tests.
-3. PostgreSQL persistence and tenancy model.
-4. Ingestion v2 with immutable originals, versions and source spans.
-5. Case Brain merge, entity resolution, contradiction candidates and corrections.
-6. Web MVP: auth, case, upload, timeline, evidence, disputed view and correction UX.
-7. Professional export.
-8. Case-grounded Q&A after provenance/retrieval tests pass.
-9. Deferred features only after their relevant gates pass.
+0. Mechanical rename of legacy `HRCompanion.*` identifiers to `CaseMesh.*`, behavior unchanged.
+1. V2 generic evidence-domain scaffolding while keeping the existing build green.
+2. Matter-root epistemic domain and invariant tests.
+3. Employment-specific extension types needed by synthetic workplace fixtures.
+4. PostgreSQL persistence and tenancy model.
+5. Ingestion v2 with immutable originals, versions and source spans.
+6. Matter Brain merge, entity resolution, contradiction candidates and corrections.
+7. Web MVP: auth, Matters, upload, timeline, evidence, disputed view and correction UX.
+8. Professional export.
+9. Matter-grounded Q&A after provenance/retrieval tests pass.
+10. Meeting preparation.
+11. Live capabilities only after their separate gates pass.
 
 ## Success definition
 
@@ -200,4 +236,7 @@ The product succeeds when a user can reliably answer:
 - What conflicts with it?
 - What is missing?
 - What changed when new evidence arrived?
-- Can a professional use this case without rebuilding it from scratch?
+- What should I prepare for next?
+- Can a professional use this Matter without rebuilding it from scratch?
+
+CaseMesh Live succeeds later only if it can use that reliable Matter state without weakening those guarantees.
