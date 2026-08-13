@@ -8,6 +8,8 @@ public sealed class OpenAiOptions
     public string TranscriptionModel { get; set; } = "gpt-live-transcribe";
     public string TranscriptionLanguage { get; set; } = "en";
     public string TranscriptionDelay { get; set; } = "low";
+    public int AnalysisTimeoutMilliseconds { get; set; } = 2500;
+    public int AnswerTimeoutMilliseconds { get; set; } = 6000;
     // API service_tier supports auto/default/flex/priority. Keep auto until real latency/cost benchmarking justifies priority.
     public string ServiceTier { get; set; } = "auto";
 }
