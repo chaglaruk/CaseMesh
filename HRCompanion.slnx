@@ -7,6 +7,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/HRCompanion.Core.Tests/HRCompanion.Core.Tests.csproj" />
+    <Project Path="tests/HRCompanion.Audio.Windows.Tests/HRCompanion.Audio.Windows.Tests.csproj" />
     <Project Path="tests/HRCompanion.Infrastructure.Tests/HRCompanion.Infrastructure.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">

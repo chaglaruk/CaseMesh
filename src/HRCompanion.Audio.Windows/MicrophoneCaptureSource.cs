@@ -1,63 +1,114 @@
 using HRCompanion.Core.Abstractions;
 using HRCompanion.Core.Models;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace HRCompanion.Audio.Windows;
 
 public sealed class MicrophoneCaptureSource : IAudioCaptureSource
 {
-    private readonly int _deviceNumber;
-    private WaveInEvent? _capture;
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private WasapiRecorder? _capture;
     private AudioFrameConverter? _converter;
-
-    public MicrophoneCaptureSource(int deviceNumber = 0) => _deviceNumber = deviceNumber;
+    private long _capturedPacketCount;
+    private int _disposeStarted;
 
     public SpeakerRole Speaker => SpeakerRole.User;
-    public string DisplayName => _deviceNumber >= 0 && _deviceNumber < WaveIn.DeviceCount
-        ? WaveIn.GetCapabilities(_deviceNumber).ProductName
-        : "Microphone";
-
+    public long CapturedPacketCount => Interlocked.Read(ref _capturedPacketCount);
+    public string DisplayName => _capture?.DeviceFriendlyName ?? GetDefaultMicrophoneName();
     public event EventHandler<AudioFrame>? FrameReady;
+    public event EventHandler<Exception>? CaptureFailed;
 
-    public Task StartAsync(CancellationToken cancellationToken = default)
+    public async Task StartAsync(CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_capture is not null) return Task.CompletedTask;
-        if (WaveIn.DeviceCount == 0) throw new InvalidOperationException("No microphone capture device is available.");
-
-        _capture = new WaveInEvent
+        if (Volatile.Read(ref _disposeStarted) != 0) throw new ObjectDisposedException(nameof(MicrophoneCaptureSource));
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            DeviceNumber = _deviceNumber,
-            WaveFormat = new WaveFormat(48000, 16, 1),
-            BufferMilliseconds = 50,
-            NumberOfBuffers = 3
-        };
-        _converter = new AudioFrameConverter(_capture.WaveFormat);
-        _capture.DataAvailable += OnDataAvailable;
-        _capture.StartRecording();
-        return Task.CompletedTask;
+            if (_capture is not null) return;
+            var capture = new WasapiRecorderBuilder()
+                .WithBufferLength(50)
+                .Build();
+            var converter = new AudioFrameConverter(capture.WaveFormat);
+            Interlocked.Exchange(ref _capturedPacketCount, 0);
+            capture.DataAvailable += OnDataAvailable;
+            capture.RecordingStopped += OnRecordingStopped;
+            try
+            {
+                _converter = converter;
+                capture.StartRecording();
+                _capture = capture;
+            }
+            catch
+            {
+                _converter = null;
+                capture.DataAvailable -= OnDataAvailable;
+                capture.RecordingStopped -= OnRecordingStopped;
+                await capture.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken = default)
+    public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_capture is null) return Task.CompletedTask;
-        _capture.DataAvailable -= OnDataAvailable;
-        _capture.StopRecording();
-        _capture.Dispose();
-        _capture = null;
-        _converter = null;
-        return Task.CompletedTask;
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_capture is null) return;
+            var capture = _capture;
+            _capture = null;
+            _converter = null;
+            capture.DataAvailable -= OnDataAvailable;
+            capture.RecordingStopped -= OnRecordingStopped;
+            await capture.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
-    private void OnDataAvailable(object? sender, WaveInEventArgs e)
+    private void OnDataAvailable(ReadOnlySpan<byte> buffer, AudioClientBufferFlags flags, long devicePosition, long qpcPosition)
     {
-        if (_converter is null) return;
-        foreach (var frame in _converter.Push(e.Buffer, e.BytesRecorded, DateTimeOffset.UtcNow))
+        Interlocked.Increment(ref _capturedPacketCount);
+        var converter = _converter;
+        if (converter is null) return;
+        foreach (var frame in converter.Push(buffer, DateTimeOffset.UtcNow))
         {
             FrameReady?.Invoke(this, frame);
         }
     }
 
-    public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
+    private void OnRecordingStopped(object? sender, StoppedEventArgs e)
+    {
+        if (e.Exception is not null)
+        {
+            CaptureFailed?.Invoke(this, new InvalidOperationException("Microphone capture stopped unexpectedly.", e.Exception));
+        }
+    }
+
+    private static string GetDefaultMicrophoneName()
+    {
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console);
+            return device.FriendlyName;
+        }
+        catch
+        {
+            return "Default microphone";
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0) return;
+        await StopAsync().ConfigureAwait(false);
+    }
 }

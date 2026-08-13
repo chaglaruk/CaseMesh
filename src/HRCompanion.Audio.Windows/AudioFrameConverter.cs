@@ -1,87 +1,120 @@
+using System.Buffers.Binary;
+using System.Diagnostics;
 using HRCompanion.Core.Abstractions;
 using NAudio.Wave;
-using NAudio.Wave.SampleProviders;
 
 namespace HRCompanion.Audio.Windows;
 
 internal sealed class AudioFrameConverter
 {
-    private readonly BufferedWaveProvider _buffer;
-    private readonly ISampleProvider _resampler;
-    private readonly float[] _sampleBuffer = new float[2400]; // ~100 ms at 24 kHz
+    private const int OutputSampleRate = 24000;
+    private const int OutputSamplesPerFrame = 1200; // 50 ms
+    private readonly WaveFormat _inputFormat;
+    private readonly bool _isFloat;
+    private readonly double _sourceSamplesPerOutputSample;
+    private readonly List<float> _monoSamples = [];
+    private readonly List<short> _outputSamples = [];
+    private double _nextOutputIndex;
 
     public AudioFrameConverter(WaveFormat inputFormat)
     {
-        _buffer = new BufferedWaveProvider(inputFormat)
+        if (inputFormat.Channels <= 0 || inputFormat.SampleRate <= 0 || inputFormat.BlockAlign <= 0)
+            throw new ArgumentException("Audio input format is invalid.", nameof(inputFormat));
+
+        _inputFormat = inputFormat;
+        _isFloat = inputFormat.Encoding == WaveFormatEncoding.IeeeFloat ||
+                   inputFormat is WaveFormatExtensible extensible &&
+                   extensible.SubFormat == AudioMediaSubtypes.MEDIASUBTYPE_IEEE_FLOAT;
+        var isPcm = inputFormat.Encoding == WaveFormatEncoding.Pcm ||
+                    inputFormat is WaveFormatExtensible pcmExtensible &&
+                    pcmExtensible.SubFormat == AudioMediaSubtypes.MEDIASUBTYPE_PCM;
+        if (!_isFloat && !isPcm)
+            throw new NotSupportedException($"Audio format {inputFormat.Encoding} is not supported for live transcription.");
+        if (_isFloat && inputFormat.BitsPerSample is not (32 or 64))
+            throw new NotSupportedException($"{inputFormat.BitsPerSample}-bit IEEE float audio is not supported.");
+        if (!_isFloat && inputFormat.BitsPerSample is not (8 or 16 or 24 or 32))
+            throw new NotSupportedException($"{inputFormat.BitsPerSample}-bit PCM audio is not supported.");
+
+        _sourceSamplesPerOutputSample = inputFormat.SampleRate / (double)OutputSampleRate;
+    }
+
+    public IReadOnlyList<AudioFrame> Push(ReadOnlySpan<byte> buffer, DateTimeOffset capturedAt)
+    {
+        var completeBytes = buffer.Length - buffer.Length % _inputFormat.BlockAlign;
+        var bytesPerSample = _inputFormat.BitsPerSample / 8;
+        for (var frameOffset = 0; frameOffset < completeBytes; frameOffset += _inputFormat.BlockAlign)
         {
-            BufferDuration = TimeSpan.FromSeconds(3),
-            DiscardOnBufferOverflow = true,
-            ReadFully = false
+            double sum = 0;
+            for (var channel = 0; channel < _inputFormat.Channels; channel++)
+            {
+                var sampleOffset = frameOffset + channel * bytesPerSample;
+                sum += ReadSample(buffer.Slice(sampleOffset, bytesPerSample));
+            }
+            _monoSamples.Add((float)(sum / _inputFormat.Channels));
+        }
+
+        while (_nextOutputIndex + 1 < _monoSamples.Count)
+        {
+            var lowerIndex = (int)_nextOutputIndex;
+            var fraction = _nextOutputIndex - lowerIndex;
+            var sample = _monoSamples[lowerIndex] +
+                         (_monoSamples[lowerIndex + 1] - _monoSamples[lowerIndex]) * fraction;
+            _outputSamples.Add(FloatToPcm16(sample));
+            _nextOutputIndex += _sourceSamplesPerOutputSample;
+        }
+
+        var removableSamples = Math.Min((int)_nextOutputIndex, Math.Max(0, _monoSamples.Count - 1));
+        if (removableSamples > 0)
+        {
+            _monoSamples.RemoveRange(0, removableSamples);
+            _nextOutputIndex -= removableSamples;
+        }
+
+        var frames = new List<AudioFrame>(_outputSamples.Count / OutputSamplesPerFrame);
+        while (_outputSamples.Count >= OutputSamplesPerFrame)
+        {
+            var pcm = new byte[OutputSamplesPerFrame * sizeof(short)];
+            for (var index = 0; index < OutputSamplesPerFrame; index++)
+            {
+                BinaryPrimitives.WriteInt16LittleEndian(
+                    pcm.AsSpan(index * sizeof(short), sizeof(short)),
+                    _outputSamples[index]);
+            }
+            _outputSamples.RemoveRange(0, OutputSamplesPerFrame);
+            frames.Add(new AudioFrame(pcm, capturedAt));
+        }
+        return frames;
+    }
+
+    private double ReadSample(ReadOnlySpan<byte> sample)
+    {
+        if (_isFloat)
+        {
+            return _inputFormat.BitsPerSample == 32
+                ? BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(sample))
+                : BitConverter.Int64BitsToDouble(BinaryPrimitives.ReadInt64LittleEndian(sample));
+        }
+
+        return _inputFormat.BitsPerSample switch
+        {
+            8 => (sample[0] - 128) / 128.0,
+            16 => BinaryPrimitives.ReadInt16LittleEndian(sample) / 32768.0,
+            24 => ReadPcm24(sample) / 8388608.0,
+            32 => BinaryPrimitives.ReadInt32LittleEndian(sample) / 2147483648.0,
+            _ => throw new UnreachableException()
         };
-
-        ISampleProvider samples = _buffer.ToSampleProvider();
-        if (samples.WaveFormat.Channels > 1)
-        {
-            samples = new DownmixToMonoSampleProvider(samples);
-        }
-        _resampler = samples.WaveFormat.SampleRate == 24000
-            ? samples
-            : new WdlResamplingSampleProvider(samples, 24000);
     }
 
-    public IEnumerable<AudioFrame> Push(byte[] buffer, int bytesRecorded, DateTimeOffset capturedAt)
+    private static int ReadPcm24(ReadOnlySpan<byte> sample)
     {
-        _buffer.AddSamples(buffer, 0, bytesRecorded);
-        while (_buffer.BufferedBytes > 0)
-        {
-            var read = _resampler.Read(_sampleBuffer, 0, _sampleBuffer.Length);
-            if (read <= 0) yield break;
-
-            var pcm = new byte[read * 2];
-            for (var i = 0; i < read; i++)
-            {
-                var sample = Math.Clamp(_sampleBuffer[i], -1f, 1f);
-                var value = (short)Math.Round(sample * short.MaxValue);
-                pcm[i * 2] = (byte)(value & 0xff);
-                pcm[i * 2 + 1] = (byte)((value >> 8) & 0xff);
-            }
-            yield return new AudioFrame(pcm, capturedAt);
-
-            // Avoid manufacturing silence when the buffered source has been drained.
-            if (_buffer.BufferedBytes == 0) yield break;
-        }
+        var value = sample[0] | sample[1] << 8 | sample[2] << 16;
+        return (value & 0x800000) == 0 ? value : value | unchecked((int)0xff000000);
     }
 
-    private sealed class DownmixToMonoSampleProvider : ISampleProvider
+    private static short FloatToPcm16(double sample)
     {
-        private readonly ISampleProvider _source;
-        private float[] _sourceBuffer = [];
-
-        public DownmixToMonoSampleProvider(ISampleProvider source)
-        {
-            _source = source;
-            WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(source.WaveFormat.SampleRate, 1);
-        }
-
-        public WaveFormat WaveFormat { get; }
-
-        public int Read(float[] buffer, int offset, int count)
-        {
-            var channels = _source.WaveFormat.Channels;
-            var sourceNeeded = count * channels;
-            if (_sourceBuffer.Length < sourceNeeded) _sourceBuffer = new float[sourceNeeded];
-            var sourceRead = _source.Read(_sourceBuffer, 0, sourceNeeded);
-            var frames = sourceRead / channels;
-            for (var frame = 0; frame < frames; frame++)
-            {
-                float sum = 0;
-                for (var channel = 0; channel < channels; channel++)
-                {
-                    sum += _sourceBuffer[frame * channels + channel];
-                }
-                buffer[offset + frame] = sum / channels;
-            }
-            return frames;
-        }
+        if (!double.IsFinite(sample)) return 0;
+        var clamped = Math.Clamp(sample, -1.0, 1.0);
+        return clamped <= -1.0 ? short.MinValue : (short)Math.Round(clamped * short.MaxValue);
     }
 }

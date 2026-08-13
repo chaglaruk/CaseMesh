@@ -35,7 +35,7 @@ See [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md).
 
 - `HRCompanion.Core` — domain types, contracts, orchestration, deterministic cue logic.
 - `HRCompanion.Infrastructure` — SQLite, FTS5 retrieval, document ingestion, OpenAI request contracts, Windows credential storage.
-- `HRCompanion.Audio.Windows` — Windows audio capture abstractions and safe fallback capture.
+- `HRCompanion.Audio.Windows` — process-specific Teams application loopback, separate microphone capture, conversion and explicit diagnostic fallback.
 - `HRCompanion.App` — minimal WPF desktop shell and overlay.
 - `HRCompanion.AudioProbe` — local Windows validation utility for audio gates.
 - `tests/*` — deterministic unit tests.
@@ -72,11 +72,13 @@ dotnet build .\HRCompanion.slnx -c Release
 dotnet test .\HRCompanion.slnx -c Release --no-build
 ```
 
-Run the audio probe before integrating live meeting features:
+Run the no-recording audio probe while Teams is open. It auto-selects one clear Teams tree; when several are listed, pass the intended root PID:
 
 ```powershell
-dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.csproj
+dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.csproj -c Release -- --pid <TEAMS_ROOT_PID> --seconds 10
 ```
+
+`--system-fallback` is an explicit all-system-audio diagnostic only and cannot verify Gate 1. The probe stores no raw audio.
 
 ## AI defaults
 

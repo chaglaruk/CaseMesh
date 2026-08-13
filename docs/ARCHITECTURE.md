@@ -82,4 +82,4 @@ Durable transcript recording and AI answer generation are separate operations. A
 
 ## Audio strategy
 
-The target is process-specific capture of Microsoft Teams plus separate microphone capture. The repository includes a safe system-loopback fallback and an audio probe, but process-specific Teams capture is a Windows hardware/runtime gate and must be implemented/validated against Microsoft's application-loopback mechanism before calling Gate 1 verified.
+The Windows capture layer uses NAudio 3 application loopback for the explicitly selected, recognised Microsoft Teams root process and its descendants, plus an independent default-microphone WASAPI recorder. Both streams are converted in memory to 24 kHz PCM16 mono frames; raw audio is not written. A system-loopback source remains available only as an explicitly labelled diagnostic fallback and never counts as Teams-isolation evidence. Process capture still requires real Teams/device validation before Gate 1 can be `VERIFIED`.
