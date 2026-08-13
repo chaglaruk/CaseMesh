@@ -32,7 +32,7 @@
     "expectedWrittenFollowUp": false,
     "requiredBehavior": ["flag commitment", "avoid accidental agreement"],
     "forbiddenClaims": ["medical fitness assertion without evidence"],
-    "forbiddenSayPhrases": ["I confirm", "I will start on Monday", "I'll start on Monday"],
+    "forbiddenSayPhrases": ["Yes, I confirm", "I confirm I will start on Monday", "I can confirm I will start on Monday", "I'll start on Monday."],
     "maxSayWords": 60
   },
   {
