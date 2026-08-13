@@ -1,17 +1,32 @@
 # Codex handoff
 
-Codex should first read `AGENTS.md`, `README.md`, `docs/GATES.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY_PRIVACY.md`, and `docs/STATUS.md`.
+The repository now has two development tracks.
 
-The first Windows batch is fully specified in [`docs/FIRST_CODEX_BATCH.md`](FIRST_CODEX_BATCH.md). It is deliberately broad enough to save iteration time while preserving strict gate evidence.
+## Primary commercial track
 
-Highest-priority unresolved work:
+For new product work, read:
 
-1. restore/build/test on Windows/.NET 10 and fix all compile/runtime mismatches
-2. real process-specific Teams application-loopback capture
-3. robust two-source `gpt-live-transcribe` reconnect + `item_id` ordering
-4. wire Start/Stop live WPF path into the existing Case Brain/orchestrator/overlay
-5. validate ingestion/grounding and prompt-injection safeguards
-6. measure latency/naturalness rather than inventing performance claims
-7. produce strict Gate 0–7 evidence
+1. `AGENTS.md`
+2. `docs/BRAND_AND_SCOPE.md`
+3. `docs/RESEARCH_BASELINE_2026-08-13.md`
+4. `docs/COMMERCIAL_MASTER_PLAN.md`
+5. `docs/CASE_BRAIN_SPEC.md`
+6. `docs/PRODUCT_VALIDATION_AND_GTM.md`
+7. `docs/CODEX_COMMERCIAL_HANDOFF.md`
 
-Never mark hardware/live Gates 1/2/5/6/7 verified from compilation, mocks, or system-loopback fallback.
+Then follow `docs/CODEX_COMMERCIAL_HANDOFF.md` for the first implementation batch.
+
+The product brand is **CaseMesh** and the canonical domain is **casemesh.dev**. Commercial go-to-market remains workplace-dispute first, while reusable evidence primitives should be matter-centric where practical. Live conversation assistance is a later capability built on the Case Brain, not the MVP.
+
+Any remaining `HRCompanion.*` code identifiers are legacy implementation names and should be migrated to `CaseMesh.*` in a separate behavior-neutral rename batch rather than mixed into evidence-model logic changes.
+
+## Legacy/live-meeting track
+
+The original Windows/Teams prototype is preserved. Its existing gates remain documented in:
+
+- `docs/FIRST_CODEX_BATCH.md`
+- `docs/GATES.md`
+- `docs/ARCHITECTURE.md`
+- `docs/STATUS.md`
+
+Do not treat unresolved Teams/audio work as the highest priority for the commercial evidence platform. Do not delete or silently disable the legacy prototype while building the commercial track.
