@@ -4,6 +4,7 @@ using HRCompanion.Core.Models;
 using HRCompanion.Core.Services;
 using HRCompanion.Infrastructure.Data;
 using HRCompanion.Infrastructure.OpenAI;
+using HRCompanion.Infrastructure.Security;
 using Microsoft.Extensions.Options;
 
 namespace HRCompanion.Infrastructure.Tests;
@@ -50,14 +51,20 @@ public sealed class OpenAiContractTests
         }
 
         var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-        Assert.False(string.IsNullOrWhiteSpace(apiKey), "OPENAI_API_KEY must be set when HRCOMPANION_RUN_LIVE_EVALS=1.");
+        IApiKeyStore keyStore = string.IsNullOrWhiteSpace(apiKey)
+            ? new WindowsCredentialApiKeyStore()
+            : new EnvironmentApiKeyStore(apiKey);
+        var configuredKey = await keyStore.GetAsync();
+        Assert.False(
+            string.IsNullOrWhiteSpace(configuredKey),
+            "Save the API key in HR Companion's Windows Credential Manager entry or set OPENAI_API_KEY before running live evals.");
 
         var options = new OpenAiOptions();
         var modelOverride = Environment.GetEnvironmentVariable("HRCOMPANION_ANSWER_MODEL");
         if (!string.IsNullOrWhiteSpace(modelOverride)) options.AnswerModel = modelOverride.Trim();
 
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        var service = new OpenAiMeetingAiService(http, new EnvironmentApiKeyStore(apiKey!), Options.Create(options));
+        var service = new OpenAiMeetingAiService(http, keyStore, Options.Create(options));
         var cueEngine = new DeterministicCueEngine();
         var path = Path.Combine(AppContext.BaseDirectory, "evals", "hr-exchanges.json");
         var cases = JsonSerializer.Deserialize<LiveEvalCase[]>(
