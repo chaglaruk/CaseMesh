@@ -114,18 +114,20 @@ public partial class MainWindow : Window
                 userTranscriber);
             var session = new LiveSession(coordinator, remoteAudio, userAudio, hrTranscriber, userTranscriber);
             SubscribeLive(coordinator);
+            _savedHrTurns = 0;
+            _savedUserTurns = 0;
+            // Publish ownership before startup so a queued capture-failure stop can tear this session down.
+            _liveSession = session;
             try
             {
                 await coordinator.StartAsync();
-                _savedHrTurns = 0;
-                _savedUserTurns = 0;
-                _liveSession = session;
                 SetLiveControls(isTransitioning: false, isLive: true);
                 LiveStatusText.Text = $"LIVE — isolated Teams PID {teamsProcess.ProcessId}; HR and microphone transcripts are separate.";
                 StatusText.Text = "Live meeting started. MANUAL assistance remains available.";
             }
             catch (Exception ex)
             {
+                if (ReferenceEquals(_liveSession, session)) _liveSession = null;
                 UnsubscribeLive(coordinator);
                 await session.DisposeAsync();
                 SetLiveControls(isTransitioning: false, isLive: false);
