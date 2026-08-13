@@ -2,30 +2,39 @@
 
 Date: 2026-08-13
 
+## Current state
+
+The repository, solution, projects and namespaces have already been renamed from HRCompanion to **CaseMesh**. Treat that migration as complete. Do not spend this batch renaming code and do not reintroduce old identifiers except deliberate backwards-compatible migration constants/tests.
+
 ## Read first
 
 1. `AGENTS.md`
-2. `docs/RESEARCH_BASELINE_2026-08-13.md`
-3. `docs/COMMERCIAL_MASTER_PLAN.md`
-4. `docs/CASE_BRAIN_SPEC.md`
-5. `docs/PRODUCT_VALIDATION_AND_GTM.md`
-6. existing `docs/ARCHITECTURE.md` and `docs/STATUS.md` for the legacy Windows prototype
+2. `docs/BRAND_AND_SCOPE.md`
+3. `docs/RESEARCH_BASELINE_2026-08-13.md`
+4. `docs/COMMERCIAL_MASTER_PLAN.md`
+5. `docs/CASE_BRAIN_SPEC.md`
+6. `docs/PRODUCT_VALIDATION_AND_GTM.md`
+7. existing `docs/ARCHITECTURE.md` and `docs/STATUS.md` only for the preserved CaseMesh Live prototype
 
 ## Objective
 
-Evolve the repository from a narrow single-user Windows meeting prototype into a commercial evidence-platform foundation **without destroying working prototype code**.
+Implement the first commercial engineering milestone: a correct, generic **Matter-root evidence/epistemic domain** with deterministic invariants and synthetic workplace-dispute tests, while keeping the existing CaseMesh solution and live prototype green.
 
-The first engineering milestone is not a web redesign and not live meeting capture. It is a correct v2 epistemic domain with source provenance and tests.
+Do not build the web app, PostgreSQL, authentication, billing or new live-meeting functionality in this batch.
 
 ## First implementation batch
 
-Create a reviewable branch from the latest commercial-strategy baseline and implement only the following.
+Create a new reviewable branch from current `main` and implement only the following.
 
-### 1. Add v2 evidence-domain types
+### 1. Add the generic Matter root
 
-Add new domain types rather than mutating `CaseFact` destructively at first.
+Add a `Matter` aggregate/reference type that is not hard-coded to employment law. It must be suitable as the ownership boundary for evidence entities added in this batch.
 
-Minimum types:
+Do not replace the legacy meeting-focused `CaseFact` model destructively yet. New commercial types should coexist with the existing prototype until a later migration is proven safe.
+
+### 2. Add v2 evidence-domain types
+
+Minimum generic types:
 
 - `EvidenceOriginClass`
 - `AssertionClass`
@@ -34,76 +43,94 @@ Minimum types:
 - `VerificationState`
 - `SourceSpan`
 - `Assertion`
-- `CaseEvent`
+- `MatterEvent`
 - `AssertionEventLink`
 - `Contradiction`
 - `AnalysisNode`
 - `AuditEvent`
 
-Use names/namespaces that make the new model clearly distinct from the legacy meeting-focused model.
+Use `MatterId`/Matter ownership consistently. Employment-specific fields do not belong in these core primitives.
 
-### 2. Encode invariants
+### 3. Encode deterministic invariants
 
-Add deterministic validation/services so these conditions can be tested:
+Add validation/domain services so tests prove at least:
 
-- source-backed assertion requires a valid source span;
-- source span references a document/version identifier;
-- AI inference cannot masquerade as original documentary evidence;
-- contradiction retains both assertion ids;
+- a source-backed assertion requires a valid source span;
+- a source span references an immutable document/document-version identity;
+- an AI inference cannot masquerade as original documentary evidence;
+- a contradiction retains both assertion ids and does not delete either side;
 - user correction produces an audit event rather than silent replacement;
 - superseded/rejected extraction remains traceable;
-- no numeric truth score is introduced.
+- Matter ownership cannot be crossed by links between the new entities;
+- extraction confidence is not represented as a truth score.
 
-### 3. Add synthetic fixtures and tests
+No LLM/API call is required for these invariants.
 
-Create synthetic employment-dispute evidence fixtures only.
+### 4. Add synthetic workplace fixtures and tests
 
-Required scenarios:
+Use synthetic data only. Required scenarios:
 
 - employer states 12 sickness days while a separate attendance record indicates 10;
-- user correction changes an extracted event date;
-- duplicate document versions share the same content hash;
-- AI inference is presented separately from evidence;
-- an assertion with a missing source span is rejected as source-backed;
-- contradictory assertions remain queryable simultaneously.
+- user correction changes an extracted event date and leaves an audit trail;
+- two contradictory assertions remain simultaneously queryable;
+- AI inference is separate from evidence records;
+- an assertion claiming source backing without a valid source span is rejected;
+- a cross-Matter assertion/event/source link is rejected;
+- duplicate immutable document versions can share the same content hash without creating two logical originals in later persistence design assumptions.
 
-### 4. Produce an architecture note
+The fixture is workplace-specific; the underlying core types should remain generic.
 
-Add an ADR describing how the current SQLite/WPF prototype will coexist with the future commercial API/PostgreSQL/web stack during migration.
+### 5. Add an ADR
 
-Do not add PostgreSQL, web UI, authentication or cloud deployment in this first batch unless required only for compile-safe interfaces.
+Create an ADR under `docs/adr/` describing the migration architecture:
+
+- current WPF/SQLite CaseMesh Live prototype remains buildable;
+- new commercial domain is introduced alongside it;
+- later commercial persistence moves to PostgreSQL/object storage;
+- no dedicated graph database is required initially;
+- the commercial web/API stack must depend on the generic Matter/evidence core rather than the meeting orchestration model.
 
 ## Validation required
 
 Before completing the batch:
 
+```powershell
+dotnet restore .\CaseMesh.slnx
+dotnet build .\CaseMesh.slnx -c Release --no-restore
+dotnet test .\CaseMesh.slnx -c Release --no-build
+```
+
+Also:
+
 - inspect the full diff;
-- build the solution in Release;
-- run all existing tests;
 - run all new evidence-domain tests;
-- confirm legacy meeting tests remain green;
-- report any deliberate compatibility compromises.
+- confirm existing live/meeting tests remain green;
+- report exact test counts and build warnings/errors;
+- report any deliberate compatibility compromise.
 
 ## Stop conditions
 
 Stop and report instead of improvising if:
 
-- existing code has an undocumented dependency that requires destructive schema/model changes;
-- the new types cannot coexist without breaking public interfaces substantially;
-- a change would delete or disable the existing meeting prototype;
-- real personal HR data appears in the repository;
-- implementation would require deciding an unresolved provider/compliance question.
+- existing code unexpectedly requires destructive model/schema changes;
+- new commercial types cannot coexist without breaking the current public interfaces substantially;
+- a change would delete or disable the existing live prototype;
+- real personal case material appears in the repository;
+- implementation requires an unresolved provider, hosting or regulatory decision.
 
-## Later batches
+## Acceptance criteria
 
-After the epistemic core is accepted:
+This batch is complete when the repository has a compile-safe generic Matter evidence model whose invariants are demonstrated by deterministic tests and the existing application still builds/tests successfully.
 
-1. tenancy-aware PostgreSQL persistence;
-2. immutable object/document version model;
-3. source-span ingestion pipeline;
-4. Case Brain merge/correction engine;
-5. web MVP;
-6. professional export;
-7. case-grounded Q&A.
+Do not proceed to PostgreSQL or web UI in the same PR.
 
-Do not skip directly to the later batches because they look more visible or impressive.
+## Next batch after acceptance
+
+1. employment-specific extension records required by the first vertical;
+2. tenancy-aware PostgreSQL persistence;
+3. immutable original/object-storage document model;
+4. source-span ingestion pipeline;
+5. Matter Brain merge/correction engine;
+6. web MVP;
+7. professional export;
+8. matter-grounded Q&A.
