@@ -17,6 +17,7 @@ public sealed class MeetingStateTests
         Assert.Equal(SpeakerRole.User, state.Turns[1].Speaker);
         Assert.Equal("Actual spoken answer", state.Turns[1].Text);
     }
+
     [Fact]
     public void AddTurn_OrdersBySpeechStart_WhenFinalEventsArriveOutOfOrder()
     {
@@ -32,4 +33,23 @@ public sealed class MeetingStateTests
         Assert.Equal("Second completion arrived first", state.Turns[1].Text);
     }
 
+    [Fact]
+    public void LongMeeting_PreservesOlderTurnsAsCompactedActualContext()
+    {
+        var meetingId = Guid.NewGuid();
+        var startedAt = DateTimeOffset.UtcNow;
+        var state = new MeetingState(meetingId, "Synthetic", startedAt);
+
+        for (var i = 0; i < 34; i++)
+        {
+            var speaker = i % 2 == 0 ? SpeakerRole.Hr : SpeakerRole.User;
+            var at = startedAt.AddSeconds(i);
+            state.AddTurn(TranscriptTurn.Final(meetingId, speaker, $"Turn {i}", at, at, "synthetic"));
+        }
+
+        Assert.Equal(32, state.RecentTurns().Count);
+        Assert.Contains("HR_SAID: Turn 0", state.RollingSummary, StringComparison.Ordinal);
+        Assert.Contains("USER_ACTUALLY_SAID: Turn 1", state.RollingSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain("Turn 2", state.RollingSummary, StringComparison.Ordinal);
+    }
 }

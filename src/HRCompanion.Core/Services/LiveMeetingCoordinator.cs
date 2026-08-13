@@ -6,14 +6,21 @@ namespace HRCompanion.Core.Services;
 
 public sealed class LiveMeetingCoordinator : IAsyncDisposable
 {
+    private static readonly TimeSpan LiveAssistanceBudget = TimeSpan.FromSeconds(6);
+
     private readonly MeetingState _state;
     private readonly MeetingAssistantOrchestrator _orchestrator;
     private readonly IAudioCaptureSource _remoteAudio;
     private readonly IAudioCaptureSource _userAudio;
     private readonly IRealtimeTranscriber _remoteTranscriber;
     private readonly IRealtimeTranscriber _userTranscriber;
-    private readonly SemaphoreSlim _turnGate = new(1, 1);
+    private readonly SemaphoreSlim _recordGate = new(1, 1);
+    private readonly object _assistantSync = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _turnStarts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<long, Task> _processingTasks = new();
+    private CancellationTokenSource? _lifecycleCts;
+    private CancellationTokenSource? _assistantCts;
+    private long _turnGeneration;
     private bool _started;
 
     public LiveMeetingCoordinator(
@@ -44,6 +51,7 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         if (_started) return;
+        _lifecycleCts = new CancellationTokenSource();
         Attach();
         try
         {
@@ -56,6 +64,9 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         catch
         {
             Detach();
+            _lifecycleCts.Cancel();
+            _lifecycleCts.Dispose();
+            _lifecycleCts = null;
             await SafeStopAsync().ConfigureAwait(false);
             throw;
         }
@@ -66,10 +77,22 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         if (!_started) return;
         _started = false;
         Detach();
+        CancelCurrentAssistant();
+        _lifecycleCts?.Cancel();
+
         await _remoteAudio.StopAsync(cancellationToken).ConfigureAwait(false);
         await _userAudio.StopAsync(cancellationToken).ConfigureAwait(false);
         await _remoteTranscriber.StopAsync(cancellationToken).ConfigureAwait(false);
         await _userTranscriber.StopAsync(cancellationToken).ConfigureAwait(false);
+
+        var pending = _processingTasks.Values.ToArray();
+        if (pending.Length > 0)
+        {
+            await Task.WhenAll(pending).ConfigureAwait(false);
+        }
+
+        _lifecycleCts?.Dispose();
+        _lifecycleCts = null;
     }
 
     private void Attach()
@@ -108,30 +131,105 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         if (!update.IsFinal || string.IsNullOrWhiteSpace(update.Text)) return;
         var startedAt = _turnStarts.TryRemove(itemKey, out var start) ? start : update.OccurredAt;
         var turn = TranscriptTurn.Final(_state.MeetingId, speaker, update.Text, startedAt, update.OccurredAt, source);
-        _ = ProcessFinalTurnAsync(turn);
+        var generation = Interlocked.Increment(ref _turnGeneration);
+
+        // Any newer final speech makes an older suggested answer stale, including the user's own reply.
+        CancelCurrentAssistant();
+        var task = ProcessFinalTurnAsync(turn, generation);
+        _processingTasks[generation] = task;
+        _ = task.ContinueWith(
+            completedTask => _processingTasks.TryRemove(generation, out _),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
-    private async Task ProcessFinalTurnAsync(TranscriptTurn turn)
+    private async Task ProcessFinalTurnAsync(TranscriptTurn turn, long generation)
     {
-        await _turnGate.WaitAsync().ConfigureAwait(false);
+        var lifecycleToken = _lifecycleCts?.Token ?? CancellationToken.None;
         try
         {
-            FinalTurn?.Invoke(this, turn);
-            var response = await _orchestrator.AcceptFinalTurnAsync(_state, turn).ConfigureAwait(false);
+            await _recordGate.WaitAsync(lifecycleToken).ConfigureAwait(false);
+            try
+            {
+                FinalTurn?.Invoke(this, turn);
+                await _orchestrator.RecordFinalTurnAsync(_state, turn, lifecycleToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _recordGate.Release();
+            }
+
+            if (turn.Speaker != SpeakerRole.Hr || !IsLatestGeneration(generation)) return;
+
+            using var assistantCts = CreateAssistantToken(lifecycleToken);
+            AssistantResponse response;
+            try
+            {
+                response = await _orchestrator.CreateAssistanceForRecordedTurnAsync(
+                    _state,
+                    turn,
+                    assistantCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (assistantCts.IsCancellationRequested)
+            {
+                if (!lifecycleToken.IsCancellationRequested && IsLatestGeneration(generation))
+                {
+                    NonFatalError?.Invoke(this, new TimeoutException(
+                        $"Live assistance exceeded the {LiveAssistanceBudget.TotalSeconds:0}-second latency budget."));
+                }
+                return;
+            }
+            finally
+            {
+                ClearAssistantToken(assistantCts);
+            }
+
+            if (!IsLatestGeneration(generation)) return;
             if (response.Say is not null || response.Watch is not null || response.Ask is not null)
             {
                 AssistantUpdated?.Invoke(this, response);
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (lifecycleToken.IsCancellationRequested)
+        {
+            // Expected during meeting stop.
+        }
+        catch (Exception ex)
         {
             NonFatalError?.Invoke(this, ex);
         }
-        finally
+    }
+
+    private CancellationTokenSource CreateAssistantToken(CancellationToken lifecycleToken)
+    {
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(lifecycleToken);
+        cts.CancelAfter(LiveAssistanceBudget);
+        lock (_assistantSync)
         {
-            _turnGate.Release();
+            _assistantCts?.Cancel();
+            _assistantCts = cts;
+        }
+        return cts;
+    }
+
+    private void CancelCurrentAssistant()
+    {
+        lock (_assistantSync)
+        {
+            _assistantCts?.Cancel();
         }
     }
+
+    private void ClearAssistantToken(CancellationTokenSource cts)
+    {
+        lock (_assistantSync)
+        {
+            if (ReferenceEquals(_assistantCts, cts)) _assistantCts = null;
+        }
+    }
+
+    private bool IsLatestGeneration(long generation) => generation == Interlocked.Read(ref _turnGeneration);
 
     private async Task SafeStopAsync()
     {
@@ -144,10 +242,9 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await StopAsync().ConfigureAwait(false);
-        await _remoteAudio.DisposeAsync().ConfigureAwait(false);
-        await _userAudio.DisposeAsync().ConfigureAwait(false);
-        await _remoteTranscriber.DisposeAsync().ConfigureAwait(false);
-        await _userTranscriber.DisposeAsync().ConfigureAwait(false);
-        _turnGate.Dispose();
+        CancelCurrentAssistant();
+        _assistantCts?.Dispose();
+        _assistantCts = null;
+        _recordGate.Dispose();
     }
 }

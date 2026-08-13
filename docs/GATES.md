@@ -4,6 +4,8 @@
 
 **Pass when:** Windows Release build and all automated tests succeed.
 
+The deterministic test suite must include the safety-critical HR exchange corpus in `evals/hr-exchanges.json`; it is not acceptable for that corpus to exist only as documentation.
+
 ## Gate 1 — Audio ownership
 
 **Goal:** remote Teams audio and microphone are separate, stable sources.
@@ -47,6 +49,10 @@ Required:
 - missing evidence produces clarification/caution, not invention
 - source IDs in output resolve to real retrieved evidence
 - suggested answer never becomes `USER_ACTUALLY_SAID` unless captured from microphone transcript
+- loaded framing and commitment traps do not silently become user agreements
+- retrieved source locators are visible in the live overlay when case evidence is used
+
+Before meeting-ready status, run the safety-critical exchange corpus against the configured live answer model as a manual/release eval. Deterministic cue tests are necessary but do not by themselves validate model wording or forbidden claims.
 
 ## Gate 5 — Naturalness and latency
 
@@ -56,8 +62,10 @@ Target UX:
 - natural spoken British English
 - no legal/corporate boilerplate
 - first useful text appears quickly enough for a natural conversational pause
+- a newer final turn invalidates older in-flight assistance; stale answers must never appear later
+- the live assistance path has a bounded latency budget and degrades without blocking transcript persistence
 
-Record median and p95 latency from realistic rehearsal. Do not hard-code an unverified SLA claim.
+Record median and p95 latency from realistic rehearsal. Do not hard-code an unverified SLA claim from model/network assumptions.
 
 ## Gate 6 — Overlay usability
 
@@ -66,6 +74,7 @@ Required:
 - always-on-top overlay remains readable beside Teams
 - overlay does not steal focus during normal use
 - `SAY`, `WATCH`, and `ASK` are visually distinct
+- evidence-backed vs no-case-evidence state is visible at a glance
 - manual fallback remains usable if audio fails
 
 ## Gate 7 — Endurance/recovery
@@ -74,6 +83,7 @@ Required:
 
 - 30+ minute rehearsal
 - transcript persisted incrementally
+- conversations longer than the recent-turn window retain older actual speaker-attributed context
 - API failure degrades gracefully
 - app restart can recover the unfinished local meeting
 - no raw audio is saved unless explicitly enabled

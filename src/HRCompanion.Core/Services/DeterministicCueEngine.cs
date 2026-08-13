@@ -7,7 +7,7 @@ public sealed partial class DeterministicCueEngine
 {
     private static readonly string[] CommitmentTerms =
     [
-        "agree", "accept", "confirm", "resign", "withdraw", "sign", "consent",
+        "agree", "accept", "confirm", "resign", "withdraw", "sign", "consent", "refuse", "refusing",
         "start on", "return on", "final decision", "settlement", "capability"
     ];
 
