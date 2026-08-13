@@ -5,6 +5,8 @@ namespace HRCompanion.Core.Services;
 
 public sealed class MeetingAssistantOrchestrator
 {
+    private static readonly TimeSpan OptionalAnalysisBudget = TimeSpan.FromSeconds(1.5);
+
     private readonly ICaseRepository _repository;
     private readonly IMeetingAiService _ai;
     private readonly DeterministicCueEngine _cues;
@@ -54,15 +56,25 @@ public sealed class MeetingAssistantOrchestrator
         var deterministic = _cues.Analyze(turn.Text);
         MeetingAnalysis analysis = deterministic;
 
-        // Keep the common live path to one model round-trip. Use Luna only when local intent/retrieval is genuinely ambiguous.
-        var ambiguous = deterministic.Intent == MeetingIntent.Unknown ||
-                        (deterministic.NeedsAssistant && deterministic.RetrievalTerms.Count < 2);
+        var ambiguous = !deterministic.PotentialCommitment &&
+                        (deterministic.Intent == MeetingIntent.Unknown ||
+                         (deterministic.NeedsAssistant && deterministic.RetrievalTerms.Count < 2));
         if (ambiguous && turn.Text.Length >= 20)
         {
-            var aiAnalysis = await _ai.AnalyzeTurnAsync(state, turn, cancellationToken).ConfigureAwait(false);
-            analysis = Merge(deterministic, aiAnalysis);
+            using var analysisCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            analysisCts.CancelAfter(OptionalAnalysisBudget);
+            try
+            {
+                var aiAnalysis = await _ai.AnalyzeTurnAsync(state, turn, analysisCts.Token).ConfigureAwait(false);
+                analysis = Merge(deterministic, aiAnalysis);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && analysisCts.IsCancellationRequested)
+            {
+                // Optional analysis timed out; keep deterministic classification for the answer path.
+            }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         if (!analysis.NeedsAssistant && !analysis.PotentialWrittenFollowUp)
         {
             return AssistantResponse.NoAction(analysis.Intent);
