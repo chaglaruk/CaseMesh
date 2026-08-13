@@ -82,7 +82,7 @@ ASP.NET Core .NET 10 API
         +-- audit/security services
 ```
 
-Managed providers are preferred for the MVP, subject to the privacy/security gates in `REGULATORY_SECURITY_GATES.md`.
+Managed providers are preferred for the MVP, subject to the privacy/security and regulatory gates summarized in `RESEARCH_BASELINE_2026-08-13.md`.
 
 Avoid Kubernetes, microservices, Kafka, Neo4j, custom vector infrastructure and self-hosted foundation models initially.
 
