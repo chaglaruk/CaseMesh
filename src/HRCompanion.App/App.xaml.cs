@@ -29,7 +29,7 @@ public partial class App : Application
             var ai = new OpenAiMeetingAiService(_httpClient, keyStore, options);
             var orchestrator = new MeetingAssistantOrchestrator(repository, ai, new DeterministicCueEngine());
 
-            var window = new MainWindow(repository, importer, contextImporter, keyStore, orchestrator);
+            var window = new MainWindow(repository, importer, contextImporter, keyStore, orchestrator, options);
             MainWindow = window;
             window.Show();
         }

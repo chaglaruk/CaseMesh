@@ -38,7 +38,11 @@ public sealed class MeetingAssistantOrchestratorTests
     {
         var repository = new EmptyRepository();
         var ai = new RecordingAiService { BlockAnalysisUntilCancelled = true };
-        var sut = new MeetingAssistantOrchestrator(repository, ai, new DeterministicCueEngine());
+        var sut = new MeetingAssistantOrchestrator(
+            repository,
+            ai,
+            new DeterministicCueEngine(),
+            TimeSpan.FromMilliseconds(50));
         var meetingId = Guid.NewGuid();
         var state = new MeetingState(meetingId, "Synthetic", DateTimeOffset.UtcNow);
         var now = DateTimeOffset.UtcNow;
@@ -61,12 +65,45 @@ public sealed class MeetingAssistantOrchestratorTests
         Assert.False(overall.IsCancellationRequested);
     }
 
+    [Fact]
+    public async Task OuterCancellation_DuringOptionalAnalysis_PropagatesImmediately()
+    {
+        var repository = new EmptyRepository();
+        var ai = new RecordingAiService { BlockAnalysisUntilCancelled = true };
+        var sut = new MeetingAssistantOrchestrator(
+            repository,
+            ai,
+            new DeterministicCueEngine(),
+            TimeSpan.FromSeconds(10));
+        var meetingId = Guid.NewGuid();
+        var state = new MeetingState(meetingId, "Synthetic", DateTimeOffset.UtcNow);
+        var now = DateTimeOffset.UtcNow;
+        var turn = TranscriptTurn.Final(
+            meetingId,
+            SpeakerRole.Hr,
+            "Are you comfortable with that?",
+            now,
+            now,
+            "synthetic");
+        state.AddTurn(turn);
+
+        using var overall = new CancellationTokenSource();
+        var assistance = sut.CreateAssistanceForRecordedTurnAsync(state, turn, overall.Token);
+        await ai.AnalysisStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        overall.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => assistance);
+        Assert.Equal(1, ai.AnalysisCalls);
+        Assert.Equal(0, ai.AnswerCalls);
+    }
+
     private sealed class RecordingAiService : IMeetingAiService
     {
         public int AnalysisCalls { get; private set; }
         public int AnswerCalls { get; private set; }
         public MeetingAnalysis? LastAnswerAnalysis { get; private set; }
         public bool BlockAnalysisUntilCancelled { get; init; }
+        public TaskCompletionSource AnalysisStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<MeetingAnalysis> AnalyzeTurnAsync(
             MeetingState state,
@@ -74,6 +111,7 @@ public sealed class MeetingAssistantOrchestratorTests
             CancellationToken cancellationToken = default)
         {
             AnalysisCalls++;
+            AnalysisStarted.TrySetResult();
             if (BlockAnalysisUntilCancelled)
             {
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);

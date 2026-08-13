@@ -10,15 +10,28 @@ public sealed class MeetingAssistantOrchestrator
     private readonly ICaseRepository _repository;
     private readonly IMeetingAiService _ai;
     private readonly DeterministicCueEngine _cues;
+    private readonly TimeSpan _optionalAnalysisBudget;
 
     public MeetingAssistantOrchestrator(
         ICaseRepository repository,
         IMeetingAiService ai,
         DeterministicCueEngine cues)
+        : this(repository, ai, cues, OptionalAnalysisBudget)
     {
+    }
+
+    internal MeetingAssistantOrchestrator(
+        ICaseRepository repository,
+        IMeetingAiService ai,
+        DeterministicCueEngine cues,
+        TimeSpan optionalAnalysisBudget)
+    {
+        if (optionalAnalysisBudget <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(optionalAnalysisBudget));
         _repository = repository;
         _ai = ai;
         _cues = cues;
+        _optionalAnalysisBudget = optionalAnalysisBudget;
     }
 
     public async Task<AssistantResponse> AcceptFinalTurnAsync(
@@ -62,7 +75,7 @@ public sealed class MeetingAssistantOrchestrator
         if (ambiguous && turn.Text.Length >= 20)
         {
             using var analysisCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            analysisCts.CancelAfter(OptionalAnalysisBudget);
+            analysisCts.CancelAfter(_optionalAnalysisBudget);
             try
             {
                 var aiAnalysis = await _ai.AnalyzeTurnAsync(state, turn, analysisCts.Token).ConfigureAwait(false);
