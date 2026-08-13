@@ -18,6 +18,16 @@ public sealed class DeterministicCueEngineTests
     }
 
     [Fact]
+    public void LoadedRefusalFraming_IsCommitmentRequest()
+    {
+        var result = _sut.Analyze("So you're saying you are refusing to return to work?");
+        Assert.Equal(MeetingIntent.CommitmentRequest, result.Intent);
+        Assert.True(result.PotentialCommitment);
+        Assert.True(result.NeedsAssistant);
+        Assert.Equal(AssistantImportance.High, result.Importance);
+    }
+
+    [Fact]
     public void WrittenFollowUp_IsCapturedWithoutForcingSpokenAnswer()
     {
         var result = _sut.Analyze("We'll check that and get back to you in writing.");
@@ -33,6 +43,7 @@ public sealed class DeterministicCueEngineTests
         Assert.True(result.NeedsAssistant);
         Assert.Contains(result.RetrievalTerms, x => x.Equals("alternative", StringComparison.OrdinalIgnoreCase));
     }
+
     [Fact]
     public void AlternativeRole_ExpandsLocalHrRetrievalAliasesWithoutExtraModelCall()
     {
@@ -41,5 +52,4 @@ public sealed class DeterministicCueEngineTests
         Assert.Contains(result.RetrievalTerms, x => x.Equals("redeployment", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.RetrievalTerms, x => x.Equals("Occupational Health", StringComparison.OrdinalIgnoreCase));
     }
-
 }
