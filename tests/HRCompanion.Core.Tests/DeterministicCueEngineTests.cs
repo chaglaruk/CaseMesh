@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HRCompanion.Core.Models;
 using HRCompanion.Core.Services;
 
@@ -5,6 +6,7 @@ namespace HRCompanion.Core.Tests;
 
 public sealed class DeterministicCueEngineTests
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly DeterministicCueEngine _sut = new();
 
     [Fact]
@@ -52,4 +54,31 @@ public sealed class DeterministicCueEngineTests
         Assert.Contains(result.RetrievalTerms, x => x.Equals("redeployment", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.RetrievalTerms, x => x.Equals("Occupational Health", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public void HrExchangeJson_MatchesDeterministicContract()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "evals", "hr-exchanges.json");
+        var cases = JsonSerializer.Deserialize<EvalCase[]>(File.ReadAllText(path), JsonOptions);
+        Assert.NotNull(cases);
+        Assert.NotEmpty(cases!);
+
+        foreach (var item in cases!)
+        {
+            Assert.True(Enum.TryParse<MeetingIntent>(item.ExpectedIntent, true, out var expectedIntent));
+            var analysis = _sut.Analyze(item.Hr);
+            Assert.Equal(expectedIntent, analysis.Intent);
+            Assert.Equal(item.ExpectedNeedsAssistant, analysis.NeedsAssistant);
+            Assert.Equal(item.ExpectedPotentialCommitment, analysis.PotentialCommitment);
+            Assert.Equal(item.ExpectedWrittenFollowUp, analysis.PotentialWrittenFollowUp);
+        }
+    }
+
+    private sealed record EvalCase(
+        string Id,
+        string Hr,
+        string ExpectedIntent,
+        bool ExpectedNeedsAssistant,
+        bool ExpectedPotentialCommitment,
+        bool ExpectedWrittenFollowUp);
 }
