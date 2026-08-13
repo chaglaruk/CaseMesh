@@ -75,7 +75,7 @@ internal static class MeetingPromptBuilder
         if (!string.IsNullOrWhiteSpace(state.RollingSummary))
         {
             sb.AppendLine();
-            sb.AppendLine("MEETING ROLLING SUMMARY (generated, lower trust than transcript):");
+            sb.AppendLine("EARLIER MEETING CONTEXT (compacted actual transcript; preserve speaker ownership and chronology):");
             sb.AppendLine(state.RollingSummary);
         }
 
