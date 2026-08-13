@@ -12,7 +12,7 @@ Do not build SaaS/product infrastructure. Do not weaken factual safeguards or ma
 
 ## Batch A — make the repository compile and deterministic tests pass
 
-1. On Windows with the .NET 10 SDK, run restore/build/test for `HRCompanion.slnx` in Release.
+1. On Windows with the .NET 10 SDK, run restore/build/test for `CaseMesh.slnx` in Release.
 2. Fix every compile error, WPF API mismatch, package/API mismatch, nullable warning, and warnings-as-errors failure you find.
 3. Preserve central package management and the current project boundaries unless a change is technically necessary.
 4. Add targeted tests for any bug you fix. Keep all fixtures synthetic.
@@ -21,9 +21,9 @@ Do not build SaaS/product infrastructure. Do not weaken factual safeguards or ma
 Required commands/results:
 
 ```powershell
-dotnet restore .\HRCompanion.slnx
-dotnet build .\HRCompanion.slnx -c Release --no-restore
-dotnet test .\HRCompanion.slnx -c Release --no-build
+dotnet restore .\CaseMesh.slnx
+dotnet build .\CaseMesh.slnx -c Release --no-restore
+dotnet test .\CaseMesh.slnx -c Release --no-build
 ```
 
 ## Batch B — implement true Microsoft Teams process-specific output capture
@@ -34,7 +34,7 @@ dotnet test .\HRCompanion.slnx -c Release --no-build
 4. Keep `SystemLoopbackCaptureSource` only as an explicitly labelled degraded fallback. It must never silently masquerade as Teams-isolated audio.
 5. Make Teams process discovery robust for the current Teams client process tree. Handle process exit/restart clearly.
 6. Do not save raw audio.
-7. Extend `HRCompanion.AudioProbe` so it can exercise the true Teams-isolated source and visibly report which source is being tested.
+7. Extend `CaseMesh.AudioProbe` so it can exercise the true Teams-isolated source and visibly report which source is being tested.
 
 Gate rule: **Gate 1 is not VERIFIED unless an actual Teams call/process on Windows proves remote Teams audio is present, microphone remains separate, and unrelated system audio is excluded.** If you cannot perform that interactive test, report `PARTIAL` or `BLOCKED` with exact manual steps; do not infer PASS from compilation.
 

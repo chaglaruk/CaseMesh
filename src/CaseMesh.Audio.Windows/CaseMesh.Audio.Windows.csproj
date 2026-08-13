@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>CaseMesh.Audio.Windows</RootNamespace>
+    <AssemblyName>CaseMesh.Audio.Windows</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CaseMesh.Core\CaseMesh.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio" />
+  </ItemGroup>
+</Project>

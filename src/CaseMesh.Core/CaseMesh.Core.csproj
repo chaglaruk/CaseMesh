@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>CaseMesh.Core</RootNamespace>
+    <AssemblyName>CaseMesh.Core</AssemblyName>
+  </PropertyGroup>
+</Project>

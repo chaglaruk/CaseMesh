@@ -1,4 +1,4 @@
-# AGENTS.md — HR Companion engineering contract
+# AGENTS.md — CaseMesh engineering contract
 
 ## Mission
 
@@ -59,9 +59,9 @@ Never relabel `AUTOMATED_ONLY` as `VERIFIED` for real Teams/audio behavior.
 
 ## Architecture constraints
 
-- Domain/interfaces stay in `HRCompanion.Core`.
-- Windows-only capture implementation stays in `HRCompanion.Audio.Windows`.
-- Persistence/document/OpenAI integrations stay in `HRCompanion.Infrastructure`.
+- Domain/interfaces stay in `CaseMesh.Core`.
+- Windows-only capture implementation stays in `CaseMesh.Audio.Windows`.
+- Persistence/document/OpenAI integrations stay in `CaseMesh.Infrastructure`.
 - WPF UI stays thin; business logic belongs outside views.
 - Local retrieval must work without sending the entire case archive to a model.
 - SQLite FTS5 is a real first-stage retriever. Do not call keyword-only search "semantic search".

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CaseMesh.AudioProbe</RootNamespace>
+    <AssemblyName>CaseMesh.AudioProbe</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CaseMesh.Core\CaseMesh.Core.csproj" />
+    <ProjectReference Include="..\..\src\CaseMesh.Audio.Windows\CaseMesh.Audio.Windows.csproj" />
+  </ItemGroup>
+</Project>

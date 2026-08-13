@@ -1,6 +1,8 @@
-# HR Companion
+# CaseMesh
 
 A private, single-user Windows assistant for live Microsoft Teams HR meetings.
+
+Canonical product domain: [casemesh.dev](https://casemesh.dev). Domain deployment and hosting are intentionally outside this repository's current scope.
 
 The product goal is deliberately narrow:
 
@@ -33,11 +35,11 @@ See [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md).
 
 ## Projects
 
-- `HRCompanion.Core` — domain types, contracts, orchestration, deterministic cue logic.
-- `HRCompanion.Infrastructure` — SQLite, FTS5 retrieval, document ingestion, OpenAI request contracts, Windows credential storage.
-- `HRCompanion.Audio.Windows` — Windows audio capture abstractions and safe fallback capture.
-- `HRCompanion.App` — minimal WPF desktop shell and overlay.
-- `HRCompanion.AudioProbe` — local Windows validation utility for audio gates.
+- `CaseMesh.Core` — domain types, contracts, orchestration, deterministic cue logic.
+- `CaseMesh.Infrastructure` — SQLite, FTS5 retrieval, document ingestion, OpenAI request contracts, Windows credential storage.
+- `CaseMesh.Audio.Windows` — process-specific Teams application loopback, separate microphone capture, conversion and explicit diagnostic fallback.
+- `CaseMesh.App` — minimal WPF desktop shell and overlay.
+- `CaseMesh.AudioProbe` — local Windows validation utility for audio gates.
 - `tests/*` — deterministic unit tests.
 
 ## Current status
@@ -67,16 +69,18 @@ Requirements:
 Typical commands:
 
 ```powershell
-dotnet restore .\HRCompanion.slnx
-dotnet build .\HRCompanion.slnx -c Release
-dotnet test .\HRCompanion.slnx -c Release --no-build
+dotnet restore .\CaseMesh.slnx
+dotnet build .\CaseMesh.slnx -c Release
+dotnet test .\CaseMesh.slnx -c Release --no-build
 ```
 
-Run the audio probe before integrating live meeting features:
+Run the no-recording audio probe while Teams is open. It auto-selects one clear Teams tree; when several are listed, pass the intended root PID:
 
 ```powershell
-dotnet run --project .\tools\HRCompanion.AudioProbe\HRCompanion.AudioProbe.csproj
+dotnet run --project .\tools\CaseMesh.AudioProbe\CaseMesh.AudioProbe.csproj -c Release -- --pid <TEAMS_ROOT_PID> --seconds 10
 ```
+
+`--system-fallback` is an explicit all-system-audio diagnostic only and cannot verify Gate 1. The probe stores no raw audio.
 
 ## AI defaults
 
