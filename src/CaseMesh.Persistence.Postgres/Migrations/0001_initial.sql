@@ -94,7 +94,7 @@ CREATE TABLE casemesh.assertions (
     PRIMARY KEY (tenant_id, matter_id, assertion_id),
     FOREIGN KEY (tenant_id, matter_id) REFERENCES casemesh.matters (tenant_id, matter_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, source_span_id)
-        REFERENCES casemesh.source_spans (tenant_id, matter_id, source_span_id),
+        REFERENCES casemesh.source_spans (tenant_id, matter_id, source_span_id) DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY (tenant_id, matter_id, superseded_by_assertion_id)
         REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED
 );
@@ -161,9 +161,9 @@ CREATE TABLE casemesh.contradictions (
     resolved_at timestamptz NULL,
     PRIMARY KEY (tenant_id, matter_id, contradiction_id),
     FOREIGN KEY (tenant_id, matter_id, assertion_a_id)
-        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id),
+        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY (tenant_id, matter_id, assertion_b_id)
-        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id),
+        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED,
     CHECK (assertion_a_id <> assertion_b_id),
     CHECK ((resolution_state = 0 AND resolved_at IS NULL) OR (resolution_state <> 0 AND resolved_at IS NOT NULL))
 );
@@ -204,7 +204,7 @@ CREATE TABLE casemesh.analysis_node_sources (
     FOREIGN KEY (tenant_id, matter_id, analysis_node_id)
         REFERENCES casemesh.analysis_nodes (tenant_id, matter_id, analysis_node_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, source_span_id)
-        REFERENCES casemesh.source_spans (tenant_id, matter_id, source_span_id)
+        REFERENCES casemesh.source_spans (tenant_id, matter_id, source_span_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE casemesh.audit_events (
@@ -245,7 +245,7 @@ CREATE TABLE casemesh.employment_profile_assertions (
     FOREIGN KEY (tenant_id, matter_id, employment_profile_id)
         REFERENCES casemesh.employment_profiles (tenant_id, matter_id, employment_profile_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, assertion_id)
-        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id)
+        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE casemesh.employment_terms (
@@ -273,7 +273,7 @@ CREATE TABLE casemesh.employment_term_assertions (
     FOREIGN KEY (tenant_id, matter_id, employment_term_id)
         REFERENCES casemesh.employment_terms (tenant_id, matter_id, employment_term_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, assertion_id)
-        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id)
+        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE casemesh.health_absence_records (
@@ -296,7 +296,7 @@ CREATE TABLE casemesh.health_absence_assertions (
     FOREIGN KEY (tenant_id, matter_id, health_absence_record_id)
         REFERENCES casemesh.health_absence_records (tenant_id, matter_id, health_absence_record_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, assertion_id)
-        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id)
+        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE casemesh.health_absence_events (
@@ -308,7 +308,7 @@ CREATE TABLE casemesh.health_absence_events (
     FOREIGN KEY (tenant_id, matter_id, health_absence_record_id)
         REFERENCES casemesh.health_absence_records (tenant_id, matter_id, health_absence_record_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, event_id)
-        REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id)
+        REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE casemesh.adjustment_requests (
@@ -332,7 +332,7 @@ CREATE TABLE casemesh.adjustment_request_assertions (
     FOREIGN KEY (tenant_id, matter_id, adjustment_request_id)
         REFERENCES casemesh.adjustment_requests (tenant_id, matter_id, adjustment_request_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, assertion_id)
-        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id)
+        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE casemesh.workplace_processes (
@@ -349,7 +349,7 @@ CREATE TABLE casemesh.workplace_processes (
     FOREIGN KEY (tenant_id, matter_id, supersedes_workplace_process_id)
         REFERENCES casemesh.workplace_processes (tenant_id, matter_id, workplace_process_id) DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY (tenant_id, matter_id, supersession_audit_event_id)
-        REFERENCES casemesh.audit_events (tenant_id, matter_id, audit_event_id),
+        REFERENCES casemesh.audit_events (tenant_id, matter_id, audit_event_id) DEFERRABLE INITIALLY DEFERRED,
     CHECK ((supersedes_workplace_process_id IS NULL) = (supersession_audit_event_id IS NULL))
 );
 
@@ -362,7 +362,7 @@ CREATE TABLE casemesh.workplace_process_assertions (
     FOREIGN KEY (tenant_id, matter_id, workplace_process_id)
         REFERENCES casemesh.workplace_processes (tenant_id, matter_id, workplace_process_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, assertion_id)
-        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id)
+        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE casemesh.workplace_process_events (
@@ -374,7 +374,7 @@ CREATE TABLE casemesh.workplace_process_events (
     FOREIGN KEY (tenant_id, matter_id, workplace_process_id)
         REFERENCES casemesh.workplace_processes (tenant_id, matter_id, workplace_process_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, event_id)
-        REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id)
+        REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE casemesh.acas_process_states (
@@ -395,7 +395,7 @@ CREATE TABLE casemesh.acas_process_assertions (
     FOREIGN KEY (tenant_id, matter_id, acas_process_state_id)
         REFERENCES casemesh.acas_process_states (tenant_id, matter_id, acas_process_state_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, assertion_id)
-        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id)
+        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE casemesh.acas_process_events (
@@ -407,7 +407,7 @@ CREATE TABLE casemesh.acas_process_events (
     FOREIGN KEY (tenant_id, matter_id, acas_process_state_id)
         REFERENCES casemesh.acas_process_states (tenant_id, matter_id, acas_process_state_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, event_id)
-        REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id)
+        REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE FUNCTION casemesh.reject_audit_mutation() RETURNS trigger
