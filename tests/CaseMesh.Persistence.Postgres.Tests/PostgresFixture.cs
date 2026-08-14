@@ -76,13 +76,21 @@ public sealed class PostgresFixture : IAsyncLifetime
         NpgsqlConnection.ClearAllPools();
         await using var root = new NpgsqlConnection(_adminRootConnectionString);
         await root.OpenAsync();
-        await using var cleanup = new NpgsqlCommand($"""
+        await using (var terminate = new NpgsqlCommand($"""
             SELECT pg_terminate_backend(pid)
             FROM pg_stat_activity
             WHERE datname = '{_databaseName}' AND pid <> pg_backend_pid();
-            DROP DATABASE IF EXISTS "{_databaseName}";
-            DROP ROLE IF EXISTS "{_roleName}";
-            """, root);
-        await cleanup.ExecuteNonQueryAsync();
+            """, root))
+        {
+            await terminate.ExecuteNonQueryAsync();
+        }
+
+        await using (var dropDatabase = new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{_databaseName}\";", root))
+        {
+            await dropDatabase.ExecuteNonQueryAsync();
+        }
+
+        await using var dropRole = new NpgsqlCommand($"DROP ROLE IF EXISTS \"{_roleName}\";", root);
+        await dropRole.ExecuteNonQueryAsync();
     }
 }

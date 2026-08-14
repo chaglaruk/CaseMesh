@@ -15,9 +15,16 @@ internal static class PostgresMatterReader
         Guid matterId,
         CancellationToken cancellationToken)
     {
-        await using var command = new NpgsqlCommand(ReadSql, connection, transaction);
-        PostgresMatterStore.AddParameters(command, tenantId.Value, matterId);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var batch = new NpgsqlBatch(connection, transaction);
+        foreach (var statement in ReadSql.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var batchCommand = new NpgsqlBatchCommand(statement);
+            batchCommand.Parameters.AddWithValue(tenantId.Value);
+            batchCommand.Parameters.AddWithValue(matterId);
+            batch.BatchCommands.Add(batchCommand);
+        }
+
+        await using var reader = await batch.ExecuteReaderAsync(cancellationToken);
 
         if (!await reader.ReadAsync(cancellationToken))
         {

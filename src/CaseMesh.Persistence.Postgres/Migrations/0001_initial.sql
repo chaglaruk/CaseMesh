@@ -50,7 +50,7 @@ CREATE TABLE casemesh.document_versions (
     FOREIGN KEY (tenant_id, matter_id, document_id)
         REFERENCES casemesh.documents (tenant_id, matter_id, document_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, original_object_id, content_sha256)
-        REFERENCES casemesh.original_objects (tenant_id, matter_id, original_object_id, content_sha256)
+        REFERENCES casemesh.original_objects (tenant_id, matter_id, original_object_id, content_sha256) ON DELETE CASCADE
 );
 
 CREATE TABLE casemesh.source_spans (
