@@ -10,6 +10,24 @@ namespace CaseMesh.Storage.S3.Tests;
 public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixture)
 {
     [Fact]
+    public void Options_diagnostic_string_does_not_expose_credentials()
+    {
+        var options = new S3ObjectStorageOptions
+        {
+            Endpoint = new Uri("https://storage.example.test"),
+            Region = "us-east-1",
+            BucketName = "synthetic-private",
+            AccessKey = "synthetic-sensitive-access",
+            SecretKey = "synthetic-sensitive-secret"
+        };
+
+        var diagnostic = options.ToString();
+
+        Assert.DoesNotContain(options.AccessKey, diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain(options.SecretKey, diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Production_http_endpoint_is_rejected_even_with_local_override()
     {
         var options = new S3ObjectStorageOptions

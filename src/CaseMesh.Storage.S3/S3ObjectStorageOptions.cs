@@ -1,6 +1,6 @@
 namespace CaseMesh.Storage.S3;
 
-public sealed record S3ObjectStorageOptions
+public sealed class S3ObjectStorageOptions
 {
     public required Uri Endpoint { get; init; }
     public required string Region { get; init; }
