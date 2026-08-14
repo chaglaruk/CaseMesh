@@ -124,7 +124,7 @@ public interface IPdfPageRasterizer
     Task<IReadOnlyList<string>> RasterizeAsync(
         string pdfPath,
         string outputDirectory,
-        int maximumPages,
+        IngestionLimits limits,
         CancellationToken cancellationToken);
 }
 

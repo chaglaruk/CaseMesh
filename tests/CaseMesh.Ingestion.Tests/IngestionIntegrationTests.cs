@@ -75,6 +75,25 @@ public sealed class IngestionIntegrationTests(IngestionIntegrationFixture fixtur
             Assert.True(region.BoundingBoxWidth > 0);
             Assert.InRange(region.Confidence!.Value, 0m, 1m);
         });
+
+        await using var connection = new NpgsqlConnection(fixture.AppConnection);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await SetTenantAsync(connection, transaction, scope.Document.TenantId);
+        await using var provenance = new NpgsqlCommand("""
+            SELECT parser_provider, ocr_provider
+            FROM casemesh.ingestion_span_sets
+            WHERE tenant_id=$1 AND matter_id=$2 AND span_set_id=$3;
+            """, connection, transaction);
+        provenance.Parameters.AddWithValue(scope.Document.TenantId.Value);
+        provenance.Parameters.AddWithValue(scope.Document.MatterId);
+        provenance.Parameters.AddWithValue(result.SpanSetId);
+        await using var reader = await provenance.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("none", reader.GetString(0));
+        Assert.Equal("tesseract-cli", reader.GetString(1));
+        await reader.DisposeAsync();
+        await transaction.RollbackAsync();
     }
 
     [IngestionFact]
@@ -113,7 +132,7 @@ public sealed class IngestionIntegrationTests(IngestionIntegrationFixture fixtur
         cross.Parameters.AddWithValue(IngestionDigests.Sha256("x"));
         cross.Parameters.AddWithValue(completed.SpanSetId);
         var exception = await Assert.ThrowsAsync<PostgresException>(() => cross.ExecuteNonQueryAsync());
-        Assert.Equal("23503", exception.SqlState);
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
         await transaction.RollbackAsync();
     }
 
@@ -161,6 +180,88 @@ public sealed class IngestionIntegrationTests(IngestionIntegrationFixture fixtur
         mutateSpan.Parameters.AddWithValue(first.SpanSetId);
         await Assert.ThrowsAsync<PostgresException>(() => mutateSpan.ExecuteNonQueryAsync());
         await spanTransaction.RollbackAsync();
+    }
+
+    [IngestionFact]
+    public async Task Failed_new_pipeline_preserves_the_last_completed_span_set_pointer()
+    {
+        var scope = await fixture.CreateScopeAsync(Encoding.UTF8.GetBytes("last known good spans"));
+        await using var storage = fixture.CreateStorage();
+        await using var postgres = new PostgresMatterStore(fixture.AppConnection);
+        var repository = new PostgresIngestionRepository(postgres);
+        var completed = await CreateService(storage, repository, "native-1").IngestAsync(scope.Document);
+        var failedPipeline = Pipeline("native-2");
+        var unavailable = new ClamAvCliScanner(failedPipeline.ScannerVersion, TimeSpan.FromSeconds(5),
+            "casemesh-missing-clamscan");
+        var failingService = new CommercialEvidenceIngestionService(storage, repository, unavailable,
+            new TesseractCliOcrEngine(failedPipeline.OcrVersion, TimeSpan.FromSeconds(5)), failedPipeline,
+            timeProvider: new FixedTimeProvider(Now));
+
+        var failure = await Assert.ThrowsAsync<EvidenceIngestionException>(() =>
+            failingService.IngestAsync(scope.Document));
+
+        Assert.Equal(IngestionFailureKind.ScannerUnavailable, failure.Kind);
+        Assert.NotNull(await repository.FindCompletedAsync(scope.Document, Pipeline("native-1").Fingerprint, default));
+        Assert.Equal(2, (await repository.ListAttemptsAsync(scope.Document, default)).Count);
+        await using var connection = new NpgsqlConnection(fixture.AppConnection);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await SetTenantAsync(connection, transaction, scope.Document.TenantId);
+        await using var state = new NpgsqlCommand("""
+            SELECT status, current_span_set_id
+            FROM casemesh.document_ingestion_state
+            WHERE tenant_id=$1 AND matter_id=$2 AND document_version_id=$3;
+            """, connection, transaction);
+        state.Parameters.AddWithValue(scope.Document.TenantId.Value);
+        state.Parameters.AddWithValue(scope.Document.MatterId);
+        state.Parameters.AddWithValue(scope.Document.DocumentVersionId);
+        await using var reader = await state.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal((short)IngestionStatus.Failed, reader.GetInt16(0));
+        Assert.Equal(completed.SpanSetId, reader.GetGuid(1));
+        await reader.DisposeAsync();
+        await transaction.RollbackAsync();
+    }
+
+    [IngestionFact]
+    public async Task Version_scoped_foreign_keys_reject_cross_document_span_set_links()
+    {
+        var first = await fixture.CreateScopeAsync(Encoding.UTF8.GetBytes("first document"));
+        var second = await fixture.AddDocumentVersionAsync(first, Encoding.UTF8.GetBytes("second document"));
+        await using var storage = fixture.CreateStorage();
+        await using var postgres = new PostgresMatterStore(fixture.AppConnection);
+        var repository = new PostgresIngestionRepository(postgres);
+        var firstCompleted = await CreateService(storage, repository).IngestAsync(first.Document);
+        var secondCompleted = await CreateService(storage, repository).IngestAsync(second.Document);
+
+        await using var connection = new NpgsqlConnection(fixture.AppConnection);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await SetTenantAsync(connection, transaction, first.Document.TenantId);
+        await using var cross = new NpgsqlCommand("""
+            UPDATE casemesh.document_ingestion_state
+            SET current_span_set_id=$1
+            WHERE tenant_id=$2 AND matter_id=$3 AND document_version_id=$4;
+            """, connection, transaction);
+        cross.Parameters.AddWithValue(firstCompleted.SpanSetId);
+        cross.Parameters.AddWithValue(second.Document.TenantId.Value);
+        cross.Parameters.AddWithValue(second.Document.MatterId);
+        cross.Parameters.AddWithValue(second.Document.DocumentVersionId);
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => cross.ExecuteNonQueryAsync());
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
+        Assert.NotEqual(firstCompleted.SpanSetId, secondCompleted.SpanSetId);
+        await transaction.RollbackAsync();
+    }
+
+    private static async Task SetTenantAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        TenantId tenantId)
+    {
+        await using var context = new NpgsqlCommand(
+            "SELECT set_config('casemesh.tenant_id',$1,true);", connection, transaction);
+        context.Parameters.AddWithValue(tenantId.Value.ToString());
+        await context.ExecuteNonQueryAsync();
     }
 
     private static CommercialEvidenceIngestionService CreateService(

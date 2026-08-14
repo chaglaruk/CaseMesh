@@ -98,7 +98,8 @@ public sealed class CommercialEvidenceIngestionService
                 completedAt, IngestionStatus.Completed, detected, byteLength, scan.Provider, scan.Version,
                 scan.ResultCode, null, null, spanSetId);
             return await _repository.SaveCompletedAsync(attempt, detected.Value,
-                regions.FirstOrDefault()?.Provider ?? "none", _pipeline.ParserVersion,
+                regions.FirstOrDefault(region => region.Route == ExtractionRoute.Native)?.Provider ?? "none",
+                _pipeline.ParserVersion,
                 regions.Any(region => region.Route == ExtractionRoute.Ocr) ? _pipeline.OcrProvider : null,
                 regions.Any(region => region.Route == ExtractionRoute.Ocr) ? _pipeline.OcrVersion : null,
                 regions, cancellationToken);
@@ -146,6 +147,12 @@ public sealed class CommercialEvidenceIngestionService
         ResourceLimitException limit => new EvidenceIngestionException(
             IngestionFailureKind.ResourceLimit, limit.Code,
             "The evidence exceeds a configured ingestion resource limit.", exception),
+        InvalidOperationException => new EvidenceIngestionException(
+            IngestionFailureKind.PersistenceConflict, "ingestion-persistence-conflict",
+            "The ingestion result conflicts with persisted tenant-scoped ingestion state.", exception),
+        TimeoutException => new EvidenceIngestionException(
+            IngestionFailureKind.ResourceLimit, "external-process-timeout",
+            "An external evidence process exceeded its configured time limit.", exception),
         _ => new EvidenceIngestionException(IngestionFailureKind.ParserFailure,
             "parser-failed", "The evidence parser failed without exposing evidence content.", exception)
     };

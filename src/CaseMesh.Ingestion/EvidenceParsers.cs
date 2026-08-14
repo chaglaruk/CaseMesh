@@ -75,12 +75,15 @@ internal static class EvidenceParsers
                 "scanned-pdf-rasterizer-unavailable", "The image-only PDF requires the configured OCR rasterizer.");
         }
 
-        var images = await rasterizer.RasterizeAsync(path, temporaryDirectory, limits.MaximumPages, cancellationToken);
+        var images = await rasterizer.RasterizeAsync(path, temporaryDirectory, limits, cancellationToken);
         if (images.Count == 0) throw new EvidenceIngestionException(IngestionFailureKind.OcrFailure,
             "scanned-pdf-empty", "The image-only PDF produced no OCR pages.");
         var regions = new List<ExtractedRegion>();
         for (var index = 0; index < images.Count; index++)
         {
+            if (ContentTypeDetector.Detect(images[index], limits) != EvidenceMediaType.Png)
+                throw new EvidenceIngestionException(IngestionFailureKind.MalformedMedia,
+                    "invalid-raster-output", "The PDF rasterizer returned an unexpected image type.");
             var words = await ocr.RecognizeAsync(images[index], index + 1, cancellationToken);
             AddOcrWords(regions, words, document, fingerprint, pipeline, limits);
         }
@@ -104,6 +107,7 @@ internal static class EvidenceParsers
             var body = package.MainDocumentPart?.Document?.Body
                 ?? throw new InvalidDataException("DOCX has no document body.");
             var regions = new List<ExtractedRegion>();
+            var tables = body.Descendants<Table>().ToList();
             var documentOffset = 0;
             var paragraphOrdinal = 0;
             foreach (var paragraph in body.Descendants<Paragraph>())
@@ -112,9 +116,20 @@ internal static class EvidenceParsers
                 if (string.IsNullOrWhiteSpace(text)) continue;
                 var cell = paragraph.Ancestors<TableCell>().FirstOrDefault();
                 var kind = cell is null ? SourceLocatorKind.DocxParagraph : SourceLocatorKind.DocxTableCell;
-                var locator = cell is null
-                    ? $"docx:paragraph:{paragraphOrdinal}"
-                    : $"docx:table-cell-paragraph:{paragraphOrdinal}";
+                string locator;
+                if (cell is null)
+                {
+                    locator = $"docx:paragraph:{paragraphOrdinal}";
+                }
+                else
+                {
+                    var row = cell.Ancestors<TableRow>().First();
+                    var table = row.Ancestors<Table>().First();
+                    var tableIndex = tables.IndexOf(table);
+                    var rowIndex = table.Elements<TableRow>().ToList().IndexOf(row);
+                    var cellIndex = row.Elements<TableCell>().ToList().IndexOf(cell);
+                    locator = $"docx:table:{tableIndex}:row:{rowIndex}:cell:{cellIndex}:paragraph:{paragraphOrdinal}";
+                }
                 regions.Add(CreateRegion(document, fingerprint, regions.Count, kind, locator, text,
                     ExtractionRoute.Native, "openxml", pipeline.ParserVersion, null,
                     documentOffset, documentOffset + text.Length));
@@ -165,6 +180,7 @@ internal static class EvidenceParsers
                     body, ExtractionRoute.Native, "mimekit", pipeline.ParserVersion,
                     null, offset, offset + body.Length));
                 offset += body.Length + 1;
+                EnforceRegions(regions, offset, limits);
             }
 
             var attachmentOrdinal = 0;
@@ -232,6 +248,7 @@ internal static class EvidenceParsers
         IngestionPipeline pipeline,
         IngestionLimits limits)
     {
+        var characters = regions.Sum(item => item.Text.Length);
         foreach (var word in words)
         {
             if (string.IsNullOrWhiteSpace(word.Text)) continue;
@@ -240,7 +257,8 @@ internal static class EvidenceParsers
                 word.Text, ExtractionRoute.Ocr, pipeline.OcrProvider, pipeline.OcrVersion,
                 word.PageNumber, null, null, word.Confidence,
                 word.Left, word.Top, word.Width, word.Height));
-            EnforceRegions(regions, regions.Sum(item => item.Text.Length), limits);
+            characters = checked(characters + word.Text.Length);
+            EnforceRegions(regions, characters, limits);
         }
     }
 

@@ -211,7 +211,12 @@ public sealed class PostgresIngestionRepository : IIngestionRepository
                 status = EXCLUDED.status,
                 quarantined = EXCLUDED.quarantined,
                 latest_attempt_id = EXCLUDED.latest_attempt_id,
-                current_span_set_id = EXCLUDED.current_span_set_id,
+                current_span_set_id = CASE
+                    WHEN EXCLUDED.status = 4 THEN COALESCE(
+                        EXCLUDED.current_span_set_id,
+                        casemesh.document_ingestion_state.current_span_set_id)
+                    ELSE EXCLUDED.current_span_set_id
+                END,
                 updated_at = EXCLUDED.updated_at
             WHERE casemesh.document_ingestion_state.document_id = EXCLUDED.document_id
               AND casemesh.document_ingestion_state.original_object_id = EXCLUDED.original_object_id

@@ -1,3 +1,9 @@
+ALTER TABLE casemesh.document_versions
+    ADD CONSTRAINT document_versions_ingestion_document_uq
+        UNIQUE (tenant_id, matter_id, document_id, document_version_id),
+    ADD CONSTRAINT document_versions_ingestion_identity_uq
+        UNIQUE (tenant_id, matter_id, document_id, document_version_id, original_object_id);
+
 CREATE TABLE casemesh.ingestion_span_sets (
     tenant_id uuid NOT NULL,
     matter_id uuid NOT NULL,
@@ -14,10 +20,9 @@ CREATE TABLE casemesh.ingestion_span_sets (
     PRIMARY KEY (tenant_id, matter_id, span_set_id),
     UNIQUE (tenant_id, matter_id, document_version_id, pipeline_fingerprint),
     UNIQUE (tenant_id, matter_id, document_version_id, span_set_id),
-    FOREIGN KEY (tenant_id, matter_id, document_id)
-        REFERENCES casemesh.documents (tenant_id, matter_id, document_id) ON DELETE CASCADE,
-    FOREIGN KEY (tenant_id, matter_id, document_version_id)
-        REFERENCES casemesh.document_versions (tenant_id, matter_id, document_version_id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, matter_id, document_id, document_version_id)
+        REFERENCES casemesh.document_versions (
+            tenant_id, matter_id, document_id, document_version_id) ON DELETE CASCADE,
     CHECK ((ocr_provider IS NULL) = (ocr_version IS NULL))
 );
 
@@ -41,12 +46,13 @@ CREATE TABLE casemesh.ingestion_attempts (
     failure_code text NULL CHECK (failure_code IS NULL OR btrim(failure_code) <> ''),
     span_set_id uuid NULL,
     PRIMARY KEY (tenant_id, matter_id, attempt_id),
-    FOREIGN KEY (tenant_id, matter_id, document_version_id)
-        REFERENCES casemesh.document_versions (tenant_id, matter_id, document_version_id) ON DELETE CASCADE,
-    FOREIGN KEY (tenant_id, matter_id, original_object_id)
-        REFERENCES casemesh.original_objects (tenant_id, matter_id, original_object_id) ON DELETE CASCADE,
-    FOREIGN KEY (tenant_id, matter_id, span_set_id)
-        REFERENCES casemesh.ingestion_span_sets (tenant_id, matter_id, span_set_id) DEFERRABLE INITIALLY DEFERRED,
+    UNIQUE (tenant_id, matter_id, document_version_id, attempt_id),
+    FOREIGN KEY (tenant_id, matter_id, document_id, document_version_id, original_object_id)
+        REFERENCES casemesh.document_versions (
+            tenant_id, matter_id, document_id, document_version_id, original_object_id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, matter_id, document_version_id, span_set_id)
+        REFERENCES casemesh.ingestion_span_sets (
+            tenant_id, matter_id, document_version_id, span_set_id) DEFERRABLE INITIALLY DEFERRED,
     CHECK ((status = 2) = (span_set_id IS NOT NULL)),
     CHECK ((status IN (3, 4)) = (failure_kind IS NOT NULL AND failure_code IS NOT NULL)),
     CHECK ((status = 3) = (failure_kind = 4))
@@ -66,18 +72,18 @@ CREATE TABLE casemesh.document_ingestion_state (
     current_span_set_id uuid NULL,
     updated_at timestamptz NOT NULL,
     PRIMARY KEY (tenant_id, matter_id, document_version_id),
-    FOREIGN KEY (tenant_id, matter_id, document_id)
-        REFERENCES casemesh.documents (tenant_id, matter_id, document_id) ON DELETE CASCADE,
-    FOREIGN KEY (tenant_id, matter_id, document_version_id)
-        REFERENCES casemesh.document_versions (tenant_id, matter_id, document_version_id) ON DELETE CASCADE,
-    FOREIGN KEY (tenant_id, matter_id, original_object_id)
-        REFERENCES casemesh.original_objects (tenant_id, matter_id, original_object_id) ON DELETE CASCADE,
-    FOREIGN KEY (tenant_id, matter_id, latest_attempt_id)
-        REFERENCES casemesh.ingestion_attempts (tenant_id, matter_id, attempt_id),
-    FOREIGN KEY (tenant_id, matter_id, current_span_set_id)
-        REFERENCES casemesh.ingestion_span_sets (tenant_id, matter_id, span_set_id),
+    FOREIGN KEY (tenant_id, matter_id, document_id, document_version_id, original_object_id)
+        REFERENCES casemesh.document_versions (
+            tenant_id, matter_id, document_id, document_version_id, original_object_id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, matter_id, document_version_id, latest_attempt_id)
+        REFERENCES casemesh.ingestion_attempts (
+            tenant_id, matter_id, document_version_id, attempt_id),
+    FOREIGN KEY (tenant_id, matter_id, document_version_id, current_span_set_id)
+        REFERENCES casemesh.ingestion_span_sets (
+            tenant_id, matter_id, document_version_id, span_set_id),
     CHECK (quarantined = (status = 3)),
-    CHECK ((status = 2) = (current_span_set_id IS NOT NULL))
+    CHECK (status <> 2 OR current_span_set_id IS NOT NULL),
+    CHECK (current_span_set_id IS NULL OR status IN (2, 4))
 );
 
 ALTER TABLE casemesh.source_spans

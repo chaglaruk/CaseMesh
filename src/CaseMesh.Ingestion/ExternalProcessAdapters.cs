@@ -153,17 +153,21 @@ public sealed class PopplerPdfPageRasterizer : IPdfPageRasterizer
     public async Task<IReadOnlyList<string>> RasterizeAsync(
         string pdfPath,
         string outputDirectory,
-        int maximumPages,
+        IngestionLimits limits,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(limits);
         Directory.CreateDirectory(outputDirectory);
         var prefix = Path.Combine(outputDirectory, "page");
+        var pixelDimension = (int)Math.Min(int.MaxValue, Math.Floor(Math.Sqrt(limits.MaximumImagePixels)));
+        var scaleBound = Math.Min(limits.MaximumImageDimension, pixelDimension);
+        if (scaleBound <= 0) throw new ArgumentOutOfRangeException(nameof(limits));
         ProcessResult result;
         try
         {
             result = await ExternalProcess.RunAsync(
                 _executable,
-                ["-png", "-r", "200", "-scale-to", "5000", "-f", "1", "-l", maximumPages.ToString(CultureInfo.InvariantCulture), pdfPath, prefix],
+                ["-png", "-scale-to", scaleBound.ToString(CultureInfo.InvariantCulture), "-f", "1", "-l", limits.MaximumPages.ToString(CultureInfo.InvariantCulture), pdfPath, prefix],
                 _timeout,
                 cancellationToken);
         }
@@ -213,18 +217,27 @@ internal static class ExternalProcess
             ?? throw new InvalidOperationException("The external process did not start.");
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
-        var outputTask = process.StandardOutput.ReadToEndAsync(timeoutSource.Token);
-        _ = process.StandardError.ReadToEndAsync(timeoutSource.Token);
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
         try
         {
             await process.WaitForExitAsync(timeoutSource.Token);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            if (!process.HasExited)
+            {
+                try { process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
+            }
+            await process.WaitForExitAsync(CancellationToken.None);
+            await Task.WhenAll(outputTask, errorTask);
+            cancellationToken.ThrowIfCancellationRequested();
             throw new TimeoutException("The external evidence process exceeded its configured time limit.");
         }
 
-        return new ProcessResult(process.ExitCode, await outputTask);
+        var output = await outputTask;
+        _ = await errorTask;
+        return new ProcessResult(process.ExitCode, output);
     }
 }

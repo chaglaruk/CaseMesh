@@ -12,7 +12,7 @@ public static class ContentTypeDetector
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         Span<byte> prefix = stackalloc byte[12];
-        var read = stream.Read(prefix);
+        var read = stream.ReadAtLeast(prefix, prefix.Length, throwOnEndOfStream: false);
         var bytes = prefix[..read];
 
         if (bytes.StartsWith("%PDF-"u8)) return EvidenceMediaType.Pdf;

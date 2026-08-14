@@ -7,11 +7,12 @@ internal sealed class IngestionFactAttribute : FactAttribute
     internal const string AccessKey = "CASEMESH_OBJECT_STORAGE_ACCESS_KEY";
     internal const string SecretKey = "CASEMESH_OBJECT_STORAGE_SECRET_KEY";
     internal const string OcrImage = "CASEMESH_INGESTION_OCR_IMAGE";
+    internal const string ClamAvDatabase = "CASEMESH_CLAMAV_DATABASE";
     internal const string Required = "CASEMESH_INGESTION_REQUIRED";
 
     public IngestionFactAttribute()
     {
-        var missing = new[] { Postgres, Endpoint, AccessKey, SecretKey, OcrImage }
+        var missing = new[] { Postgres, Endpoint, AccessKey, SecretKey, OcrImage, ClamAvDatabase }
             .Where(name => string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name)))
             .ToArray();
         if (missing.Length == 0) return;

@@ -87,13 +87,34 @@ public sealed class IngestionIntegrationFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        if (_s3 is not null)
+        try
         {
-            var objects = await _s3.ListObjectsV2Async(new ListObjectsV2Request { BucketName = StorageOptions.BucketName });
-            foreach (var item in objects.S3Objects ?? []) await _s3.DeleteObjectAsync(StorageOptions.BucketName, item.Key);
-            await _s3.DeleteBucketAsync(StorageOptions.BucketName);
-            _s3.Dispose();
+            if (_s3 is not null)
+            {
+                string? continuationToken = null;
+                do
+                {
+                    var objects = await _s3.ListObjectsV2Async(new ListObjectsV2Request
+                    {
+                        BucketName = StorageOptions.BucketName,
+                        ContinuationToken = continuationToken
+                    });
+                    foreach (var item in objects.S3Objects ?? [])
+                        await _s3.DeleteObjectAsync(StorageOptions.BucketName, item.Key);
+                    continuationToken = objects.IsTruncated == true ? objects.NextContinuationToken : null;
+                } while (continuationToken is not null);
+                await _s3.DeleteBucketAsync(StorageOptions.BucketName);
+            }
         }
+        finally
+        {
+            _s3?.Dispose();
+            await DropDatabaseAsync();
+        }
+    }
+
+    private async Task DropDatabaseAsync()
+    {
         if (string.IsNullOrWhiteSpace(_rootConnection) || _database is null || _role is null) return;
         NpgsqlConnection.ClearAllPools();
         await using var root = new NpgsqlConnection(_rootConnection);
@@ -125,6 +146,24 @@ public sealed class IngestionIntegrationFixture : IAsyncLifetime
         await using (var content = new MemoryStream(bytes, writable: false))
             await storage.StoreAsync(tenant, matter, originalId, content);
         return new IntegrationScope(new IngestionDocument(tenant, matter, documentId, versionId, originalId), bytes);
+    }
+
+    public async Task<IntegrationScope> AddDocumentVersionAsync(IntegrationScope existing, byte[] bytes)
+    {
+        await using var postgres = new PostgresMatterStore(AppConnection);
+        var persisted = await postgres.LoadAsync(existing.Document.TenantId, existing.Document.MatterId)
+            ?? throw new InvalidOperationException("Synthetic Matter was not found.");
+        var documentId = Guid.NewGuid();
+        var versionId = Guid.NewGuid();
+        var originalId = Guid.NewGuid();
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+        persisted.Evidence.RegisterDocumentVersion(documentId, versionId, hash, originalId);
+        await postgres.SaveAsync(persisted.Evidence, persisted.Workplace);
+        await using (var storage = CreateStorage())
+        await using (var content = new MemoryStream(bytes, writable: false))
+            await storage.StoreAsync(existing.Document.TenantId, existing.Document.MatterId, originalId, content);
+        return new IntegrationScope(new IngestionDocument(existing.Document.TenantId,
+            existing.Document.MatterId, documentId, versionId, originalId), bytes);
     }
 
     public S3OriginalEvidenceStore CreateStorage() => new(AppConnection, StorageOptions);

@@ -56,7 +56,8 @@ public sealed class IngestionServiceTests
     {
         var scope = TestScope.Create(SyntheticPng());
         var ocr = new FakeOcr([new OcrWord("Synthetic", 1, 10, 20, 80, 18, .93m)]);
-        var service = CreateService(scope, new FakeRepository(), ocr: ocr);
+        var repository = new FakeRepository();
+        var service = CreateService(scope, repository, ocr: ocr);
 
         var result = await service.IngestAsync(scope.Document);
 
@@ -66,6 +67,8 @@ public sealed class IngestionServiceTests
         Assert.Equal((10, 20, 80, 18), (region.BoundingBoxLeft, region.BoundingBoxTop,
             region.BoundingBoxWidth, region.BoundingBoxHeight));
         Assert.Equal(.93m, region.Confidence);
+        Assert.Equal("none", repository.ParserProvider);
+        Assert.Equal("fake-ocr", repository.OcrProvider);
     }
 
     [Fact]
@@ -82,6 +85,20 @@ public sealed class IngestionServiceTests
     }
 
     [Fact]
+    public async Task Scanned_pdf_passes_configured_image_limits_to_rasterizer_and_validates_output()
+    {
+        var scope = TestScope.Create(SyntheticImageOnlyPdf());
+        var limits = new IngestionLimits(MaximumImagePixels: 1, MaximumImageDimension: 1);
+        var rasterizer = new FakeRasterizer(SyntheticPng());
+
+        var result = await CreateService(scope, new FakeRepository(), limits: limits,
+            rasterizer: rasterizer).IngestAsync(scope.Document);
+
+        Assert.Same(limits, rasterizer.ReceivedLimits);
+        Assert.Equal(ExtractionRoute.Ocr, Assert.Single(result.Regions).Route);
+    }
+
+    [Fact]
     public async Task Native_locators_preserve_pdf_pages_docx_structure_and_email_semantics()
     {
         var pdf = TestScope.Create(SyntheticPdf());
@@ -92,7 +109,9 @@ public sealed class IngestionServiceTests
         var docx = TestScope.Create(SyntheticDocx());
         var docxResult = await CreateService(docx, new FakeRepository()).IngestAsync(docx.Document);
         Assert.Contains(docxResult.Regions, item => item.LocatorKind == SourceLocatorKind.DocxParagraph);
-        Assert.Contains(docxResult.Regions, item => item.LocatorKind == SourceLocatorKind.DocxTableCell);
+        Assert.Contains(docxResult.Regions, item =>
+            item.LocatorKind == SourceLocatorKind.DocxTableCell &&
+            item.Locator == "docx:table:0:row:0:cell:0:paragraph:1");
 
         var eml = TestScope.Create(SyntheticEml());
         var emlResult = await CreateService(eml, new FakeRepository()).IngestAsync(eml.Document);
@@ -203,6 +222,42 @@ public sealed class IngestionServiceTests
     }
 
     [Fact]
+    public async Task Email_body_is_included_in_the_text_character_limit()
+    {
+        var email = Encoding.UTF8.GetBytes(string.Join("\r\n",
+            "From: sender@example.test", string.Empty, new string('x', 80)));
+        var scope = TestScope.Create(email);
+
+        var failure = await Assert.ThrowsAsync<EvidenceIngestionException>(() =>
+            CreateService(scope, new FakeRepository(),
+                limits: new IngestionLimits(MaximumTextCharacters: 64)).IngestAsync(scope.Document));
+
+        Assert.Equal(IngestionFailureKind.ResourceLimit, failure.Kind);
+        Assert.Equal("text-character-limit", failure.Code);
+    }
+
+    [Fact]
+    public async Task Persistence_and_external_timeouts_keep_distinct_failure_categories()
+    {
+        var persistenceScope = TestScope.Create(Encoding.UTF8.GetBytes("persistence conflict"));
+        var persistenceRepository = new FakeRepository
+        {
+            CompletedFailure = new InvalidOperationException("synthetic persisted divergence")
+        };
+        var persistenceFailure = await Assert.ThrowsAsync<EvidenceIngestionException>(() =>
+            CreateService(persistenceScope, persistenceRepository).IngestAsync(persistenceScope.Document));
+        Assert.Equal(IngestionFailureKind.PersistenceConflict, persistenceFailure.Kind);
+        Assert.Equal("ingestion-persistence-conflict", persistenceFailure.Code);
+
+        var timeoutScope = TestScope.Create(SyntheticPng());
+        var timeoutFailure = await Assert.ThrowsAsync<EvidenceIngestionException>(() =>
+            CreateService(timeoutScope, new FakeRepository(), ocr: new FakeOcr([], timeout: true))
+                .IngestAsync(timeoutScope.Document));
+        Assert.Equal(IngestionFailureKind.ResourceLimit, timeoutFailure.Kind);
+        Assert.Equal("external-process-timeout", timeoutFailure.Code);
+    }
+
+    [Fact]
     public async Task Compressed_image_header_cannot_expand_past_pixel_limit_in_ocr()
     {
         var bytes = SyntheticPng().ToArray();
@@ -249,13 +304,15 @@ public sealed class IngestionServiceTests
         FakeScanner? scanner = null,
         FakeOcr? ocr = null,
         string parserVersion = "native-1",
-        IngestionLimits? limits = null) => new(
+        IngestionLimits? limits = null,
+        IPdfPageRasterizer? rasterizer = null) => new(
         scope.Storage,
         repository,
         scanner ?? new FakeScanner(),
         ocr ?? new FakeOcr([new OcrWord("Synthetic", 1, 1, 2, 30, 10, .9m)]),
         new IngestionPipeline("pipeline-1", "fake-scanner", "1", parserVersion, "fake-ocr", "1"),
         limits ?? new IngestionLimits(),
+        rasterizer,
         timeProvider: new FixedTimeProvider(Now));
 
     private sealed record TestScope(IngestionDocument Document, FakeStorage Storage)
@@ -284,8 +341,14 @@ public sealed class IngestionServiceTests
         private StoredOriginalEvidence Metadata() => new(owner.TenantId, owner.MatterId, owner.OriginalObjectId,
             Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)), bytes.LongLength, Now);
         public Task<StoredOriginalEvidence> StoreAsync(TenantId tenantId, Guid matterId, Guid originalObjectId, Stream content, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<StoredOriginalEvidence?> GetMetadataAsync(TenantId tenantId, Guid matterId, Guid originalObjectId, CancellationToken cancellationToken = default) => Task.FromResult<StoredOriginalEvidence?>(Metadata());
-        public Task<StoredOriginalEvidence> VerifyIntegrityAsync(TenantId tenantId, Guid matterId, Guid originalObjectId, CancellationToken cancellationToken = default) => Task.FromResult(Metadata());
+        public Task<StoredOriginalEvidence?> GetMetadataAsync(TenantId tenantId, Guid matterId, Guid originalObjectId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<StoredOriginalEvidence?>(Owns(tenantId, matterId, originalObjectId) ? Metadata() : null);
+        public Task<StoredOriginalEvidence> VerifyIntegrityAsync(TenantId tenantId, Guid matterId, Guid originalObjectId, CancellationToken cancellationToken = default) =>
+            Owns(tenantId, matterId, originalObjectId)
+                ? Task.FromResult(Metadata())
+                : throw new OriginalEvidenceNotFoundException("Tenant-scoped original not found.");
+        private bool Owns(TenantId tenantId, Guid matterId, Guid originalObjectId) =>
+            tenantId == owner.TenantId && matterId == owner.MatterId && originalObjectId == owner.OriginalObjectId;
         public Task<bool> DeleteOriginalAsync(TenantId tenantId, Guid matterId, Guid originalObjectId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<bool> DeleteMatterAsync(TenantId tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<bool> DeleteTenantAsync(TenantId tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -308,7 +371,10 @@ public sealed class IngestionServiceTests
         }
     }
 
-    private sealed class FakeOcr(IReadOnlyList<OcrWord> words, bool unavailable = false) : IOcrEngine
+    private sealed class FakeOcr(
+        IReadOnlyList<OcrWord> words,
+        bool unavailable = false,
+        bool timeout = false) : IOcrEngine
     {
         public string Provider => "fake-ocr";
         public string Version => "1";
@@ -316,9 +382,30 @@ public sealed class IngestionServiceTests
         public Task<IReadOnlyList<OcrWord>> RecognizeAsync(string imagePath, int pageNumber, CancellationToken cancellationToken)
         {
             Calls++;
+            if (timeout) throw new TimeoutException("Synthetic OCR timeout.");
             if (unavailable) throw new EvidenceIngestionException(IngestionFailureKind.OcrUnavailable,
                 "ocr-unavailable", "Synthetic unavailable OCR.");
             return Task.FromResult(words);
+        }
+    }
+
+    private sealed class FakeRasterizer(byte[] output) : IPdfPageRasterizer
+    {
+        public string Provider => "fake-rasterizer";
+        public string Version => "1";
+        public IngestionLimits? ReceivedLimits { get; private set; }
+
+        public async Task<IReadOnlyList<string>> RasterizeAsync(
+            string pdfPath,
+            string outputDirectory,
+            IngestionLimits limits,
+            CancellationToken cancellationToken)
+        {
+            ReceivedLimits = limits;
+            Directory.CreateDirectory(outputDirectory);
+            var path = Path.Combine(outputDirectory, "page-1.png");
+            await File.WriteAllBytesAsync(path, output, cancellationToken);
+            return [path];
         }
     }
 
@@ -326,6 +413,9 @@ public sealed class IngestionServiceTests
     {
         internal Dictionary<string, CompletedIngestion> Completed { get; } = new(StringComparer.Ordinal);
         internal List<IngestionAttempt> Attempts { get; } = [];
+        internal Exception? CompletedFailure { get; init; }
+        internal string? ParserProvider { get; private set; }
+        internal string? OcrProvider { get; private set; }
         private static string Key(IngestionDocument document, string fingerprint) =>
             $"{document.TenantId.Value:D}:{document.MatterId:D}:{document.DocumentVersionId:D}:{fingerprint}";
         public Task<CompletedIngestion?> FindCompletedAsync(IngestionDocument document, string pipelineFingerprint, CancellationToken cancellationToken) =>
@@ -334,6 +424,9 @@ public sealed class IngestionServiceTests
             string parserProvider, string parserVersion, string? ocrProvider, string? ocrVersion,
             IReadOnlyList<ExtractedRegion> regions, CancellationToken cancellationToken)
         {
+            if (CompletedFailure is not null) throw CompletedFailure;
+            ParserProvider = parserProvider;
+            OcrProvider = ocrProvider;
             var result = new CompletedIngestion(attempt.AttemptId, attempt.SpanSetId!.Value, mediaType,
                 attempt.ByteLength, attempt.PipelineFingerprint, regions, false);
             Completed.Add(Key(attempt.Document, attempt.PipelineFingerprint), result);
@@ -413,5 +506,31 @@ public sealed class IngestionServiceTests
         writer.Flush();
         return output.ToArray();
         static string StreamObject(string content) => $"<< /Length {Encoding.ASCII.GetByteCount(content)} >>\nstream\n{content}\nendstream";
+    }
+
+    private static byte[] SyntheticImageOnlyPdf()
+    {
+        var objects = new[]
+        {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] /Contents 4 0 R >>",
+            "<< /Length 0 >>\nstream\n\nendstream"
+        };
+        using var output = new MemoryStream();
+        using var writer = new StreamWriter(output, Encoding.ASCII, leaveOpen: true) { NewLine = "\n" };
+        writer.Write("%PDF-1.4\n"); writer.Flush();
+        var offsets = new List<long> { 0 };
+        for (var index = 0; index < objects.Length; index++)
+        {
+            offsets.Add(output.Position);
+            writer.Write($"{index + 1} 0 obj\n{objects[index]}\nendobj\n"); writer.Flush();
+        }
+        var xref = output.Position;
+        writer.Write($"xref\n0 {objects.Length + 1}\n0000000000 65535 f \n");
+        foreach (var offset in offsets.Skip(1)) writer.Write($"{offset:0000000000} 00000 n \n");
+        writer.Write($"trailer\n<< /Size {objects.Length + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n");
+        writer.Flush();
+        return output.ToArray();
     }
 }
