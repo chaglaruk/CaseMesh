@@ -1,17 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>CaseMesh.Persistence.Postgres</RootNamespace>
-    <AssemblyName>CaseMesh.Persistence.Postgres</AssemblyName>
+    <RootNamespace>CaseMesh.Storage.S3</RootNamespace>
+    <AssemblyName>CaseMesh.Storage.S3</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\CaseMesh.Core\CaseMesh.Core.csproj" />
+    <ProjectReference Include="..\CaseMesh.Persistence.Postgres\CaseMesh.Persistence.Postgres.csproj" />
     <ProjectReference Include="..\CaseMesh.Storage\CaseMesh.Storage.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Npgsql" />
-  </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="Migrations\*.sql" />
+    <PackageReference Include="AWSSDK.S3" />
   </ItemGroup>
 </Project>

@@ -134,7 +134,40 @@ public sealed class PostgresMatterStore : IAsyncDisposable
 
     public async ValueTask DisposeAsync() => await _dataSource.DisposeAsync();
 
-    private async Task<T> InTenantTransactionAsync<T>(
+    internal async Task<IAsyncDisposable> AcquireSessionAdvisoryLockAsync(
+        string lockName,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(lockName);
+        var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        try
+        {
+            await RejectRlsBypassRoleAsync(connection, cancellationToken);
+            await using (var timeout = new NpgsqlCommand("SET lock_timeout = '30s';", connection))
+            {
+                await timeout.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using var command = new NpgsqlCommand(
+                "SELECT pg_advisory_lock(hashtextextended($1, 0));",
+                connection);
+            command.Parameters.AddWithValue(lockName);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            await using (var resetTimeout = new NpgsqlCommand("RESET lock_timeout;", connection))
+            {
+                await resetTimeout.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            return new AdvisoryLockLease(_dataSource, connection, lockName);
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
+    }
+
+    internal async Task<T> InTenantTransactionAsync<T>(
         TenantId tenantId,
         Func<NpgsqlConnection, NpgsqlTransaction, Task<T>> operation,
         CancellationToken cancellationToken)
@@ -169,6 +202,62 @@ public sealed class PostgresMatterStore : IAsyncDisposable
         {
             throw new InvalidOperationException(
                 "The commercial Matter store requires a PostgreSQL role without SUPERUSER or BYPASSRLS privileges.");
+        }
+    }
+
+    private sealed class AdvisoryLockLease(
+        NpgsqlDataSource dataSource,
+        NpgsqlConnection connection,
+        string lockName) : IAsyncDisposable
+    {
+        private NpgsqlConnection? _connection = connection;
+
+        public async ValueTask DisposeAsync()
+        {
+            var owned = Interlocked.Exchange(ref _connection, null);
+            if (owned is null)
+            {
+                return;
+            }
+
+            Exception? unlockFailure = null;
+            try
+            {
+                await using var unlock = new NpgsqlCommand(
+                    "SELECT pg_advisory_unlock(hashtextextended($1, 0));",
+                    owned);
+                unlock.Parameters.AddWithValue(lockName);
+                if (await unlock.ExecuteScalarAsync() is not true)
+                {
+                    throw new InvalidOperationException("The PostgreSQL storage coordination lock was not held.");
+                }
+            }
+            catch (Exception exception)
+            {
+                unlockFailure = exception;
+                try
+                {
+                    dataSource.Clear();
+                }
+                catch
+                {
+                    // Preserve the unlock failure; the owned connection is still disposed below.
+                }
+            }
+
+            try
+            {
+                await owned.DisposeAsync();
+            }
+            catch when (unlockFailure is not null)
+            {
+                // Preserve the primary unlock failure rather than masking it with cleanup failure.
+            }
+
+            if (unlockFailure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(unlockFailure).Throw();
+            }
         }
     }
 

@@ -13,6 +13,12 @@ public sealed class PostgresMigrator
 
     public async Task<IReadOnlyList<AppliedMigration>> MigrateAsync(
         string connectionString,
+        CancellationToken cancellationToken = default) =>
+        await MigrateThroughAsync(connectionString, maximumVersion: null, cancellationToken);
+
+    internal async Task<IReadOnlyList<AppliedMigration>> MigrateThroughAsync(
+        string connectionString,
+        string? maximumVersion,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
@@ -34,6 +40,12 @@ public sealed class PostgresMigrator
             .ToDictionary(item => item.Version, StringComparer.Ordinal);
         foreach (var migration in DiscoverMigrations())
         {
+            if (maximumVersion is not null &&
+                string.CompareOrdinal(migration.Version, maximumVersion) > 0)
+            {
+                continue;
+            }
+
             if (applied.TryGetValue(migration.Version, out var existing))
             {
                 if (!string.Equals(existing.Checksum, migration.Checksum, StringComparison.Ordinal))

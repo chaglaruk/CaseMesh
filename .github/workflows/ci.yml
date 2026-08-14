@@ -53,3 +53,70 @@ jobs:
         run: dotnet build ./tests/CaseMesh.Persistence.Postgres.Tests/CaseMesh.Persistence.Postgres.Tests.csproj -c Release --no-restore
       - name: Run real PostgreSQL integration tests
         run: dotnet test ./tests/CaseMesh.Persistence.Postgres.Tests/CaseMesh.Persistence.Postgres.Tests.csproj -c Release --no-build --logger "trx;LogFileName=postgres-test-results.trx"
+
+  object-storage-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: casemesh_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d casemesh_admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CASEMESH_POSTGRES_ADMIN_CONNECTION: Host=localhost;Port=5432;Database=casemesh_admin;Username=postgres;Password=postgres;Pooling=false
+      CASEMESH_OBJECT_STORAGE_ENDPOINT: http://localhost:9000
+      CASEMESH_OBJECT_STORAGE_ACCESS_KEY: 'GK00000000000000000000000000000000'
+      CASEMESH_OBJECT_STORAGE_SECRET_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+      CASEMESH_OBJECT_STORAGE_REQUIRED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.8'
+          cache: false
+      - name: Build and start real S3-compatible MinIO service
+        run: |
+          minio_source="$RUNNER_TEMP/casemesh-minio-source"
+          git clone --quiet --filter=blob:none https://github.com/minio/minio.git "$minio_source"
+          git -C "$minio_source" checkout --quiet --detach 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
+          (
+            cd "$minio_source"
+            CGO_ENABLED=0 go build -tags kqueue -trimpath -o "$RUNNER_TEMP/casemesh-minio" .
+          )
+          install -d -m 700 "$RUNNER_TEMP/casemesh-minio-data"
+          MINIO_ROOT_USER="$CASEMESH_OBJECT_STORAGE_ACCESS_KEY" \
+          MINIO_ROOT_PASSWORD="$CASEMESH_OBJECT_STORAGE_SECRET_KEY" \
+            nohup "$RUNNER_TEMP/casemesh-minio" server "$RUNNER_TEMP/casemesh-minio-data" \
+              --address ':9000' >"$RUNNER_TEMP/casemesh-minio.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/casemesh-minio.pid"
+          for attempt in {1..60}; do
+            if curl --silent --show-error --fail http://localhost:9000/minio/health/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/casemesh-minio.log"
+          exit 1
+      - name: Restore platform-neutral storage tests
+        run: dotnet restore ./tests/CaseMesh.Storage.S3.Tests/CaseMesh.Storage.S3.Tests.csproj
+      - name: Build platform-neutral storage tests
+        run: dotnet build ./tests/CaseMesh.Storage.S3.Tests/CaseMesh.Storage.S3.Tests.csproj -c Release --no-restore
+      - name: Run real PostgreSQL and S3-compatible storage integration tests
+        run: dotnet test ./tests/CaseMesh.Storage.S3.Tests/CaseMesh.Storage.S3.Tests.csproj -c Release --no-build --logger "trx;LogFileName=object-storage-test-results.trx"
+      - name: Stop S3-compatible MinIO service
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/casemesh-minio.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/casemesh-minio.pid")" || true
+          fi
