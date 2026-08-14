@@ -17,7 +17,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
         var before = await migrator.GetAppliedMigrationsAsync(database.AdminConnectionString);
         var after = await migrator.MigrateAsync(database.AdminConnectionString);
 
-        Assert.Equal(["0001", "0002"], after.Select(migration => migration.Version));
+        Assert.Equal(["0001", "0002", "0003"], after.Select(migration => migration.Version));
         Assert.Equal(before, after);
     }
 
@@ -39,7 +39,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             var migrator = new PostgresMigrator();
             Assert.Empty(await migrator.GetAppliedMigrationsAsync(emptyBuilder.ConnectionString));
             var applied = await migrator.MigrateAsync(emptyBuilder.ConnectionString);
-            Assert.Equal(["0001", "0002"], applied.Select(migration => migration.Version));
+            Assert.Equal(["0001", "0002", "0003"], applied.Select(migration => migration.Version));
         }
         finally
         {
@@ -54,7 +54,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
     }
 
     [PostgresFact]
-    public async Task Migration_0002_preserves_existing_restricted_runtime_role_privileges()
+    public async Task Later_migrations_preserve_existing_restricted_runtime_role_privileges()
     {
         var suffix = Guid.NewGuid().ToString("N");
         var databaseName = $"casemesh_upgrade_{suffix}";
@@ -100,7 +100,12 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
                 SELECT has_table_privilege(current_user, 'casemesh.original_object_storage', 'SELECT'),
                        has_table_privilege(current_user, 'casemesh.original_object_storage', 'INSERT'),
                        has_table_privilege(current_user, 'casemesh.original_object_storage', 'DELETE'),
-                       has_table_privilege(current_user, 'casemesh.original_object_storage', 'UPDATE');
+                       has_table_privilege(current_user, 'casemesh.original_object_storage', 'UPDATE'),
+                       has_table_privilege(current_user, 'casemesh.ingestion_span_sets', 'SELECT'),
+                       has_table_privilege(current_user, 'casemesh.ingestion_span_sets', 'INSERT'),
+                       has_table_privilege(current_user, 'casemesh.ingestion_span_sets', 'UPDATE'),
+                       has_table_privilege(current_user, 'casemesh.ingestion_attempts', 'DELETE'),
+                       has_table_privilege(current_user, 'casemesh.document_ingestion_state', 'UPDATE');
                 """, app);
             await using var reader = await privileges.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
@@ -108,6 +113,11 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             Assert.True(reader.GetBoolean(1));
             Assert.True(reader.GetBoolean(2));
             Assert.False(reader.GetBoolean(3));
+            Assert.True(reader.GetBoolean(4));
+            Assert.True(reader.GetBoolean(5));
+            Assert.False(reader.GetBoolean(6));
+            Assert.False(reader.GetBoolean(7));
+            Assert.True(reader.GetBoolean(8));
         }
         finally
         {
