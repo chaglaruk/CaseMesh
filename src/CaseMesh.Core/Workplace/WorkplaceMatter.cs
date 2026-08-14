@@ -38,11 +38,16 @@ public sealed class WorkplaceMatter
         VerificationState evidenceReviewState = VerificationState.NotReviewed)
     {
         RequireId(id);
+        RequireDefinedEnum(evidenceReviewState);
         ArgumentException.ThrowIfNullOrWhiteSpace(employerReference);
         ArgumentException.ThrowIfNullOrWhiteSpace(roleTitle);
         ValidatePeriod(employmentStartedOn, employmentEndedOn, nameof(employmentEndedOn));
         EnsureAvailable(_employmentProfiles, id, "employment profile");
         var assertionIds = RequireAssertions(supportingAssertionIds ?? [], requireSourceBacking: false);
+        if (evidenceReviewState == VerificationState.Confirmed && assertionIds.Count == 0)
+        {
+            throw new InvalidOperationException("A confirmed employment profile requires supporting assertions.");
+        }
 
         var profile = new EmploymentProfile(
             id,
@@ -67,6 +72,7 @@ public sealed class WorkplaceMatter
         Guid? supersedesEmploymentTermId = null)
     {
         RequireId(id);
+        RequireDefinedEnum(kind);
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         ValidatePeriod(effectiveFrom, effectiveTo, nameof(effectiveTo));
         EnsureAvailable(_employmentTerms, id, "employment term");
@@ -103,6 +109,8 @@ public sealed class WorkplaceMatter
         VerificationState evidenceReviewState = VerificationState.NotReviewed)
     {
         RequireId(id);
+        RequireDefinedEnum(kind);
+        RequireDefinedEnum(evidenceReviewState);
         ArgumentException.ThrowIfNullOrWhiteSpace(neutralLabel);
         EnsureAvailable(_healthAbsenceRecords, id, "health/absence record");
         var assertions = RequireAssertions(assertionIds ?? [], requireSourceBacking: false);
@@ -130,6 +138,7 @@ public sealed class WorkplaceMatter
         IReadOnlyList<Guid>? implementationAssertionIds = null)
     {
         RequireId(id);
+        RequireDefinedEnum(responseStatus);
         ArgumentException.ThrowIfNullOrWhiteSpace(neutralLabel);
         EnsureAvailable(_adjustmentRequests, id, "adjustment request");
         var requests = RequireAssertions(requestAssertionIds, requireSourceBacking: false, requireAny: true);
@@ -166,9 +175,12 @@ public sealed class WorkplaceMatter
         WorkplaceProcessStatus status,
         IReadOnlyList<Guid>? assertionIds = null,
         IReadOnlyList<Guid>? eventIds = null,
-        Guid? supersedesWorkplaceProcessId = null)
+        Guid? supersedesWorkplaceProcessId = null,
+        Guid? supersessionAuditEventId = null)
     {
         RequireId(id);
+        RequireDefinedEnum(kind);
+        RequireDefinedEnum(status);
         ArgumentException.ThrowIfNullOrWhiteSpace(stageLabel);
         EnsureAvailable(_workplaceProcesses, id, "workplace process");
         var assertions = RequireAssertions(assertionIds ?? [], requireSourceBacking: false);
@@ -182,6 +194,12 @@ public sealed class WorkplaceMatter
             {
                 throw new InvalidOperationException("A workplace process can supersede only a process of the same kind.");
             }
+
+            RequireMatchingSupersessionAudit(previous.EventIds, events, supersessionAuditEventId);
+        }
+        else if (supersessionAuditEventId.HasValue)
+        {
+            throw new InvalidOperationException("A supersession audit cannot be attached without a superseded workplace process.");
         }
 
         var process = new WorkplaceProcess(
@@ -192,7 +210,8 @@ public sealed class WorkplaceMatter
             status,
             assertions,
             events,
-            supersedesWorkplaceProcessId);
+            supersedesWorkplaceProcessId,
+            supersessionAuditEventId);
         _workplaceProcesses.Add(id, process);
         return process;
     }
@@ -204,6 +223,7 @@ public sealed class WorkplaceMatter
         IReadOnlyList<Guid>? eventIds = null)
     {
         RequireId(id);
+        RequireDefinedEnum(stage);
         EnsureAvailable(_acasProcessStates, id, "Acas process state");
         var assertions = RequireAssertions(assertionIds ?? [], requireSourceBacking: false);
         var events = RequireEvents(eventIds ?? []);
@@ -259,9 +279,40 @@ public sealed class WorkplaceMatter
             {
                 throw new InvalidOperationException("A workplace record cannot reference an event from another Matter.");
             }
+
+            if (matterEvent.Status is EventStatus.Superseded or EventStatus.Rejected)
+            {
+                throw new InvalidOperationException("A new workplace record cannot reference a superseded or rejected event.");
+            }
         }
 
         return Array.AsReadOnly(ids);
+    }
+
+    private void RequireMatchingSupersessionAudit(
+        IReadOnlyCollection<Guid> previousEventIds,
+        IReadOnlyCollection<Guid> replacementEventIds,
+        Guid? auditEventId)
+    {
+        if (!auditEventId.HasValue)
+        {
+            throw new InvalidOperationException("A workplace process supersession requires a generic audit event.");
+        }
+
+        RequireId(auditEventId.Value, nameof(auditEventId));
+        var auditEvent = _evidence.AuditEvents.SingleOrDefault(candidate => candidate.Id == auditEventId.Value);
+        if (auditEvent is null || auditEvent.MatterId != MatterId)
+        {
+            throw new InvalidOperationException("The supersession audit event is not registered to this Matter.");
+        }
+
+        if (auditEvent.Kind != AuditEventKind.EventCorrected ||
+            !previousEventIds.Contains(auditEvent.EntityId) ||
+            !auditEvent.ReplacementEntityId.HasValue ||
+            !replacementEventIds.Contains(auditEvent.ReplacementEntityId.Value))
+        {
+            throw new InvalidOperationException("The generic audit event must connect the superseded and replacement process events.");
+        }
     }
 
     private static void RequireEvidenceReference(IReadOnlyCollection<Guid> assertionIds, IReadOnlyCollection<Guid> eventIds)
@@ -309,6 +360,17 @@ public sealed class WorkplaceMatter
         if (id == Guid.Empty)
         {
             throw new ArgumentException("A non-empty id is required.", parameterName);
+        }
+    }
+
+    private static void RequireDefinedEnum<TEnum>(
+        TEnum value,
+        [CallerArgumentExpression(nameof(value))] string? parameterName = null)
+        where TEnum : struct, Enum
+    {
+        if (!Enum.IsDefined(value))
+        {
+            throw new ArgumentOutOfRangeException(parameterName, value, "A defined enum value is required.");
         }
     }
 

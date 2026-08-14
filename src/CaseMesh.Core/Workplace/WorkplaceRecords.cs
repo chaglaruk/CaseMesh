@@ -136,7 +136,8 @@ public sealed record WorkplaceProcess
         WorkplaceProcessStatus status,
         IReadOnlyList<Guid> assertionIds,
         IReadOnlyList<Guid> eventIds,
-        Guid? supersedesWorkplaceProcessId)
+        Guid? supersedesWorkplaceProcessId,
+        Guid? supersessionAuditEventId)
     {
         Id = id;
         MatterId = matterId;
@@ -146,6 +147,7 @@ public sealed record WorkplaceProcess
         AssertionIds = assertionIds;
         EventIds = eventIds;
         SupersedesWorkplaceProcessId = supersedesWorkplaceProcessId;
+        SupersessionAuditEventId = supersessionAuditEventId;
     }
 
     public Guid Id { get; }
@@ -156,6 +158,7 @@ public sealed record WorkplaceProcess
     public IReadOnlyList<Guid> AssertionIds { get; }
     public IReadOnlyList<Guid> EventIds { get; }
     public Guid? SupersedesWorkplaceProcessId { get; }
+    public Guid? SupersessionAuditEventId { get; }
 }
 
 public sealed record AcasProcessState

@@ -1,3 +1,4 @@
+using System.Reflection;
 using CaseMesh.Core.Models;
 using CaseMesh.Core.Services;
 using CaseMesh.Core.Workplace;
@@ -47,6 +48,16 @@ public sealed class WorkplaceMatterTests
 
         Assert.False(profile.HasSupportingAssertions);
         Assert.Equal(VerificationState.NotReviewed, profile.EvidenceReviewState);
+    }
+
+    [Fact]
+    public void EmploymentProfile_CannotBeConfirmedWithoutSupportingEvidence()
+    {
+        var workplace = new WorkplaceMatter(SyntheticWorkplaceMatterFixture.CreateGraph());
+
+        Assert.Throws<InvalidOperationException>(() => workplace.AddEmploymentProfile(
+            Id(1110), "example-employer", "Example role", evidenceReviewState: VerificationState.Confirmed));
+        Assert.Empty(workplace.EmploymentProfiles);
     }
 
     [Fact]
@@ -233,11 +244,26 @@ public sealed class WorkplaceMatterTests
 
         Assert.Throws<InvalidOperationException>(() => workplace.AddEmploymentTerm(
             Id(1920), EmploymentTermKind.JobTitle, "Foreign title", [foreignAssertion.Id]));
+        Assert.Throws<InvalidOperationException>(() => workplace.AddEmploymentProfile(
+            Id(1921), "foreign-employer", "Foreign role", supportingAssertionIds: [foreignAssertion.Id]));
+        Assert.Throws<InvalidOperationException>(() => workplace.AddHealthAbsenceRecord(
+            Id(1922), HealthAbsenceKind.AttendanceRecord, "Foreign absence", [foreignAssertion.Id]));
+        Assert.Throws<InvalidOperationException>(() => workplace.AddAdjustmentRequest(
+            Id(1923), "Foreign request", [foreignAssertion.Id]));
+        Assert.Throws<InvalidOperationException>(() => workplace.AddAcasProcessState(
+            Id(1924), AcasStage.CertificateRecorded, [foreignAssertion.Id]));
         Assert.Throws<InvalidOperationException>(() => workplace.AddWorkplaceProcess(
-            Id(1921), WorkplaceProcessKind.Grievance, "Foreign stage", WorkplaceProcessStatus.Open,
+            Id(1925), WorkplaceProcessKind.Grievance, "Foreign assertion stage", WorkplaceProcessStatus.Open,
+            assertionIds: [foreignAssertion.Id]));
+        Assert.Throws<InvalidOperationException>(() => workplace.AddWorkplaceProcess(
+            Id(1926), WorkplaceProcessKind.Grievance, "Foreign event stage", WorkplaceProcessStatus.Open,
             eventIds: [foreignEvent.Id]));
+        Assert.Empty(workplace.EmploymentProfiles);
         Assert.Empty(workplace.EmploymentTerms);
+        Assert.Empty(workplace.HealthAbsenceRecords);
+        Assert.Empty(workplace.AdjustmentRequests);
         Assert.Empty(workplace.WorkplaceProcesses);
+        Assert.Empty(workplace.AcasProcessStates);
     }
 
     [Fact]
@@ -261,14 +287,93 @@ public sealed class WorkplaceMatterTests
             SyntheticWorkplaceMatterFixture.RecordedAt);
         var correctedProcess = workplace.AddWorkplaceProcess(
             Id(2021), WorkplaceProcessKind.Grievance, "Meeting date corrected",
-            WorkplaceProcessStatus.Open, [sourceAssertion.Id], [correction.CorrectedEvent.Id], originalProcess.Id);
+            WorkplaceProcessStatus.Open, [sourceAssertion.Id], [correction.CorrectedEvent.Id], originalProcess.Id,
+            correction.AuditEvent.Id);
 
         Assert.Equal(2, workplace.WorkplaceProcesses.Count);
         Assert.Equal(originalProcess.Id, correctedProcess.SupersedesWorkplaceProcessId);
+        Assert.Equal(correction.AuditEvent.Id, correctedProcess.SupersessionAuditEventId);
         Assert.Contains(workplace.WorkplaceProcesses, process => process.EventIds.Contains(originalEvent.Id));
         Assert.Contains(workplace.WorkplaceProcesses, process => process.EventIds.Contains(correction.CorrectedEvent.Id));
         Assert.Single(evidence.AuditEvents);
         Assert.Equal(AuditEventKind.EventCorrected, correction.AuditEvent.Kind);
+    }
+
+    [Fact]
+    public void WorkplaceProcessSupersession_RequiresMatchingGenericAudit()
+    {
+        var evidence = SyntheticWorkplaceMatterFixture.CreateGraph();
+        var workplace = new WorkplaceMatter(evidence);
+        var sourceAssertion = AddDocumentaryAssertion(evidence, 2040, "Synthetic process letter.");
+        var processEvent = evidence.AddEvent(
+            Id(2050), "grievance-meeting", "Synthetic grievance meeting",
+            EventStatus.Candidate, VerificationState.NotReviewed, SyntheticWorkplaceMatterFixture.RecordedAt);
+        var originalProcess = workplace.AddWorkplaceProcess(
+            Id(2060), WorkplaceProcessKind.Grievance, "Meeting arranged",
+            WorkplaceProcessStatus.Open, [sourceAssertion.Id], [processEvent.Id]);
+
+        Assert.Throws<InvalidOperationException>(() => workplace.AddWorkplaceProcess(
+            Id(2061), WorkplaceProcessKind.Grievance, "Meeting corrected",
+            WorkplaceProcessStatus.Open, [sourceAssertion.Id], [processEvent.Id], originalProcess.Id));
+        Assert.Single(workplace.WorkplaceProcesses);
+    }
+
+    [Fact]
+    public void NewWorkplaceRecord_CannotReferenceSupersededOrRejectedEvent()
+    {
+        var evidence = SyntheticWorkplaceMatterFixture.CreateGraph();
+        var workplace = new WorkplaceMatter(evidence);
+        var superseded = evidence.AddEvent(
+            Id(2070), "grievance-meeting", "Synthetic superseded event",
+            EventStatus.Superseded, VerificationState.NotReviewed);
+        var rejected = evidence.AddEvent(
+            Id(2071), "grievance-meeting", "Synthetic rejected event",
+            EventStatus.Rejected, VerificationState.Rejected);
+
+        Assert.Throws<InvalidOperationException>(() => workplace.AddHealthAbsenceRecord(
+            Id(2072), HealthAbsenceKind.ReportedSicknessAbsence, "Superseded event", eventIds: [superseded.Id]));
+        Assert.Throws<InvalidOperationException>(() => workplace.AddAcasProcessState(
+            Id(2073), AcasStage.EarlyConciliationContacted, eventIds: [rejected.Id]));
+        Assert.Throws<InvalidOperationException>(() => workplace.AddWorkplaceProcess(
+            Id(2074), WorkplaceProcessKind.Grievance, "Superseded event", WorkplaceProcessStatus.Open,
+            eventIds: [superseded.Id]));
+        Assert.Empty(workplace.HealthAbsenceRecords);
+        Assert.Empty(workplace.AcasProcessStates);
+        Assert.Empty(workplace.WorkplaceProcesses);
+    }
+
+    [Fact]
+    public void WorkplaceRegistration_RejectsUndefinedEnumValues()
+    {
+        var evidence = SyntheticWorkplaceMatterFixture.CreateGraph();
+        var workplace = new WorkplaceMatter(evidence);
+        var assertion = AddDocumentaryAssertion(evidence, 2080, "Synthetic enum guard evidence.");
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => workplace.AddEmploymentProfile(
+            Id(2090), "example-employer", "Example role", evidenceReviewState: (VerificationState)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() => workplace.AddEmploymentTerm(
+            Id(2091), (EmploymentTermKind)999, "Example value", [assertion.Id]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => workplace.AddHealthAbsenceRecord(
+            Id(2092), (HealthAbsenceKind)999, "Example absence", [assertion.Id]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => workplace.AddHealthAbsenceRecord(
+            Id(2093), HealthAbsenceKind.AttendanceRecord, "Example absence", [assertion.Id],
+            evidenceReviewState: (VerificationState)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() => workplace.AddAdjustmentRequest(
+            Id(2094), "Example request", [assertion.Id], (AdjustmentResponseStatus)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() => workplace.AddWorkplaceProcess(
+            Id(2095), (WorkplaceProcessKind)999, "Example stage", WorkplaceProcessStatus.Open,
+            assertionIds: [assertion.Id]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => workplace.AddWorkplaceProcess(
+            Id(2096), WorkplaceProcessKind.Grievance, "Example stage", (WorkplaceProcessStatus)999,
+            assertionIds: [assertion.Id]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => workplace.AddAcasProcessState(
+            Id(2097), (AcasStage)999, [assertion.Id]));
+        Assert.Empty(workplace.EmploymentProfiles);
+        Assert.Empty(workplace.EmploymentTerms);
+        Assert.Empty(workplace.HealthAbsenceRecords);
+        Assert.Empty(workplace.AdjustmentRequests);
+        Assert.Empty(workplace.WorkplaceProcesses);
+        Assert.Empty(workplace.AcasProcessStates);
     }
 
     [Fact]
@@ -293,13 +398,15 @@ public sealed class WorkplaceMatterTests
     public void WorkplaceDomain_ContainsNoOutcomeOrScoringConcepts()
     {
         var forbiddenTerms = new[] { "Compensation", "Liability", "Outcome", "TruthScore", "WinProbability", "Deadline" };
-        var publicNames = new[]
-            {
-                typeof(EmploymentProfile), typeof(EmploymentTerm), typeof(HealthAbsenceRecord),
-                typeof(AdjustmentRequest), typeof(WorkplaceProcess), typeof(AcasProcessState),
-                typeof(WorkplaceMatter)
-            }
-            .SelectMany(type => type.GetProperties().Select(property => property.Name)
+        var workplaceTypes = typeof(WorkplaceMatter).Assembly.GetTypes()
+            .Where(type => type.IsPublic && type.Namespace == typeof(WorkplaceMatter).Namespace)
+            .ToArray();
+        var publicNames = workplaceTypes
+            .SelectMany(type => type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static)
+                .Select(property => property.Name)
+                .Concat(type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+                    .Select(method => method.Name))
+                .Concat(type.IsEnum ? Enum.GetNames(type) : [])
                 .Append(type.Name))
             .ToArray();
 
