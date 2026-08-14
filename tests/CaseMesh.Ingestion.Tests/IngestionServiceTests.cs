@@ -37,6 +37,20 @@ public sealed class IngestionServiceTests
         { "pdf", SyntheticPdf(), EvidenceMediaType.Pdf, "Synthetic page one" }
     };
 
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public async Task Email_detection_is_independent_of_platform_line_endings(string newline)
+    {
+        var scope = TestScope.Create(SyntheticEml(newline));
+
+        var result = await CreateService(scope, new FakeRepository()).IngestAsync(scope.Document);
+
+        Assert.Equal(EvidenceMediaType.Eml, result.MediaType);
+        Assert.Contains(result.Regions, item => item.LocatorKind == SourceLocatorKind.EmailHeader);
+        Assert.Contains(result.Regions, item => item.LocatorKind == SourceLocatorKind.EmailBody);
+    }
+
     [Fact]
     public async Task Ocr_image_produces_derived_text_with_real_address_shape_and_confidence()
     {
@@ -343,16 +357,15 @@ public sealed class IngestionServiceTests
     private static byte[] SyntheticPng() =>
         Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
 
-    private static byte[] SyntheticEml() => Encoding.UTF8.GetBytes("""
-        From: employee@example.test
-        To: manager@example.test
-        Date: Fri, 14 Aug 2026 12:00:00 +0000
-        Subject: Synthetic subject
-        Message-Id: <synthetic@example.test>
-        Content-Type: text/plain; charset=utf-8
-
-        Synthetic email body.
-        """.Replace("\n", "\r\n", StringComparison.Ordinal));
+    private static byte[] SyntheticEml(string newline = "\r\n") => Encoding.UTF8.GetBytes(string.Join(newline,
+        "From: employee@example.test",
+        "To: manager@example.test",
+        "Date: Fri, 14 Aug 2026 12:00:00 +0000",
+        "Subject: Synthetic subject",
+        "Message-Id: <synthetic@example.test>",
+        "Content-Type: text/plain; charset=utf-8",
+        string.Empty,
+        "Synthetic email body."));
 
     private static byte[] SyntheticDocx()
     {

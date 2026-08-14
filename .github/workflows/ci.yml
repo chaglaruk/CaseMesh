@@ -155,7 +155,7 @@ jobs:
       - name: Install real malware, OCR, and PDF rasterization tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends clamav tesseract-ocr poppler-utils imagemagick
+          sudo apt-get install --yes --no-install-recommends clamav tesseract-ocr poppler-utils imagemagick fonts-dejavu-core
           clamscan --version
           tesseract --version
           pdftoppm -v
@@ -164,7 +164,7 @@ jobs:
           install -d -m 700 "$RUNNER_TEMP/casemesh-clamdb"
           eicar_hex="$(printf '%s%s%s' 'X5O!P%@AP[4\PZX54(P^)7CC)' '7}$EICAR-STANDARD-' 'ANTIVIRUS-TEST-FILE!$H+H*' | od -An -tx1 | tr -d ' \n')"
           printf 'CaseMesh-Eicar:0:*:%s\n' "$eicar_hex" > "$RUNNER_TEMP/casemesh-clamdb/casemesh.ndb"
-          convert -size 800x240 xc:white -fill black -pointsize 96 -gravity center \
+          convert -size 800x240 xc:white -font DejaVu-Sans -fill black -pointsize 96 -gravity center \
             -annotate 0 'CASE MESH' "$RUNNER_TEMP/casemesh-ocr.png"
           echo "CASEMESH_CLAMAV_DATABASE=$RUNNER_TEMP/casemesh-clamdb" >> "$GITHUB_ENV"
           echo "CASEMESH_INGESTION_OCR_IMAGE=$RUNNER_TEMP/casemesh-ocr.png" >> "$GITHUB_ENV"
