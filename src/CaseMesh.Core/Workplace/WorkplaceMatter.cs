@@ -4,7 +4,7 @@ using CaseMesh.Core.Services;
 
 namespace CaseMesh.Core.Workplace;
 
-public sealed class WorkplaceMatter
+public sealed partial class WorkplaceMatter
 {
     private readonly MatterEvidenceGraph _evidence;
     private readonly Dictionary<Guid, EmploymentProfile> _employmentProfiles = [];

@@ -4,6 +4,7 @@ public sealed record Matter
 {
     public Matter(
         Guid id,
+        TenantId tenantId,
         string matterType,
         string title,
         string status,
@@ -12,12 +13,14 @@ public sealed record Matter
         string? jurisdiction = null)
     {
         if (id == Guid.Empty) throw new ArgumentException("Matter id is required.", nameof(id));
+        if (tenantId.Value == Guid.Empty) throw new ArgumentException("Tenant id is required.", nameof(tenantId));
         ArgumentException.ThrowIfNullOrWhiteSpace(matterType);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentException.ThrowIfNullOrWhiteSpace(status);
         if (updatedAt < createdAt) throw new ArgumentOutOfRangeException(nameof(updatedAt), "Updated time cannot precede creation time.");
 
         Id = id;
+        TenantId = tenantId;
         MatterType = matterType;
         Title = title;
         Status = status;
@@ -27,6 +30,7 @@ public sealed record Matter
     }
 
     public Guid Id { get; }
+    public TenantId TenantId { get; }
     public string MatterType { get; }
     public string Title { get; }
     public string Status { get; }
