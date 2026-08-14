@@ -144,7 +144,11 @@ public sealed class PostgresMatterStore : IAsyncDisposable
         }
         catch
         {
-            await transaction.RollbackAsync(CancellationToken.None);
+            if (transaction.Connection is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
             throw;
         }
     }

@@ -345,7 +345,17 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             command.Parameters.AddWithValue(value);
         }
 
-        var exception = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
+        PostgresException exception;
+        try
+        {
+            await command.ExecuteNonQueryAsync();
+            exception = await Assert.ThrowsAsync<PostgresException>(() => transaction.CommitAsync());
+        }
+        catch (PostgresException executeException)
+        {
+            exception = executeException;
+        }
+
         Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
     }
 
