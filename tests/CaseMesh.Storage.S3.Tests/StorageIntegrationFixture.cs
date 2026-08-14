@@ -106,28 +106,44 @@ public sealed class StorageIntegrationFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        if (_s3 is not null)
+        try
         {
-            string? token = null;
-            do
+            if (_s3 is not null)
             {
-                var listed = await _s3.ListObjectsV2Async(new ListObjectsV2Request
+                try
                 {
-                    BucketName = BucketName,
-                    ContinuationToken = token
-                });
-                foreach (var item in listed.S3Objects ?? [])
-                {
-                    await _s3.DeleteObjectAsync(BucketName, item.Key);
+                    string? token = null;
+                    do
+                    {
+                        var listed = await _s3.ListObjectsV2Async(new ListObjectsV2Request
+                        {
+                            BucketName = BucketName,
+                            ContinuationToken = token
+                        });
+                        foreach (var item in listed.S3Objects ?? [])
+                        {
+                            await _s3.DeleteObjectAsync(BucketName, item.Key);
+                        }
+
+                        token = listed.IsTruncated == true ? listed.NextContinuationToken : null;
+                    } while (token is not null);
+
+                    await _s3.DeleteBucketAsync(BucketName);
                 }
-
-                token = listed.IsTruncated == true ? listed.NextContinuationToken : null;
-            } while (token is not null);
-
-            await _s3.DeleteBucketAsync(BucketName);
-            _s3.Dispose();
+                finally
+                {
+                    _s3.Dispose();
+                }
+            }
         }
+        finally
+        {
+            await DropPostgresAsync();
+        }
+    }
 
+    private async Task DropPostgresAsync()
+    {
         if (string.IsNullOrWhiteSpace(_adminRootConnectionString) || _databaseName is null || _roleName is null)
         {
             return;

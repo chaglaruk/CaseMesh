@@ -9,6 +9,11 @@ public sealed class S3ObjectStorageOptions
     public required string SecretKey { get; init; }
     public bool AllowInsecureLocalEndpoint { get; init; }
 
+    public override string ToString() =>
+        $"{nameof(S3ObjectStorageOptions)} {{ Endpoint = [configured], Region = {Region}, " +
+        "BucketName = [redacted], AccessKey = [redacted], SecretKey = [redacted], " +
+        $"AllowInsecureLocalEndpoint = {AllowInsecureLocalEndpoint} }}";
+
     internal void Validate()
     {
         ArgumentNullException.ThrowIfNull(Endpoint);

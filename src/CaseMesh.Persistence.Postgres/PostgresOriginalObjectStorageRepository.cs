@@ -13,6 +13,13 @@ public sealed class PostgresOriginalObjectStorageRepository : IOriginalObjectSto
         _matterStore = matterStore ?? throw new ArgumentNullException(nameof(matterStore));
     }
 
+    Task<IAsyncDisposable> IOriginalObjectStorageMetadataRepository.AcquireStoreLeaseAsync(
+        OriginalObjectIdentity identity,
+        CancellationToken cancellationToken) =>
+        _matterStore.AcquireSessionAdvisoryLockAsync(
+            $"casemesh:original-store:{identity.TenantId.Value:D}:{identity.MatterId:D}:{identity.OriginalObjectId:D}",
+            cancellationToken);
+
     Task<OriginalObjectState?> IOriginalObjectStorageMetadataRepository.ResolveAsync(
         OriginalObjectIdentity identity,
         CancellationToken cancellationToken) =>
@@ -60,6 +67,24 @@ public sealed class PostgresOriginalObjectStorageRepository : IOriginalObjectSto
         CancellationToken cancellationToken) =>
         _matterStore.InTenantTransactionAsync(metadata.Identity.TenantId, async (connection, transaction) =>
         {
+            await using (var lockMatter = new NpgsqlCommand("""
+                SELECT matter_id
+                FROM casemesh.matters
+                WHERE tenant_id = $1 AND matter_id = $2
+                FOR KEY SHARE;
+                """, connection, transaction))
+            {
+                PostgresMatterStore.AddParameters(
+                    lockMatter,
+                    metadata.Identity.TenantId.Value,
+                    metadata.Identity.MatterId);
+                if (await lockMatter.ExecuteScalarAsync(cancellationToken) is not Guid)
+                {
+                    throw new OriginalEvidenceNotFoundException(
+                        "The tenant-scoped Matter no longer exists for this storage write.");
+                }
+            }
+
             await using var command = new NpgsqlCommand("""
                 INSERT INTO casemesh.original_object_storage (
                     tenant_id, matter_id, original_object_id, backend_kind,
@@ -160,18 +185,14 @@ public sealed class PostgresOriginalObjectStorageRepository : IOriginalObjectSto
         _matterStore.InTenantTransactionAsync(tenantId, async (connection, transaction) =>
         {
             await LockMatterAsync(connection, transaction, tenantId, matterId, cancellationToken);
-            var current = await ReadStorageAsync(
+            var removed = await DeleteStorageReturningAsync(
                 connection,
                 transaction,
                 "WHERE tenant_id = $1 AND matter_id = $2",
                 cancellationToken,
                 tenantId.Value,
                 matterId);
-            RequireSameDeletionSet(current, deletedObjects);
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
-                DELETE FROM casemesh.original_object_storage
-                WHERE tenant_id = $1 AND matter_id = $2;
-                """, cancellationToken, tenantId.Value, matterId);
+            RequireSameDeletionSet(removed, deletedObjects);
             var count = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 DELETE FROM casemesh.matters
                 WHERE tenant_id = $1 AND matter_id = $2;
@@ -209,16 +230,13 @@ public sealed class PostgresOriginalObjectStorageRepository : IOriginalObjectSto
                 {
                 }
             }
-            var current = await ReadStorageAsync(
+            var removed = await DeleteStorageReturningAsync(
                 connection,
                 transaction,
                 "WHERE tenant_id = $1",
                 cancellationToken,
                 tenantId.Value);
-            RequireSameDeletionSet(current, deletedObjects);
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
-                DELETE FROM casemesh.original_object_storage WHERE tenant_id = $1;
-                """, cancellationToken, tenantId.Value);
+            RequireSameDeletionSet(removed, deletedObjects);
             var count = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 DELETE FROM casemesh.tenants WHERE tenant_id = $1;
                 """, cancellationToken, tenantId.Value);
@@ -273,6 +291,39 @@ public sealed class PostgresOriginalObjectStorageRepository : IOriginalObjectSto
         return result;
     }
 
+    private static async Task<IReadOnlyList<OriginalObjectStorageMetadata>> DeleteStorageReturningAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string predicate,
+        CancellationToken cancellationToken,
+        params object[] values)
+    {
+        await using var command = new NpgsqlCommand($"""
+            DELETE FROM casemesh.original_object_storage
+            {predicate}
+            RETURNING tenant_id, matter_id, original_object_id, backend_kind,
+                      bucket_name, object_key, content_sha256, byte_length, stored_at;
+            """, connection, transaction);
+        PostgresMatterStore.AddParameters(command, values);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var result = new List<OriginalObjectStorageMetadata>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var identity = new OriginalObjectIdentity(
+                new TenantId(reader.GetGuid(0)),
+                reader.GetGuid(1),
+                reader.GetGuid(2));
+            result.Add(new OriginalObjectStorageMetadata(
+                identity,
+                new StorageAddress(reader.GetString(3), reader.GetString(4), reader.GetString(5)),
+                reader.GetString(6),
+                reader.GetInt64(7),
+                reader.GetFieldValue<DateTimeOffset>(8)));
+        }
+
+        return result;
+    }
+
     private static async Task LockMatterAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -293,7 +344,12 @@ public sealed class PostgresOriginalObjectStorageRepository : IOriginalObjectSto
         IReadOnlyList<OriginalObjectStorageMetadata> current,
         IReadOnlyList<OriginalObjectStorageMetadata> deleted)
     {
-        if (current.Count != deleted.Count || !current.SequenceEqual(deleted))
+        static IEnumerable<OriginalObjectStorageMetadata> Ordered(
+            IEnumerable<OriginalObjectStorageMetadata> values) =>
+            values.OrderBy(value => value.Identity.MatterId)
+                .ThenBy(value => value.Identity.OriginalObjectId);
+
+        if (current.Count != deleted.Count || !Ordered(current).SequenceEqual(Ordered(deleted)))
         {
             throw new OriginalEvidenceConflictException(
                 "Stored evidence changed during deletion; retry the storage-aware deletion workflow.");

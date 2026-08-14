@@ -14,8 +14,8 @@ public sealed class S3OriginalEvidenceStore : IOriginalEvidenceStore
         S3ObjectStorageOptions options,
         TimeProvider? timeProvider = null)
     {
-        _matterStore = new PostgresMatterStore(postgresConnectionString);
         _backend = new S3ImmutableObjectBackend(options);
+        _matterStore = new PostgresMatterStore(postgresConnectionString);
         var metadata = new PostgresOriginalObjectStorageRepository(_matterStore);
         _service = new OriginalEvidenceStorageService(_backend, metadata, timeProvider);
     }

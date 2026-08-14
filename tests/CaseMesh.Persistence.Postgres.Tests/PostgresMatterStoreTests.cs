@@ -54,6 +54,73 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
     }
 
     [PostgresFact]
+    public async Task Migration_0002_preserves_existing_restricted_runtime_role_privileges()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var databaseName = $"casemesh_upgrade_{suffix}";
+        var roleName = $"casemesh_upgrade_app_{suffix}";
+        var password = $"synthetic-{Guid.NewGuid():N}";
+        var rootBuilder = new NpgsqlConnectionStringBuilder(database.AdminRootConnectionString);
+        await using (var root = new NpgsqlConnection(rootBuilder.ConnectionString))
+        {
+            await root.OpenAsync();
+            await new NpgsqlCommand($"CREATE DATABASE \"{databaseName}\";", root).ExecuteNonQueryAsync();
+            await new NpgsqlCommand($"""
+                CREATE ROLE "{roleName}" LOGIN PASSWORD '{password}'
+                    NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+                GRANT CONNECT ON DATABASE "{databaseName}" TO "{roleName}";
+                """, root).ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            var adminBuilder = new NpgsqlConnectionStringBuilder(rootBuilder.ConnectionString) { Database = databaseName };
+            var migrator = new PostgresMigrator();
+            await migrator.MigrateThroughAsync(adminBuilder.ConnectionString, "0001");
+            await using (var admin = new NpgsqlConnection(adminBuilder.ConnectionString))
+            {
+                await admin.OpenAsync();
+                await new NpgsqlCommand($"""
+                    GRANT USAGE ON SCHEMA casemesh TO "{roleName}";
+                    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA casemesh TO "{roleName}";
+                    """, admin).ExecuteNonQueryAsync();
+            }
+
+            await migrator.MigrateAsync(adminBuilder.ConnectionString);
+
+            var appConnectionString = new NpgsqlConnectionStringBuilder(adminBuilder.ConnectionString)
+            {
+                Username = roleName,
+                Password = password,
+                Pooling = false
+            }.ConnectionString;
+            await using var app = new NpgsqlConnection(appConnectionString);
+            await app.OpenAsync();
+            await using var privileges = new NpgsqlCommand("""
+                SELECT has_table_privilege(current_user, 'casemesh.original_object_storage', 'SELECT'),
+                       has_table_privilege(current_user, 'casemesh.original_object_storage', 'INSERT'),
+                       has_table_privilege(current_user, 'casemesh.original_object_storage', 'DELETE'),
+                       has_table_privilege(current_user, 'casemesh.original_object_storage', 'UPDATE');
+                """, app);
+            await using var reader = await privileges.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.True(reader.GetBoolean(0));
+            Assert.True(reader.GetBoolean(1));
+            Assert.True(reader.GetBoolean(2));
+            Assert.False(reader.GetBoolean(3));
+        }
+        finally
+        {
+            NpgsqlConnection.ClearAllPools();
+            await using var root = new NpgsqlConnection(rootBuilder.ConnectionString);
+            await root.OpenAsync();
+            await new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{databaseName}\" WITH (FORCE);", root)
+                .ExecuteNonQueryAsync();
+            await new NpgsqlCommand($"DROP ROLE IF EXISTS \"{roleName}\";", root).ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresFact]
     public async Task Runtime_store_rejects_superuser_or_bypassrls_connection()
     {
         await using var unsafeStore = new PostgresMatterStore(database.AdminConnectionString);

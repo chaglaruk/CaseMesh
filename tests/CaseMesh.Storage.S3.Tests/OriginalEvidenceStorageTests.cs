@@ -1,4 +1,5 @@
 using System.Net;
+using Amazon.S3;
 using Amazon.S3.Model;
 using CaseMesh.Core.Models;
 using CaseMesh.Persistence.Postgres;
@@ -23,8 +24,27 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
 
         var diagnostic = options.ToString();
 
+        Assert.Contains("AccessKey = [redacted]", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("SecretKey = [redacted]", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain(options.BucketName, diagnostic, StringComparison.Ordinal);
         Assert.DoesNotContain(options.AccessKey, diagnostic, StringComparison.Ordinal);
         Assert.DoesNotContain(options.SecretKey, diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Versioned_or_suspended_bucket_is_rejected_for_privacy_safe_deletion()
+    {
+        Assert.Throws<OriginalEvidenceConflictException>(() =>
+            S3ImmutableObjectBackend.RejectVersionedBucket(new S3BucketVersioningConfig
+            {
+                Status = VersionStatus.Enabled
+            }));
+        Assert.Throws<OriginalEvidenceConflictException>(() =>
+            S3ImmutableObjectBackend.RejectVersionedBucket(new S3BucketVersioningConfig
+            {
+                Status = VersionStatus.Suspended
+            }));
+        S3ImmutableObjectBackend.RejectVersionedBucket(new S3BucketVersioningConfig());
     }
 
     [Fact]
@@ -267,6 +287,30 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
     }
 
     [StorageFact]
+    public async Task Existing_physical_object_without_metadata_is_never_overwritten()
+    {
+        var scope = await fixture.CreateScopeAsync(Bytes("synthetic-registered-original"));
+        var preexisting = Bytes("synthetic-preexisting-divergent-object");
+        await fixture.S3.PutObjectAsync(new PutObjectRequest
+        {
+            BucketName = fixture.BucketName,
+            Key = fixture.KeyFor(scope),
+            InputStream = Stream(preexisting),
+            UseChunkEncoding = false
+        });
+        await using var store = fixture.CreateStore();
+
+        await Assert.ThrowsAsync<OriginalEvidenceIntegrityException>(() =>
+            store.StoreAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId, Stream(scope.Bytes)));
+
+        Assert.Null(await store.GetMetadataAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId));
+        using var response = await fixture.S3.GetObjectAsync(fixture.BucketName, fixture.KeyFor(scope));
+        await using var actual = new MemoryStream();
+        await response.ResponseStream.CopyToAsync(actual);
+        Assert.Equal(preexisting, actual.ToArray());
+    }
+
+    [StorageFact]
     public async Task Metadata_failure_executes_new_object_compensation()
     {
         var scope = await fixture.CreateScopeAsync(Bytes("synthetic-compensation"));
@@ -283,6 +327,41 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
         Assert.True(failing.SaveAttempted);
         Assert.False(await fixture.PhysicalExistsAsync(scope));
         Assert.Null(await service.GetMetadataAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId));
+    }
+
+    [StorageFact]
+    public async Task Concurrent_same_identity_store_cannot_commit_during_failed_creator_compensation()
+    {
+        var scope = await fixture.CreateScopeAsync(Bytes("synthetic-concurrent-compensation"));
+        await using var failingMatterStore = new PostgresMatterStore(fixture.AppConnectionString);
+        IOriginalObjectStorageMetadataRepository inner =
+            new PostgresOriginalObjectStorageRepository(failingMatterStore);
+        var gatedFailure = new GateFailingSaveRepository(inner);
+        await using var failingBackend = new S3ImmutableObjectBackend(fixture.Options);
+        var failingService = new OriginalEvidenceStorageService(failingBackend, gatedFailure);
+        await using var successfulStore = fixture.CreateStore();
+
+        var failingTask = failingService.StoreAsync(
+            scope.TenantId,
+            scope.MatterId,
+            scope.OriginalObjectId,
+            Stream(scope.Bytes));
+        await gatedFailure.SaveReached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        var successfulTask = successfulStore.StoreAsync(
+            scope.TenantId,
+            scope.MatterId,
+            scope.OriginalObjectId,
+            Stream(scope.Bytes));
+        Assert.NotSame(successfulTask, await Task.WhenAny(successfulTask, Task.Delay(TimeSpan.FromMilliseconds(200))));
+
+        gatedFailure.ContinueSave.SetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => failingTask);
+        var stored = await successfulTask;
+
+        Assert.Equal(scope.ContentSha256, stored.ContentSha256);
+        Assert.True(await fixture.PhysicalExistsAsync(scope));
+        await successfulStore.VerifyIntegrityAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId);
     }
 
     [StorageFact]
@@ -313,6 +392,22 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
 
         await Assert.ThrowsAsync<OriginalEvidenceNotFoundException>(() =>
             store.VerifyIntegrityAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId));
+    }
+
+    [StorageFact]
+    public async Task Backend_read_failure_is_not_reported_as_missing_evidence()
+    {
+        var scope = await fixture.CreateScopeAsync(Bytes("synthetic-read-unavailable"));
+        await using var normal = fixture.CreateStore();
+        await normal.StoreAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId, Stream(scope.Bytes));
+        await using var matterStore = new PostgresMatterStore(fixture.AppConnectionString);
+        IOriginalObjectStorageMetadataRepository repository =
+            new PostgresOriginalObjectStorageRepository(matterStore);
+        await using var backend = new FailReadBackend(new S3ImmutableObjectBackend(fixture.Options));
+        var unavailable = new OriginalEvidenceStorageService(backend, repository);
+
+        await Assert.ThrowsAsync<OriginalEvidenceAvailabilityException>(() =>
+            unavailable.VerifyIntegrityAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId));
     }
 
     [StorageFact]
@@ -375,7 +470,7 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
         await using var backend = new S3ImmutableObjectBackend(fixture.Options);
         var deleting = new OriginalEvidenceStorageService(backend, gated);
         var deleteTask = deleting.DeleteMatterAsync(first.TenantId, first.MatterId);
-        await gated.DeleteReached.Task;
+        await gated.DeleteReached.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         await normal.StoreAsync(second.TenantId, second.MatterId, second.OriginalObjectId, Stream(second.Bytes));
         gated.ContinueDelete.SetResult();
@@ -448,6 +543,10 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
     {
         internal bool SaveAttempted { get; private set; }
 
+        public Task<IAsyncDisposable> AcquireStoreLeaseAsync(
+            OriginalObjectIdentity identity,
+            CancellationToken cancellationToken) => inner.AcquireStoreLeaseAsync(identity, cancellationToken);
+
         public Task<OriginalObjectState?> ResolveAsync(OriginalObjectIdentity identity, CancellationToken cancellationToken) =>
             inner.ResolveAsync(identity, cancellationToken);
 
@@ -483,6 +582,77 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
             TenantId tenantId,
             IReadOnlyList<OriginalObjectStorageMetadata> deletedObjects,
             CancellationToken cancellationToken) => inner.DeleteTenantAfterObjectsAsync(tenantId, deletedObjects, cancellationToken);
+    }
+
+    private sealed class GateFailingSaveRepository(IOriginalObjectStorageMetadataRepository inner)
+        : IOriginalObjectStorageMetadataRepository
+    {
+        internal TaskCompletionSource SaveReached { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ContinueSave { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<IAsyncDisposable> AcquireStoreLeaseAsync(
+            OriginalObjectIdentity identity,
+            CancellationToken cancellationToken) => inner.AcquireStoreLeaseAsync(identity, cancellationToken);
+
+        public Task<OriginalObjectState?> ResolveAsync(
+            OriginalObjectIdentity identity,
+            CancellationToken cancellationToken) => inner.ResolveAsync(identity, cancellationToken);
+
+        public async Task<OriginalObjectStorageMetadata> SaveAsync(
+            OriginalObjectStorageMetadata metadata,
+            CancellationToken cancellationToken)
+        {
+            SaveReached.SetResult();
+            await ContinueSave.Task.WaitAsync(cancellationToken);
+            throw new InvalidOperationException("Synthetic gated metadata failure.");
+        }
+
+        public Task<IReadOnlyList<OriginalObjectStorageMetadata>> ListMatterAsync(
+            TenantId tenantId,
+            Guid matterId,
+            CancellationToken cancellationToken) => inner.ListMatterAsync(tenantId, matterId, cancellationToken);
+
+        public Task<IReadOnlyList<OriginalObjectStorageMetadata>> ListTenantAsync(
+            TenantId tenantId,
+            CancellationToken cancellationToken) => inner.ListTenantAsync(tenantId, cancellationToken);
+
+        public Task<bool> DeleteOriginalMetadataAsync(
+            OriginalObjectIdentity identity,
+            CancellationToken cancellationToken) => inner.DeleteOriginalMetadataAsync(identity, cancellationToken);
+
+        public Task<bool> DeleteMatterAfterObjectsAsync(
+            TenantId tenantId,
+            Guid matterId,
+            IReadOnlyList<OriginalObjectStorageMetadata> deletedObjects,
+            CancellationToken cancellationToken) =>
+            inner.DeleteMatterAfterObjectsAsync(tenantId, matterId, deletedObjects, cancellationToken);
+
+        public Task<bool> DeleteTenantAfterObjectsAsync(
+            TenantId tenantId,
+            IReadOnlyList<OriginalObjectStorageMetadata> deletedObjects,
+            CancellationToken cancellationToken) =>
+            inner.DeleteTenantAfterObjectsAsync(tenantId, deletedObjects, cancellationToken);
+    }
+
+    private sealed class FailReadBackend(IImmutableObjectBackend inner) : IImmutableObjectBackend
+    {
+        public StorageAddress AddressFor(OriginalObjectIdentity identity) => inner.AddressFor(identity);
+
+        public Task<ObjectCreateResult> CreateIfAbsentAsync(
+            StorageAddress address,
+            Stream content,
+            long byteLength,
+            CancellationToken cancellationToken) => inner.CreateIfAbsentAsync(address, content, byteLength, cancellationToken);
+
+        public Task<Stream> OpenReadAsync(StorageAddress address, CancellationToken cancellationToken) =>
+            throw new IOException("Synthetic backend outage.");
+
+        public Task DeleteIfExistsAsync(StorageAddress address, CancellationToken cancellationToken) =>
+            inner.DeleteIfExistsAsync(address, cancellationToken);
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
     private sealed class FailFirstDeleteBackend(IImmutableObjectBackend inner) : IImmutableObjectBackend
@@ -521,6 +691,10 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ContinueDelete { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<IAsyncDisposable> AcquireStoreLeaseAsync(
+            OriginalObjectIdentity identity,
+            CancellationToken cancellationToken) => inner.AcquireStoreLeaseAsync(identity, cancellationToken);
 
         public Task<OriginalObjectState?> ResolveAsync(OriginalObjectIdentity identity, CancellationToken cancellationToken) =>
             inner.ResolveAsync(identity, cancellationToken);

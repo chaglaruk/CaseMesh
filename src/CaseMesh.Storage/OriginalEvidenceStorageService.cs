@@ -35,11 +35,12 @@ public sealed class OriginalEvidenceStorageService : IOriginalEvidenceStore
         }
 
         var identity = RequireIdentity(tenantId, matterId, originalObjectId);
+        await using var storeLease = await _metadata.AcquireStoreLeaseAsync(identity, cancellationToken);
         var state = await _metadata.ResolveAsync(identity, cancellationToken)
             ?? throw new OriginalEvidenceNotFoundException("The tenant-scoped original-object identity was not found.");
 
         await using var staged = await StagedContent.CreateAsync(content, cancellationToken);
-        if (!string.Equals(staged.ContentSha256, state.ExpectedSha256, StringComparison.Ordinal) )
+        if (!string.Equals(staged.ContentSha256, state.ExpectedSha256, StringComparison.Ordinal))
         {
             throw new OriginalEvidenceIntegrityException(
                 "The streamed evidence bytes do not match the registered original-object SHA-256 identity.");
@@ -149,8 +150,7 @@ public sealed class OriginalEvidenceStorageService : IOriginalEvidenceStore
         }
 
         await _backend.DeleteIfExistsAsync(state.Storage.Address, cancellationToken);
-        await _metadata.DeleteOriginalMetadataAsync(identity, cancellationToken);
-        return true;
+        return await _metadata.DeleteOriginalMetadataAsync(identity, cancellationToken);
     }
 
     public async Task<bool> DeleteMatterAsync(
@@ -220,7 +220,9 @@ public sealed class OriginalEvidenceStorageService : IOriginalEvidenceStore
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            throw new OriginalEvidenceNotFoundException("The physical evidence object could not be opened.", exception);
+            throw new OriginalEvidenceAvailabilityException(
+                "The physical evidence object could not be read because its backend is unavailable or rejected access.",
+                exception);
         }
 
         await using (source)

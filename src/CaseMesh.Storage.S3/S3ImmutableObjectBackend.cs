@@ -11,6 +11,8 @@ internal sealed class S3ImmutableObjectBackend : IImmutableObjectBackend
     internal const string BackendKind = "s3";
     private readonly S3ObjectStorageOptions _options;
     private readonly AmazonS3Client _client;
+    private readonly SemaphoreSlim _bucketValidationGate = new(1, 1);
+    private bool _bucketValidated;
 
     internal S3ImmutableObjectBackend(S3ObjectStorageOptions options)
     {
@@ -41,6 +43,7 @@ internal sealed class S3ImmutableObjectBackend : IImmutableObjectBackend
         CancellationToken cancellationToken)
     {
         RequireConfiguredAddress(address);
+        await EnsureBucketIsUnversionedAsync(cancellationToken);
         if (content.CanSeek)
         {
             content.Position = 0;
@@ -67,6 +70,12 @@ internal sealed class S3ImmutableObjectBackend : IImmutableObjectBackend
         {
             return new ObjectCreateResult(false);
         }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new OriginalEvidenceAvailabilityException(
+                "The private object backend rejected or could not complete the immutable create.",
+                exception);
+        }
     }
 
     public async Task<Stream> OpenReadAsync(
@@ -74,6 +83,7 @@ internal sealed class S3ImmutableObjectBackend : IImmutableObjectBackend
         CancellationToken cancellationToken)
     {
         RequireConfiguredAddress(address);
+        await EnsureBucketIsUnversionedAsync(cancellationToken);
         try
         {
             var response = await _client.GetObjectAsync(
@@ -85,6 +95,12 @@ internal sealed class S3ImmutableObjectBackend : IImmutableObjectBackend
         {
             throw new OriginalEvidenceNotFoundException("The physical evidence object does not exist.", exception);
         }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new OriginalEvidenceAvailabilityException(
+                "The private object backend rejected or could not complete the read.",
+                exception);
+        }
     }
 
     public async Task DeleteIfExistsAsync(
@@ -92,14 +108,25 @@ internal sealed class S3ImmutableObjectBackend : IImmutableObjectBackend
         CancellationToken cancellationToken)
     {
         RequireConfiguredAddress(address);
-        await _client.DeleteObjectAsync(
-            new DeleteObjectRequest { BucketName = address.BucketName, Key = address.ObjectKey },
-            cancellationToken);
+        await EnsureBucketIsUnversionedAsync(cancellationToken);
+        try
+        {
+            await _client.DeleteObjectAsync(
+                new DeleteObjectRequest { BucketName = address.BucketName, Key = address.ObjectKey },
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new OriginalEvidenceAvailabilityException(
+                "The private object backend rejected or could not complete the physical delete.",
+                exception);
+        }
     }
 
     public ValueTask DisposeAsync()
     {
         _client.Dispose();
+        _bucketValidationGate.Dispose();
         return ValueTask.CompletedTask;
     }
 
@@ -110,6 +137,61 @@ internal sealed class S3ImmutableObjectBackend : IImmutableObjectBackend
         {
             throw new OriginalEvidenceConflictException(
                 "Persisted storage metadata does not belong to the configured private S3 backend.");
+        }
+    }
+
+    private async Task EnsureBucketIsUnversionedAsync(CancellationToken cancellationToken)
+    {
+        if (Volatile.Read(ref _bucketValidated))
+        {
+            return;
+        }
+
+        await _bucketValidationGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_bucketValidated)
+            {
+                return;
+            }
+
+            await ValidateBucketVersioningAsync(cancellationToken);
+            Volatile.Write(ref _bucketValidated, true);
+        }
+        finally
+        {
+            _bucketValidationGate.Release();
+        }
+    }
+
+    private async Task ValidateBucketVersioningAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _client.GetBucketVersioningAsync(
+                new GetBucketVersioningRequest { BucketName = _options.BucketName },
+                cancellationToken);
+            RejectVersionedBucket(response.VersioningConfig);
+        }
+        catch (OriginalEvidenceStorageException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new OriginalEvidenceAvailabilityException(
+                "The private object backend bucket versioning state could not be verified fail-closed.",
+                exception);
+        }
+    }
+
+    internal static void RejectVersionedBucket(S3BucketVersioningConfig? versioning)
+    {
+        if (versioning?.Status == VersionStatus.Enabled ||
+            versioning?.Status == VersionStatus.Suspended)
+        {
+            throw new OriginalEvidenceConflictException(
+                "Versioned buckets are unsupported because privacy deletion must remove the physical evidence bytes.");
         }
     }
 

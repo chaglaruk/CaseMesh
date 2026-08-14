@@ -75,3 +75,31 @@ ALTER TABLE casemesh.original_object_storage FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON casemesh.original_object_storage
     USING (tenant_id = NULLIF(current_setting('casemesh.tenant_id', true), '')::uuid)
     WITH CHECK (tenant_id = NULLIF(current_setting('casemesh.tenant_id', true), '')::uuid);
+
+-- Preserve the privileges of restricted runtime roles that were provisioned against
+-- 0001 before this table existed. Read-only roles do not gain write privileges, and
+-- PUBLIC is deliberately excluded.
+DO $$
+DECLARE
+    runtime_role name;
+BEGIN
+    FOR runtime_role IN
+        SELECT pg_get_userbyid(grant_entry.grantee)
+        FROM pg_class relation
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        CROSS JOIN LATERAL aclexplode(
+            COALESCE(relation.relacl, acldefault('r', relation.relowner))) grant_entry
+        WHERE namespace.nspname = 'casemesh'
+          AND relation.relname = 'matters'
+          AND grant_entry.grantee <> 0
+        GROUP BY grant_entry.grantee
+        HAVING bool_or(grant_entry.privilege_type = 'SELECT')
+           AND bool_or(grant_entry.privilege_type = 'INSERT')
+           AND bool_or(grant_entry.privilege_type = 'DELETE')
+    LOOP
+        EXECUTE format(
+            'GRANT SELECT, INSERT, DELETE ON TABLE casemesh.original_object_storage TO %I',
+            runtime_role);
+    END LOOP;
+END;
+$$;

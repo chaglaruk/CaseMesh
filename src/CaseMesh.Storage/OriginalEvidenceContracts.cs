@@ -77,6 +77,11 @@ public sealed class OriginalEvidenceConflictException : OriginalEvidenceStorageE
     public OriginalEvidenceConflictException(string message, Exception innerException) : base(message, innerException) { }
 }
 
+public sealed class OriginalEvidenceAvailabilityException : OriginalEvidenceStorageException
+{
+    public OriginalEvidenceAvailabilityException(string message, Exception innerException) : base(message, innerException) { }
+}
+
 public sealed class OriginalEvidenceCompensationException : OriginalEvidenceStorageException
 {
     public OriginalEvidenceCompensationException(string message, Exception innerException) : base(message, innerException) { }
@@ -109,6 +114,10 @@ internal sealed record OriginalObjectState(
 
 internal interface IOriginalObjectStorageMetadataRepository
 {
+    Task<IAsyncDisposable> AcquireStoreLeaseAsync(
+        OriginalObjectIdentity identity,
+        CancellationToken cancellationToken);
+
     Task<OriginalObjectState?> ResolveAsync(
         OriginalObjectIdentity identity,
         CancellationToken cancellationToken);
