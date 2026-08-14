@@ -133,24 +133,12 @@ public sealed class PostgresMatterStore : IAsyncDisposable
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await RejectRlsBypassRoleAsync(connection, cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        try
-        {
-            await using var context = new NpgsqlCommand("SELECT set_config('casemesh.tenant_id', $1, true);", connection, transaction);
-            context.Parameters.AddWithValue(tenantId.Value.ToString());
-            await context.ExecuteNonQueryAsync(cancellationToken);
-            var result = await operation(connection, transaction);
-            await transaction.CommitAsync(cancellationToken);
-            return result;
-        }
-        catch
-        {
-            if (transaction.Connection is not null)
-            {
-                await transaction.RollbackAsync(CancellationToken.None);
-            }
-
-            throw;
-        }
+        await using var context = new NpgsqlCommand("SELECT set_config('casemesh.tenant_id', $1, true);", connection, transaction);
+        context.Parameters.AddWithValue(tenantId.Value.ToString());
+        await context.ExecuteNonQueryAsync(cancellationToken);
+        var result = await operation(connection, transaction);
+        await transaction.CommitAsync(cancellationToken);
+        return result;
     }
 
     private static async Task RejectRlsBypassRoleAsync(
