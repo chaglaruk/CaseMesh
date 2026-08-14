@@ -5,7 +5,7 @@ using CaseMesh.Core.Models;
 
 namespace CaseMesh.Core.Services;
 
-public sealed class MatterEvidenceGraph
+public sealed partial class MatterEvidenceGraph
 {
     private readonly Dictionary<Guid, DocumentVersionIdentity> _documentVersions = [];
     private readonly Dictionary<string, Guid> _originalObjectIdsByHash = new(StringComparer.Ordinal);
@@ -148,6 +148,11 @@ public sealed class MatterEvidenceGraph
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         ArgumentException.ThrowIfNullOrWhiteSpace(assertedBy);
         ValidateConfidence(extractionConfidence);
+        RequireDefinedEnum(originClass);
+        RequireDefinedEnum(assertionClass);
+        RequireDefinedEnum(disputeState);
+        RequireDefinedEnum(integrityState);
+        RequireDefinedEnum(verificationState);
         EnsureAvailable(_assertions, id, "assertion");
 
         SourceSpan? sourceSpan = null;
@@ -229,6 +234,8 @@ public sealed class MatterEvidenceGraph
         RequireId(id, nameof(id));
         ArgumentException.ThrowIfNullOrWhiteSpace(eventType);
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        RequireDefinedEnum(status);
+        RequireDefinedEnum(verificationState);
         if (endTime < startTime) throw new ArgumentOutOfRangeException(nameof(endTime), "Event end cannot precede its start.");
         EnsureAvailable(_events, id, "event");
 
@@ -254,6 +261,7 @@ public sealed class MatterEvidenceGraph
         AssertionEventRelation relation)
     {
         RequireId(id, nameof(id));
+        RequireDefinedEnum(relation);
         var assertion = RequireOwned(_assertions, assertionId, "assertion");
         var matterEvent = RequireOwned(_events, eventId, "event");
         if (assertion.MatterId != matterEvent.MatterId || assertion.MatterId != Matter.Id)
@@ -284,6 +292,7 @@ public sealed class MatterEvidenceGraph
         DateTimeOffset createdAt)
     {
         RequireId(id, nameof(id));
+        RequireDefinedEnum(type);
         if (assertionAId == assertionBId) throw new ArgumentException("A contradiction requires two distinct assertions.");
         var assertionA = RequireOwned(_assertions, assertionAId, "first assertion");
         var assertionB = RequireOwned(_assertions, assertionBId, "second assertion");
@@ -336,6 +345,7 @@ public sealed class MatterEvidenceGraph
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
         ArgumentException.ThrowIfNullOrWhiteSpace(promptVersion);
         ArgumentException.ThrowIfNullOrWhiteSpace(output);
+        RequireDefinedEnum(verificationState);
         EnsureAvailable(_analysisNodes, id, "analysis node");
 
         var sources = sourceSpanIds.Distinct().ToArray();
@@ -461,6 +471,15 @@ public sealed class MatterEvidenceGraph
         if (extractionConfidence is < 0 or > 1)
         {
             throw new ArgumentOutOfRangeException(nameof(extractionConfidence), "Extraction confidence must be between zero and one.");
+        }
+    }
+
+    private static void RequireDefinedEnum<TEnum>(TEnum value)
+        where TEnum : struct, Enum
+    {
+        if (!Enum.IsDefined(value))
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "A defined enum value is required.");
         }
     }
 

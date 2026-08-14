@@ -22,3 +22,33 @@ jobs:
         run: dotnet build .\CaseMesh.slnx -c Release --no-restore
       - name: Test
         run: dotnet test .\CaseMesh.slnx -c Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: casemesh_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d casemesh_admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CASEMESH_POSTGRES_ADMIN_CONNECTION: Host=localhost;Port=5432;Database=casemesh_admin;Username=postgres;Password=postgres;Pooling=false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore platform-neutral PostgreSQL tests
+        run: dotnet restore ./tests/CaseMesh.Persistence.Postgres.Tests/CaseMesh.Persistence.Postgres.Tests.csproj
+      - name: Build platform-neutral PostgreSQL tests
+        run: dotnet build ./tests/CaseMesh.Persistence.Postgres.Tests/CaseMesh.Persistence.Postgres.Tests.csproj -c Release --no-restore
+      - name: Run real PostgreSQL integration tests
+        run: dotnet test ./tests/CaseMesh.Persistence.Postgres.Tests/CaseMesh.Persistence.Postgres.Tests.csproj -c Release --no-build --logger "trx;LogFileName=postgres-test-results.trx"

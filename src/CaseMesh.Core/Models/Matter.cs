@@ -4,6 +4,7 @@ public sealed record Matter
 {
     public Matter(
         Guid id,
+        TenantId tenantId,
         string matterType,
         string title,
         string status,
@@ -18,6 +19,7 @@ public sealed record Matter
         if (updatedAt < createdAt) throw new ArgumentOutOfRangeException(nameof(updatedAt), "Updated time cannot precede creation time.");
 
         Id = id;
+        TenantId = tenantId;
         MatterType = matterType;
         Title = title;
         Status = status;
@@ -27,6 +29,7 @@ public sealed record Matter
     }
 
     public Guid Id { get; }
+    public TenantId TenantId { get; }
     public string MatterType { get; }
     public string Title { get; }
     public string Status { get; }

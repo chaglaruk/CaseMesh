@@ -11,6 +11,7 @@ internal static class SyntheticWorkplaceMatterFixture
     {
         var matter = new Matter(
             Id(seed),
+            new TenantId(Id(seed + 900000)),
             "workplace-dispute",
             $"Synthetic workplace matter {seed}",
             "open",

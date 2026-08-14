@@ -10,6 +10,7 @@ public sealed class MatterEvidenceGraphTests
     {
         var matter = new Matter(
             SyntheticWorkplaceMatterFixture.Id(1),
+            new TenantId(SyntheticWorkplaceMatterFixture.Id(900001)),
             "generic-dispute",
             "Synthetic matter",
             "open",
@@ -17,10 +18,39 @@ public sealed class MatterEvidenceGraphTests
             SyntheticWorkplaceMatterFixture.RecordedAt);
 
         Assert.Equal("generic-dispute", matter.MatterType);
+        Assert.Equal(SyntheticWorkplaceMatterFixture.Id(900001), matter.TenantId.Value);
         Assert.Null(matter.Jurisdiction);
         Assert.DoesNotContain(
             matter.GetType().GetProperties(),
             property => property.Name.Contains("Employment", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Rehydrate_RejectsInvalidPersistedEnumInsteadOfCreatingDomainObject()
+    {
+        var graph = SyntheticWorkplaceMatterFixture.CreateGraph(500);
+        var source = SyntheticWorkplaceMatterFixture.AddSource(
+            graph,
+            510,
+            "Synthetic employer statement.",
+            'F');
+        SyntheticWorkplaceMatterFixture.AddSicknessDayAssertion(
+            graph,
+            520,
+            source,
+            "12",
+            EvidenceOriginClass.EmployerAuthoredDocument,
+            AssertionClass.EmployerAssertion,
+            "Example Employer Ltd");
+        var snapshot = graph.CaptureSnapshot();
+        var assertion = Assert.Single(snapshot.Assertions);
+
+        var invalid = snapshot with
+        {
+            Assertions = [assertion with { VerificationState = (VerificationState)32767 }]
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => MatterEvidenceGraph.Rehydrate(invalid));
     }
 
     [Fact]
