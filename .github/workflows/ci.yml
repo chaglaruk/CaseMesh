@@ -70,31 +70,64 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-      object-storage:
-        image: localstack/localstack:2026.6.2
-        env:
-          SERVICES: s3
-        ports:
-          - 4566:4566
-        options: >-
-          --health-cmd "curl --fail http://localhost:4566/_localstack/health"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
       CASEMESH_POSTGRES_ADMIN_CONNECTION: Host=localhost;Port=5432;Database=casemesh_admin;Username=postgres;Password=postgres;Pooling=false
-      CASEMESH_OBJECT_STORAGE_ENDPOINT: http://localhost:4566
-      CASEMESH_OBJECT_STORAGE_ACCESS_KEY: test
-      CASEMESH_OBJECT_STORAGE_SECRET_KEY: test
+      CASEMESH_OBJECT_STORAGE_ENDPOINT: http://localhost:3900
+      CASEMESH_OBJECT_STORAGE_ACCESS_KEY: 'GK00000000000000000000000000000000'
+      CASEMESH_OBJECT_STORAGE_SECRET_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
       CASEMESH_OBJECT_STORAGE_REQUIRED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Start real S3-compatible Garage service
+        run: |
+          garage_dir="$RUNNER_TEMP/casemesh-garage"
+          install -d -m 700 "$garage_dir"
+          install -m 600 /dev/null "$garage_dir/garage.toml"
+          printf '%s\n' \
+            'metadata_dir = "/tmp/meta"' \
+            'data_dir = "/tmp/data"' \
+            'db_engine = "sqlite"' \
+            'replication_factor = 1' \
+            'rpc_bind_addr = "[::]:3901"' \
+            'rpc_public_addr = "127.0.0.1:3901"' \
+            'rpc_secret = "0000000000000000000000000000000000000000000000000000000000000000"' \
+            '[s3_api]' \
+            's3_region = "garage"' \
+            'api_bind_addr = "[::]:3900"' \
+            'root_domain = ".s3.garage.localhost"' \
+            '[admin]' \
+            'api_bind_addr = "[::]:3903"' \
+            'admin_token = "synthetic-ci-admin-token"' \
+            'metrics_token = "synthetic-ci-metrics-token"' \
+            > "$garage_dir/garage.toml"
+          docker run --detach --name casemesh-garage \
+            --publish 3900:3900 \
+            --volume "$garage_dir/garage.toml:/etc/garage.toml:ro" \
+            --env GARAGE_DEFAULT_ACCESS_KEY \
+            --env GARAGE_DEFAULT_SECRET_KEY \
+            --env GARAGE_DEFAULT_BUCKET=casemesh-bootstrap \
+            dxflrs/garage:v2.3.0 \
+            /garage server --single-node --default-bucket
+          for attempt in {1..30}; do
+            if docker exec casemesh-garage /garage status >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs casemesh-garage
+          exit 1
+        env:
+          GARAGE_DEFAULT_ACCESS_KEY: 'GK00000000000000000000000000000000'
+          GARAGE_DEFAULT_SECRET_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
       - name: Restore platform-neutral storage tests
         run: dotnet restore ./tests/CaseMesh.Storage.S3.Tests/CaseMesh.Storage.S3.Tests.csproj
       - name: Build platform-neutral storage tests
         run: dotnet build ./tests/CaseMesh.Storage.S3.Tests/CaseMesh.Storage.S3.Tests.csproj -c Release --no-restore
       - name: Run real PostgreSQL and S3-compatible storage integration tests
         run: dotnet test ./tests/CaseMesh.Storage.S3.Tests/CaseMesh.Storage.S3.Tests.csproj -c Release --no-build --logger "trx;LogFileName=object-storage-test-results.trx"
+      - name: Stop S3-compatible Garage service
+        if: always()
+        run: docker rm --force casemesh-garage || true

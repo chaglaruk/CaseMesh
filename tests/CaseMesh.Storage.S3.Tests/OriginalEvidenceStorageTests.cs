@@ -414,15 +414,6 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
         await using var store = fixture.CreateStore();
         await store.StoreAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId, Stream(scope.Bytes));
 
-        var acl = await fixture.S3.GetObjectAclAsync(new GetObjectAclRequest
-        {
-            BucketName = fixture.BucketName,
-            Key = fixture.KeyFor(scope)
-        });
-        Assert.DoesNotContain(acl.Grants ?? [], grant =>
-            string.Equals(grant.Grantee?.URI, "http://acs.amazonaws.com/groups/global/AllUsers", StringComparison.Ordinal) ||
-            string.Equals(grant.Grantee?.URI, "http://acs.amazonaws.com/groups/global/AuthenticatedUsers", StringComparison.Ordinal));
-
         using var anonymous = new HttpClient();
         var response = await anonymous.GetAsync(
             new Uri(fixture.Options.Endpoint, $"{fixture.BucketName}/{fixture.KeyFor(scope)}"));

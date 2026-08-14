@@ -31,7 +31,7 @@ Matter and tenant deletion are storage-aware and privacy-first. Physical objects
 
 Production endpoints require HTTPS. Plain HTTP is accepted only through an explicit loopback-only local-test override. Buckets are externally provisioned private; production provider-managed encryption at rest and access policy remain deployment responsibilities. This design does not claim end-to-end encryption. Credentials come from runtime configuration and are not stored in Core, PostgreSQL metadata or source control.
 
-Real integration CI uses PostgreSQL 17 and LocalStack `2026.6.2` as an actively maintained S3-compatible service. The test fixture creates a default-private ephemeral bucket and verifies object ACL/anonymous-read behavior. The runtime adapter itself never creates public policies or ACL grants.
+Real integration CI uses PostgreSQL 17 and Garage `v2.3.0` as an actively maintained, open-source S3-compatible service. Garage is initialized as an ephemeral single-node service with synthetic credentials and a private bucket authorization boundary. The test fixture creates an ephemeral bucket and verifies that an object written through the adapter is unavailable anonymously. The runtime adapter itself never creates public policies or ACL grants.
 
 ## Consequences
 
