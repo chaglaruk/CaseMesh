@@ -501,7 +501,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
 
         await using var admin = new NpgsqlConnection(database.AdminConnectionString);
         await admin.OpenAsync();
-        await using var truncate = new NpgsqlCommand("TRUNCATE casemesh.audit_events;", admin);
+        await using var truncate = new NpgsqlCommand("TRUNCATE casemesh.audit_events CASCADE;", admin);
         var truncateException = await Assert.ThrowsAsync<PostgresException>(() => truncate.ExecuteNonQueryAsync());
         Assert.Equal(PostgresErrorCodes.RaiseException, truncateException.SqlState);
     }
