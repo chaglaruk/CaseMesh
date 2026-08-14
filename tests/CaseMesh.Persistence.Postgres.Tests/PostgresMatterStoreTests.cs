@@ -178,6 +178,54 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
     }
 
     [PostgresFact]
+    public async Task Existing_snapshot_entity_ids_cannot_overwrite_immutable_records_or_relationships()
+    {
+        var tenant = NewTenant();
+        var matterId = Guid.NewGuid();
+        await using var store = await CreateStoreAsync(tenant);
+        var original = SyntheticPersistedMatterFactory.Create(tenant, matterId, 207);
+        await store.SaveAsync(original.Evidence, original.Workplace);
+        var evidenceSnapshot = original.Evidence.CaptureSnapshot();
+        var workplaceSnapshot = original.Workplace.CaptureSnapshot();
+
+        await AssertRejectedAsync(evidenceSnapshot with
+        {
+            AssertionEventLinks = evidenceSnapshot.AssertionEventLinks
+                .Select((link, index) => index == 0
+                    ? link with { Relation = AssertionEventRelation.Contextualizes }
+                    : link)
+                .ToArray()
+        }, workplaceSnapshot);
+        await AssertRejectedAsync(evidenceSnapshot with
+        {
+            AnalysisNodes = evidenceSnapshot.AnalysisNodes
+                .Select((node, index) => index == 0 ? node with { Output = "Conflicting synthetic output." } : node)
+                .ToArray()
+        }, workplaceSnapshot);
+        await AssertRejectedAsync(evidenceSnapshot, workplaceSnapshot with
+        {
+            EmploymentTerms = workplaceSnapshot.EmploymentTerms
+                .Select((term, index) => index == 0 ? term with { Value = "Conflicting synthetic term." } : term)
+                .ToArray()
+        });
+        await AssertRejectedAsync(evidenceSnapshot, workplaceSnapshot with
+        {
+            WorkplaceProcesses = workplaceSnapshot.WorkplaceProcesses
+                .Select((process, index) => index == 0
+                    ? process with { StageLabel = "Conflicting synthetic stage" }
+                    : process)
+                .ToArray()
+        });
+
+        async Task AssertRejectedAsync(MatterEvidenceSnapshot changedEvidence, WorkplaceSnapshot changedWorkplace)
+        {
+            var evidence = MatterEvidenceGraph.Rehydrate(changedEvidence);
+            var workplace = WorkplaceMatter.Rehydrate(evidence, changedWorkplace);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => store.SaveAsync(evidence, workplace));
+        }
+    }
+
+    [PostgresFact]
     public async Task Stale_snapshot_cannot_reverse_event_supersession()
     {
         const int seed = 203;
@@ -280,7 +328,12 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
         await store.SaveAsync(tenantBMatter.Evidence, tenantBMatter.Workplace);
 
         Assert.False(await store.UpdateMatterAsync(
-            tenantA, matterId, "Cross-tenant overwrite", "closed", SyntheticPersistedMatterFactory.RecordedAt.AddDays(1)));
+            tenantA,
+            matterId,
+            "Cross-tenant overwrite",
+            "closed",
+            SyntheticPersistedMatterFactory.RecordedAt,
+            SyntheticPersistedMatterFactory.RecordedAt.AddDays(1)));
         Assert.False(await store.DeleteMatterAsync(tenantA, matterId));
 
         var reloaded = Assert.IsType<PersistedMatter>(await store.LoadAsync(tenantB, matterId));
@@ -301,13 +354,22 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             matterId,
             "Stale synthetic title",
             "closed",
-            SyntheticPersistedMatterFactory.RecordedAt.AddMinutes(-1)));
+            SyntheticPersistedMatterFactory.RecordedAt.AddMinutes(-1),
+            SyntheticPersistedMatterFactory.RecordedAt.AddMinutes(1)));
         Assert.True(await store.UpdateMatterAsync(
             tenant,
             matterId,
             "Updated synthetic title",
             "closed",
+            SyntheticPersistedMatterFactory.RecordedAt,
             SyntheticPersistedMatterFactory.RecordedAt.AddMinutes(1)));
+        Assert.False(await store.UpdateMatterAsync(
+            tenant,
+            matterId,
+            "Lost synthetic update",
+            "open",
+            SyntheticPersistedMatterFactory.RecordedAt,
+            SyntheticPersistedMatterFactory.RecordedAt.AddMinutes(2)));
         var updated = Assert.IsType<PersistedMatter>(await store.LoadAsync(tenant, matterId));
         Assert.Equal("Updated synthetic title", updated.Evidence.Matter.Title);
         Assert.Equal("closed", updated.Evidence.Matter.Status);

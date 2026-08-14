@@ -184,6 +184,9 @@ public sealed partial class MatterEvidenceGraph
                 current.CreatedByModel,
                 assertion.SupersededByAssertionId);
         }
+        RequireAcyclicSupersession(
+            snapshot.Assertions.Select(item => (item.Id, item.SupersededByAssertionId)),
+            "assertion");
 
         RequireUniqueIds(snapshot.Events.Select(item => item.Id), "event");
         foreach (var matterEvent in snapshot.Events)
@@ -216,6 +219,9 @@ public sealed partial class MatterEvidenceGraph
                 matterEvent.SupersedesEventId,
                 matterEvent.SupersededByEventId);
         }
+        RequireAcyclicSupersession(
+            snapshot.Events.Select(item => (item.Id, item.SupersededByEventId)),
+            "event");
 
         RequireUniqueIds(snapshot.AssertionEventLinks.Select(item => item.Id), "assertion/event link");
         foreach (var link in snapshot.AssertionEventLinks)
@@ -310,6 +316,9 @@ public sealed partial class MatterEvidenceGraph
                 current.VerificationState,
                 node.SupersededByAnalysisNodeId);
         }
+        RequireAcyclicSupersession(
+            snapshot.AnalysisNodes.Select(item => (item.Id, item.SupersededByAnalysisNodeId)),
+            "analysis node");
 
         RequireUniqueIds(snapshot.AuditEvents.Select(item => item.Id), "audit event");
         foreach (var auditEvent in snapshot.AuditEvents.OrderBy(item => item.OccurredAt))
@@ -356,6 +365,27 @@ public sealed partial class MatterEvidenceGraph
             if (!seen.Add(id))
             {
                 throw new InvalidOperationException($"Persisted {label} ids must be unique.");
+            }
+        }
+    }
+
+    private static void RequireAcyclicSupersession(
+        IEnumerable<(Guid Id, Guid? NextId)> links,
+        string label)
+    {
+        var nextById = links.ToDictionary(item => item.Id, item => item.NextId);
+        foreach (var startId in nextById.Keys)
+        {
+            var visited = new HashSet<Guid>();
+            var currentId = startId;
+            while (nextById.TryGetValue(currentId, out var nextId) && nextId.HasValue)
+            {
+                if (!visited.Add(currentId))
+                {
+                    throw new InvalidOperationException($"Persisted {label} supersession contains a cycle.");
+                }
+
+                currentId = nextId.Value;
             }
         }
     }

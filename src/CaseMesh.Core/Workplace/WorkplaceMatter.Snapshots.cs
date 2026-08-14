@@ -114,6 +114,9 @@ public sealed partial class WorkplaceMatter
                 throw new InvalidOperationException("Persisted employment-term supersession is invalid.");
             }
         }
+        RequireAcyclicSupersession(
+            workplace._employmentTerms.Values.Select(item => (item.Id, item.SupersedesEmploymentTermId)),
+            "employment-term");
 
         RequireUniqueIds(snapshot.HealthAbsenceRecords.Select(item => item.Id), "health/absence record");
         foreach (var record in snapshot.HealthAbsenceRecords)
@@ -183,6 +186,9 @@ public sealed partial class WorkplaceMatter
                 process.SupersessionAuditEventId));
         }
 
+        RequireAcyclicSupersession(
+            workplace._workplaceProcesses.Values.Select(item => (item.Id, item.SupersedesWorkplaceProcessId)),
+            "workplace-process");
         foreach (var process in workplace._workplaceProcesses.Values)
         {
             if (process.SupersedesWorkplaceProcessId.HasValue)
@@ -277,6 +283,27 @@ public sealed partial class WorkplaceMatter
             if (!seen.Add(id))
             {
                 throw new InvalidOperationException($"Persisted {label} ids must be unique.");
+            }
+        }
+    }
+
+    private static void RequireAcyclicSupersession(
+        IEnumerable<(Guid Id, Guid? NextId)> links,
+        string label)
+    {
+        var nextById = links.ToDictionary(item => item.Id, item => item.NextId);
+        foreach (var startId in nextById.Keys)
+        {
+            var visited = new HashSet<Guid>();
+            var currentId = startId;
+            while (nextById.TryGetValue(currentId, out var nextId) && nextId.HasValue)
+            {
+                if (!visited.Add(currentId))
+                {
+                    throw new InvalidOperationException($"Persisted {label} supersession contains a cycle.");
+                }
+
+                currentId = nextId.Value;
             }
         }
     }

@@ -8,7 +8,7 @@ namespace CaseMesh.Core.Tests;
 public sealed class WorkplaceMatterTests
 {
     [Fact]
-    public void Rehydrate_rejects_self_referential_workplace_supersession()
+    public void Rehydrate_rejects_self_referential_and_indirect_workplace_supersession_cycles()
     {
         var evidence = SyntheticWorkplaceMatterFixture.CreateGraph(10);
         var workplace = new WorkplaceMatter(evidence);
@@ -21,8 +21,13 @@ public sealed class WorkplaceMatterTests
             VerificationState.NotReviewed);
         var term = workplace.AddEmploymentTerm(
             Id(31), EmploymentTermKind.WorkingHours, "37.5 hours", [assertion.Id]);
+        var secondTerm = workplace.AddEmploymentTerm(
+            Id(33), EmploymentTermKind.WorkingHours, "40 hours", [assertion.Id]);
         var process = workplace.AddWorkplaceProcess(
             Id(32), WorkplaceProcessKind.Grievance, "Initial", WorkplaceProcessStatus.Open,
+            [assertion.Id], [matterEvent.Id]);
+        var secondProcess = workplace.AddWorkplaceProcess(
+            Id(34), WorkplaceProcessKind.Grievance, "Second", WorkplaceProcessStatus.Open,
             [assertion.Id], [matterEvent.Id]);
         var snapshot = workplace.CaptureSnapshot();
 
@@ -31,6 +36,24 @@ public sealed class WorkplaceMatterTests
             EmploymentTerms = snapshot.EmploymentTerms.Select(item => item.Id == term.Id
                 ? item with { SupersedesEmploymentTermId = item.Id }
                 : item).ToArray()
+        }));
+        Assert.Throws<InvalidOperationException>(() => WorkplaceMatter.Rehydrate(evidence, snapshot with
+        {
+            EmploymentTerms = snapshot.EmploymentTerms.Select(item => item.Id switch
+            {
+                var id when id == term.Id => item with { SupersedesEmploymentTermId = secondTerm.Id },
+                var id when id == secondTerm.Id => item with { SupersedesEmploymentTermId = term.Id },
+                _ => item
+            }).ToArray()
+        }));
+        Assert.Throws<InvalidOperationException>(() => WorkplaceMatter.Rehydrate(evidence, snapshot with
+        {
+            WorkplaceProcesses = snapshot.WorkplaceProcesses.Select(item => item.Id switch
+            {
+                var id when id == process.Id => item with { SupersedesWorkplaceProcessId = secondProcess.Id },
+                var id when id == secondProcess.Id => item with { SupersedesWorkplaceProcessId = process.Id },
+                _ => item
+            }).ToArray()
         }));
         Assert.Throws<InvalidOperationException>(() => WorkplaceMatter.Rehydrate(evidence, snapshot with
         {

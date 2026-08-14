@@ -78,20 +78,29 @@ public sealed class PostgresMatterStore : IAsyncDisposable
         Guid matterId,
         string title,
         string status,
-        DateTimeOffset updatedAt,
+        DateTimeOffset expectedUpdatedAt,
+        DateTimeOffset newUpdatedAt,
         CancellationToken cancellationToken = default)
     {
         RequireId(matterId, nameof(matterId));
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentException.ThrowIfNullOrWhiteSpace(status);
+        if (newUpdatedAt <= expectedUpdatedAt)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(newUpdatedAt),
+                "A Matter update must advance its explicit timestamp.");
+        }
+
         return InTenantTransactionAsync(tenantId, async (connection, transaction) =>
         {
             var count = await ExecuteAsync(connection, transaction, """
                 UPDATE casemesh.matters
-                SET title = $3, status = $4, updated_at = $5
+                SET title = $3, status = $4, updated_at = $6
                 WHERE tenant_id = $1 AND matter_id = $2
-                  AND created_at <= $5 AND updated_at <= $5;
-                """, cancellationToken, tenantId.Value, matterId, title, status, updatedAt);
+                  AND updated_at = $5 AND created_at <= $6;
+                """, cancellationToken,
+                tenantId.Value, matterId, title, status, expectedUpdatedAt, newUpdatedAt);
             return count == 1;
         }, cancellationToken);
     }

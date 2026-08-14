@@ -63,11 +63,13 @@ internal static class PostgresMatterWriter
 
         foreach (var documentId in evidence.DocumentVersions.Select(item => item.DocumentId).Distinct())
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var documentWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.documents (tenant_id, matter_id, document_id)
                 VALUES ($1, $2, $3)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, document_id) DO UPDATE
+                SET document_id = EXCLUDED.document_id;
                 """, cancellationToken, tenantId, matterId, documentId);
+            RequireSingleWrite(documentWriteCount, "A document identity conflict could not be persisted safely.");
         }
 
         foreach (var version in evidence.DocumentVersions)
@@ -194,25 +196,37 @@ internal static class PostgresMatterWriter
 
             for (var ordinal = 0; ordinal < matterEvent.ParticipantIds.Count; ordinal++)
             {
-                await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+                var participantWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                     INSERT INTO casemesh.matter_event_participants (
                         tenant_id, matter_id, event_id, participant_id, ordinal)
                     VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT DO NOTHING;
+                    ON CONFLICT (tenant_id, matter_id, event_id, participant_id) DO UPDATE
+                    SET participant_id = EXCLUDED.participant_id
+                    WHERE casemesh.matter_event_participants.ordinal = EXCLUDED.ordinal;
                     """, cancellationToken,
                     tenantId, matterId, matterEvent.Id, matterEvent.ParticipantIds[ordinal], ordinal);
+                RequireSingleWrite(
+                    participantWriteCount,
+                    "An event participant cannot be reordered under an existing identity.");
             }
         }
 
         foreach (var link in evidence.AssertionEventLinks)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var linkWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.assertion_event_links (
                     tenant_id, matter_id, link_id, assertion_id, event_id, relation)
                 VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, link_id) DO UPDATE
+                SET link_id = EXCLUDED.link_id
+                WHERE casemesh.assertion_event_links.assertion_id = EXCLUDED.assertion_id
+                  AND casemesh.assertion_event_links.event_id = EXCLUDED.event_id
+                  AND casemesh.assertion_event_links.relation = EXCLUDED.relation;
                 """, cancellationToken,
                 tenantId, matterId, link.Id, link.AssertionId, link.EventId, (short)link.Relation);
+            RequireSingleWrite(
+                linkWriteCount,
+                "An assertion/event link id cannot be reused for different evidence relationships.");
         }
 
         foreach (var contradiction in evidence.Contradictions)
@@ -251,26 +265,41 @@ internal static class PostgresMatterWriter
 
         foreach (var node in evidence.AnalysisNodes)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var nodeWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.analysis_nodes (
                     tenant_id, matter_id, analysis_node_id, analysis_type, provider, model,
                     prompt_version, output, generated_at, verification_state, superseded_by_analysis_node_id)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, analysis_node_id) DO UPDATE
+                SET analysis_node_id = EXCLUDED.analysis_node_id
+                WHERE casemesh.analysis_nodes.analysis_type = EXCLUDED.analysis_type
+                  AND casemesh.analysis_nodes.provider = EXCLUDED.provider
+                  AND casemesh.analysis_nodes.model = EXCLUDED.model
+                  AND casemesh.analysis_nodes.prompt_version = EXCLUDED.prompt_version
+                  AND casemesh.analysis_nodes.output = EXCLUDED.output
+                  AND casemesh.analysis_nodes.generated_at = EXCLUDED.generated_at
+                  AND casemesh.analysis_nodes.verification_state = EXCLUDED.verification_state
+                  AND casemesh.analysis_nodes.superseded_by_analysis_node_id IS NOT DISTINCT FROM EXCLUDED.superseded_by_analysis_node_id;
                 """, cancellationToken,
                 tenantId, matterId, node.Id, node.AnalysisType, node.Provider, node.Model,
                 node.PromptVersion, node.Output, node.GeneratedAt, (short)node.VerificationState,
                 node.SupersededByAnalysisNodeId);
+            RequireSingleWrite(nodeWriteCount, "An analysis-node id cannot overwrite immutable analysis history.");
 
             for (var ordinal = 0; ordinal < node.SourceSpanIds.Count; ordinal++)
             {
-                await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+                var sourceWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                     INSERT INTO casemesh.analysis_node_sources (
                         tenant_id, matter_id, analysis_node_id, source_span_id, ordinal)
                     VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT DO NOTHING;
+                    ON CONFLICT (tenant_id, matter_id, analysis_node_id, source_span_id) DO UPDATE
+                    SET source_span_id = EXCLUDED.source_span_id
+                    WHERE casemesh.analysis_node_sources.ordinal = EXCLUDED.ordinal;
                     """, cancellationToken,
                     tenantId, matterId, node.Id, node.SourceSpanIds[ordinal], ordinal);
+                RequireSingleWrite(
+                    sourceWriteCount,
+                    "An analysis source cannot be reordered under an existing relationship.");
             }
         }
 
@@ -292,52 +321,63 @@ internal static class PostgresMatterWriter
     {
         foreach (var profile in workplace.EmploymentProfiles)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var profileWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.employment_profiles (
                     tenant_id, matter_id, employment_profile_id, employer_reference, role_title,
                     employment_started_on, employment_ended_on, evidence_review_state)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, employment_profile_id) DO UPDATE
+                SET employment_profile_id = EXCLUDED.employment_profile_id
+                WHERE casemesh.employment_profiles.employer_reference = EXCLUDED.employer_reference
+                  AND casemesh.employment_profiles.role_title = EXCLUDED.role_title
+                  AND casemesh.employment_profiles.employment_started_on IS NOT DISTINCT FROM EXCLUDED.employment_started_on
+                  AND casemesh.employment_profiles.employment_ended_on IS NOT DISTINCT FROM EXCLUDED.employment_ended_on
+                  AND casemesh.employment_profiles.evidence_review_state = EXCLUDED.evidence_review_state;
                 """, cancellationToken,
                 tenantId, matterId, profile.Id, profile.EmployerReference, profile.RoleTitle,
                 profile.EmploymentStartedOn, profile.EmploymentEndedOn, (short)profile.EvidenceReviewState);
+            RequireSingleWrite(profileWriteCount, "An employment-profile id cannot overwrite existing context.");
             await WriteAssertionLinksAsync(connection, transaction, "employment_profile_assertions",
                 "employment_profile_id", tenantId, matterId, profile.Id, profile.SupportingAssertionIds, cancellationToken);
         }
 
         foreach (var term in workplace.EmploymentTerms)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var termWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.employment_terms (
                     tenant_id, matter_id, employment_term_id, term_kind, term_value,
                     effective_from, effective_to, supersedes_employment_term_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
-                ON CONFLICT DO NOTHING;
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (tenant_id, matter_id, employment_term_id) DO UPDATE
+                SET employment_term_id = EXCLUDED.employment_term_id
+                WHERE casemesh.employment_terms.term_kind = EXCLUDED.term_kind
+                  AND casemesh.employment_terms.term_value = EXCLUDED.term_value
+                  AND casemesh.employment_terms.effective_from IS NOT DISTINCT FROM EXCLUDED.effective_from
+                  AND casemesh.employment_terms.effective_to IS NOT DISTINCT FROM EXCLUDED.effective_to
+                  AND casemesh.employment_terms.supersedes_employment_term_id IS NOT DISTINCT FROM EXCLUDED.supersedes_employment_term_id;
                 """, cancellationToken,
-                tenantId, matterId, term.Id, (short)term.Kind, term.Value, term.EffectiveFrom, term.EffectiveTo);
+                tenantId, matterId, term.Id, (short)term.Kind, term.Value, term.EffectiveFrom, term.EffectiveTo,
+                term.SupersedesEmploymentTermId);
+            RequireSingleWrite(termWriteCount, "An employment-term id cannot overwrite sourced term history.");
             await WriteAssertionLinksAsync(connection, transaction, "employment_term_assertions",
                 "employment_term_id", tenantId, matterId, term.Id, term.SupportingAssertionIds, cancellationToken);
         }
 
-        foreach (var term in workplace.EmploymentTerms.Where(item => item.SupersedesEmploymentTermId.HasValue))
-        {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
-                UPDATE casemesh.employment_terms
-                SET supersedes_employment_term_id = $4
-                WHERE tenant_id = $1 AND matter_id = $2 AND employment_term_id = $3;
-                """, cancellationToken, tenantId, matterId, term.Id, term.SupersedesEmploymentTermId);
-        }
-
         foreach (var record in workplace.HealthAbsenceRecords)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var recordWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.health_absence_records (
                     tenant_id, matter_id, health_absence_record_id, record_kind, neutral_label, evidence_review_state)
                 VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, health_absence_record_id) DO UPDATE
+                SET health_absence_record_id = EXCLUDED.health_absence_record_id
+                WHERE casemesh.health_absence_records.record_kind = EXCLUDED.record_kind
+                  AND casemesh.health_absence_records.neutral_label = EXCLUDED.neutral_label
+                  AND casemesh.health_absence_records.evidence_review_state = EXCLUDED.evidence_review_state;
                 """, cancellationToken,
                 tenantId, matterId, record.Id, (short)record.Kind, record.NeutralLabel,
                 (short)record.EvidenceReviewState);
+            RequireSingleWrite(recordWriteCount, "A health/absence record id cannot overwrite existing evidence context.");
             await WriteAssertionLinksAsync(connection, transaction, "health_absence_assertions",
                 "health_absence_record_id", tenantId, matterId, record.Id, record.AssertionIds, cancellationToken);
             await WriteEventLinksAsync(connection, transaction, "health_absence_events",
@@ -346,13 +386,17 @@ internal static class PostgresMatterWriter
 
         foreach (var request in workplace.AdjustmentRequests)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var requestWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.adjustment_requests (
                     tenant_id, matter_id, adjustment_request_id, neutral_label, response_status)
                 VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, adjustment_request_id) DO UPDATE
+                SET adjustment_request_id = EXCLUDED.adjustment_request_id
+                WHERE casemesh.adjustment_requests.neutral_label = EXCLUDED.neutral_label
+                  AND casemesh.adjustment_requests.response_status = EXCLUDED.response_status;
                 """, cancellationToken,
                 tenantId, matterId, request.Id, request.NeutralLabel, (short)request.ResponseStatus);
+            RequireSingleWrite(requestWriteCount, "An adjustment-request id cannot overwrite existing request history.");
             await WriteAdjustmentEvidenceAsync(connection, transaction, tenantId, matterId, request.Id,
                 0, request.RequestAssertionIds, cancellationToken);
             await WriteAdjustmentEvidenceAsync(connection, transaction, tenantId, matterId, request.Id,
@@ -363,38 +407,39 @@ internal static class PostgresMatterWriter
 
         foreach (var process in workplace.WorkplaceProcesses)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var processWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.workplace_processes (
                     tenant_id, matter_id, workplace_process_id, process_kind, stage_label,
                     process_status, supersedes_workplace_process_id, supersession_audit_event_id)
-                VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL)
-                ON CONFLICT DO NOTHING;
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (tenant_id, matter_id, workplace_process_id) DO UPDATE
+                SET workplace_process_id = EXCLUDED.workplace_process_id
+                WHERE casemesh.workplace_processes.process_kind = EXCLUDED.process_kind
+                  AND casemesh.workplace_processes.stage_label = EXCLUDED.stage_label
+                  AND casemesh.workplace_processes.process_status = EXCLUDED.process_status
+                  AND casemesh.workplace_processes.supersedes_workplace_process_id IS NOT DISTINCT FROM EXCLUDED.supersedes_workplace_process_id
+                  AND casemesh.workplace_processes.supersession_audit_event_id IS NOT DISTINCT FROM EXCLUDED.supersession_audit_event_id;
                 """, cancellationToken,
-                tenantId, matterId, process.Id, (short)process.Kind, process.StageLabel, (short)process.Status);
+                tenantId, matterId, process.Id, (short)process.Kind, process.StageLabel, (short)process.Status,
+                process.SupersedesWorkplaceProcessId, process.SupersessionAuditEventId);
+            RequireSingleWrite(processWriteCount, "A workplace-process id cannot overwrite process history.");
             await WriteAssertionLinksAsync(connection, transaction, "workplace_process_assertions",
                 "workplace_process_id", tenantId, matterId, process.Id, process.AssertionIds, cancellationToken);
             await WriteEventLinksAsync(connection, transaction, "workplace_process_events",
                 "workplace_process_id", tenantId, matterId, process.Id, process.EventIds, cancellationToken);
         }
 
-        foreach (var process in workplace.WorkplaceProcesses.Where(item => item.SupersedesWorkplaceProcessId.HasValue))
-        {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
-                UPDATE casemesh.workplace_processes
-                SET supersedes_workplace_process_id = $4, supersession_audit_event_id = $5
-                WHERE tenant_id = $1 AND matter_id = $2 AND workplace_process_id = $3;
-                """, cancellationToken,
-                tenantId, matterId, process.Id, process.SupersedesWorkplaceProcessId, process.SupersessionAuditEventId);
-        }
-
         foreach (var state in workplace.AcasProcessStates)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var stateWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.acas_process_states (
                     tenant_id, matter_id, acas_process_state_id, acas_stage)
                 VALUES ($1, $2, $3, $4)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, acas_process_state_id) DO UPDATE
+                SET acas_process_state_id = EXCLUDED.acas_process_state_id
+                WHERE casemesh.acas_process_states.acas_stage = EXCLUDED.acas_stage;
                 """, cancellationToken, tenantId, matterId, state.Id, (short)state.Stage);
+            RequireSingleWrite(stateWriteCount, "An ACAS state id cannot overwrite existing process history.");
             await WriteAssertionLinksAsync(connection, transaction, "acas_process_assertions",
                 "acas_process_state_id", tenantId, matterId, state.Id, state.AssertionIds, cancellationToken);
             await WriteEventLinksAsync(connection, transaction, "acas_process_events",
@@ -484,11 +529,13 @@ internal static class PostgresMatterWriter
     {
         foreach (var targetId in targetIds)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, $"""
+            var linkWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, $"""
                 INSERT INTO casemesh.{table} (tenant_id, matter_id, {ownerColumn}, {targetColumn})
                 VALUES ($1, $2, $3, $4)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, {ownerColumn}, {targetColumn}) DO UPDATE
+                SET {targetColumn} = EXCLUDED.{targetColumn};
                 """, cancellationToken, tenantId, matterId, ownerId, targetId);
+            RequireSingleWrite(linkWriteCount, "An evidence relationship could not be persisted safely.");
         }
     }
 
@@ -504,12 +551,22 @@ internal static class PostgresMatterWriter
     {
         foreach (var assertionId in assertionIds)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var evidenceWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.adjustment_request_assertions (
                     tenant_id, matter_id, adjustment_request_id, evidence_role, assertion_id)
                 VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, adjustment_request_id, evidence_role, assertion_id) DO UPDATE
+                SET assertion_id = EXCLUDED.assertion_id;
                 """, cancellationToken, tenantId, matterId, requestId, role, assertionId);
+            RequireSingleWrite(evidenceWriteCount, "An adjustment evidence relationship could not be persisted safely.");
+        }
+    }
+
+    private static void RequireSingleWrite(int count, string message)
+    {
+        if (count != 1)
+        {
+            throw new InvalidOperationException(message);
         }
     }
 }

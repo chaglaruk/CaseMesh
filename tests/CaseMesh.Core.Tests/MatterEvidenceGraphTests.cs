@@ -67,7 +67,7 @@ public sealed class MatterEvidenceGraphTests
     }
 
     [Fact]
-    public void Rehydrate_rejects_self_referential_supersession()
+    public void Rehydrate_rejects_self_referential_and_indirect_supersession_cycles()
     {
         var graph = SyntheticWorkplaceMatterFixture.CreateGraph(530);
         var source = SyntheticWorkplaceMatterFixture.AddSource(
@@ -83,10 +83,24 @@ public sealed class MatterEvidenceGraphTests
             EvidenceOriginClass.EmployerAuthoredDocument,
             AssertionClass.EmployerAssertion,
             "Example Employer Ltd");
+        var secondAssertion = SyntheticWorkplaceMatterFixture.AddSicknessDayAssertion(
+            graph,
+            553,
+            source,
+            "10",
+            EvidenceOriginClass.OriginalContemporaneousRecord,
+            AssertionClass.DerivedCalculation,
+            "synthetic attendance record");
         var matterEvent = graph.AddEvent(
             SyntheticWorkplaceMatterFixture.Id(551),
             "synthetic-event",
             "Synthetic event",
+            EventStatus.Candidate,
+            VerificationState.NotReviewed);
+        var secondEvent = graph.AddEvent(
+            SyntheticWorkplaceMatterFixture.Id(554),
+            "synthetic-event",
+            "Second synthetic event",
             EventStatus.Candidate,
             VerificationState.NotReviewed);
         var analysis = graph.AddAnalysisNode(
@@ -99,6 +113,16 @@ public sealed class MatterEvidenceGraphTests
             "Synthetic analysis",
             SyntheticWorkplaceMatterFixture.RecordedAt,
             VerificationState.NotReviewed);
+        var secondAnalysis = graph.AddAnalysisNode(
+            SyntheticWorkplaceMatterFixture.Id(555),
+            "synthetic-analysis",
+            [source.Id],
+            "synthetic-provider",
+            "synthetic-model",
+            "v1",
+            "Second synthetic analysis",
+            SyntheticWorkplaceMatterFixture.RecordedAt,
+            VerificationState.NotReviewed);
         var snapshot = graph.CaptureSnapshot();
 
         Assert.Throws<InvalidOperationException>(() => MatterEvidenceGraph.Rehydrate(snapshot with
@@ -106,6 +130,51 @@ public sealed class MatterEvidenceGraphTests
             Assertions = snapshot.Assertions.Select(item => item.Id == assertion.Id
                 ? item with { DisputeState = DisputeState.Superseded, SupersededByAssertionId = item.Id }
                 : item).ToArray()
+        }));
+        Assert.Throws<InvalidOperationException>(() => MatterEvidenceGraph.Rehydrate(snapshot with
+        {
+            Assertions = snapshot.Assertions.Select(item => item.Id switch
+            {
+                var id when id == assertion.Id => item with
+                {
+                    DisputeState = DisputeState.Superseded,
+                    SupersededByAssertionId = secondAssertion.Id
+                },
+                var id when id == secondAssertion.Id => item with
+                {
+                    DisputeState = DisputeState.Superseded,
+                    SupersededByAssertionId = assertion.Id
+                },
+                _ => item
+            }).ToArray()
+        }));
+        Assert.Throws<InvalidOperationException>(() => MatterEvidenceGraph.Rehydrate(snapshot with
+        {
+            Events = snapshot.Events.Select(item => item.Id switch
+            {
+                var id when id == matterEvent.Id => item with
+                {
+                    Status = EventStatus.Superseded,
+                    SupersedesEventId = secondEvent.Id,
+                    SupersededByEventId = secondEvent.Id
+                },
+                var id when id == secondEvent.Id => item with
+                {
+                    Status = EventStatus.Superseded,
+                    SupersedesEventId = matterEvent.Id,
+                    SupersededByEventId = matterEvent.Id
+                },
+                _ => item
+            }).ToArray()
+        }));
+        Assert.Throws<InvalidOperationException>(() => MatterEvidenceGraph.Rehydrate(snapshot with
+        {
+            AnalysisNodes = snapshot.AnalysisNodes.Select(item => item.Id switch
+            {
+                var id when id == analysis.Id => item with { SupersededByAnalysisNodeId = secondAnalysis.Id },
+                var id when id == secondAnalysis.Id => item with { SupersededByAnalysisNodeId = analysis.Id },
+                _ => item
+            }).ToArray()
         }));
         Assert.Throws<InvalidOperationException>(() => MatterEvidenceGraph.Rehydrate(snapshot with
         {
