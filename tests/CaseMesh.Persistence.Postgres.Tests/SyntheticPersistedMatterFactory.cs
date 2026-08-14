@@ -24,7 +24,7 @@ internal static class SyntheticPersistedMatterFactory
 
         var employerSource = AddSource(evidence, seed, 10, "Example Employer Ltd states 12 sickness days.", 'A');
         var duplicateVersion = evidence.RegisterDocumentVersion(
-            Id(seed, 13), Id(seed, 14), new string('A', 64), Id(seed, 15));
+            Id(seed, 16), Id(seed, 17), new string('A', 64), Id(seed, 18));
         var attendanceSource = AddSource(evidence, seed, 20, "Synthetic attendance rows total 10 sickness days.", 'B');
         var originalTermSource = AddSource(evidence, seed, 30, "Synthetic contract records 37.5 hours.", 'C');
         var amendedTermSource = AddSource(evidence, seed, 40, "Synthetic amendment records 40 hours.", 'D');

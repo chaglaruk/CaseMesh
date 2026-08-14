@@ -6,6 +6,19 @@ namespace CaseMesh.Core.Tests;
 public sealed class MatterEvidenceGraphTests
 {
     [Fact]
+    public void Matter_rejects_default_tenant_identity()
+    {
+        Assert.Throws<ArgumentException>(() => new Matter(
+            Guid.NewGuid(),
+            default,
+            "workplace-dispute",
+            "Synthetic matter",
+            "open",
+            SyntheticWorkplaceMatterFixture.RecordedAt,
+            SyntheticWorkplaceMatterFixture.RecordedAt));
+    }
+
+    [Fact]
     public void Matter_IsGenericAndDoesNotRequireEmploymentFields()
     {
         var matter = new Matter(
@@ -51,6 +64,100 @@ public sealed class MatterEvidenceGraphTests
         };
 
         Assert.Throws<ArgumentOutOfRangeException>(() => MatterEvidenceGraph.Rehydrate(invalid));
+    }
+
+    [Fact]
+    public void Rehydrate_rejects_self_referential_supersession()
+    {
+        var graph = SyntheticWorkplaceMatterFixture.CreateGraph(530);
+        var source = SyntheticWorkplaceMatterFixture.AddSource(
+            graph,
+            540,
+            "Synthetic source for self-reference checks.",
+            'A');
+        var assertion = SyntheticWorkplaceMatterFixture.AddSicknessDayAssertion(
+            graph,
+            550,
+            source,
+            "12",
+            EvidenceOriginClass.EmployerAuthoredDocument,
+            AssertionClass.EmployerAssertion,
+            "Example Employer Ltd");
+        var matterEvent = graph.AddEvent(
+            SyntheticWorkplaceMatterFixture.Id(551),
+            "synthetic-event",
+            "Synthetic event",
+            EventStatus.Candidate,
+            VerificationState.NotReviewed);
+        var analysis = graph.AddAnalysisNode(
+            SyntheticWorkplaceMatterFixture.Id(552),
+            "synthetic-analysis",
+            [source.Id],
+            "synthetic-provider",
+            "synthetic-model",
+            "v1",
+            "Synthetic analysis",
+            SyntheticWorkplaceMatterFixture.RecordedAt,
+            VerificationState.NotReviewed);
+        var snapshot = graph.CaptureSnapshot();
+
+        Assert.Throws<InvalidOperationException>(() => MatterEvidenceGraph.Rehydrate(snapshot with
+        {
+            Assertions = snapshot.Assertions.Select(item => item.Id == assertion.Id
+                ? item with { DisputeState = DisputeState.Superseded, SupersededByAssertionId = item.Id }
+                : item).ToArray()
+        }));
+        Assert.Throws<InvalidOperationException>(() => MatterEvidenceGraph.Rehydrate(snapshot with
+        {
+            Events = snapshot.Events.Select(item => item.Id == matterEvent.Id
+                ? item with
+                {
+                    Status = EventStatus.Superseded,
+                    SupersedesEventId = item.Id,
+                    SupersededByEventId = item.Id
+                }
+                : item).ToArray()
+        }));
+        Assert.Throws<InvalidOperationException>(() => MatterEvidenceGraph.Rehydrate(snapshot with
+        {
+            AnalysisNodes = snapshot.AnalysisNodes.Select(item => item.Id == analysis.Id
+                ? item with { SupersededByAnalysisNodeId = item.Id }
+                : item).ToArray()
+        }));
+    }
+
+    [Fact]
+    public void Rehydrate_rejects_contradiction_resolution_before_detection()
+    {
+        var graph = SyntheticWorkplaceMatterFixture.CreateGraph(560);
+        var sourceA = SyntheticWorkplaceMatterFixture.AddSource(graph, 570, "Synthetic value 12.", 'B');
+        var sourceB = SyntheticWorkplaceMatterFixture.AddSource(graph, 580, "Synthetic value 10.", 'C');
+        var assertionA = SyntheticWorkplaceMatterFixture.AddSicknessDayAssertion(
+            graph, 590, sourceA, "12", EvidenceOriginClass.EmployerAuthoredDocument,
+            AssertionClass.EmployerAssertion, "Example Employer Ltd");
+        var assertionB = SyntheticWorkplaceMatterFixture.AddSicknessDayAssertion(
+            graph, 591, sourceB, "10", EvidenceOriginClass.OriginalContemporaneousRecord,
+            AssertionClass.DerivedCalculation, "synthetic attendance record");
+        graph.AddContradiction(
+            SyntheticWorkplaceMatterFixture.Id(592),
+            assertionA.Id,
+            assertionB.Id,
+            ContradictionType.NumericMismatch,
+            "synthetic-rule",
+            SyntheticWorkplaceMatterFixture.RecordedAt);
+        var snapshot = graph.CaptureSnapshot();
+
+        var invalid = snapshot with
+        {
+            Contradictions = snapshot.Contradictions.Select(item => item with
+            {
+                ResolutionState = ContradictionResolutionState.Resolved,
+                ResolutionNote = "Synthetic invalid resolution.",
+                ResolvedAt = item.CreatedAt.AddTicks(-1)
+            }).ToArray()
+        };
+
+        Assert.Throws<InvalidOperationException>(() => MatterEvidenceGraph.Rehydrate(invalid));
     }
 
     [Fact]

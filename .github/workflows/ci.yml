@@ -41,6 +41,7 @@ jobs:
           --health-retries 10
     env:
       CASEMESH_POSTGRES_ADMIN_CONNECTION: Host=localhost;Port=5432;Database=casemesh_admin;Username=postgres;Password=postgres;Pooling=false
+      CASEMESH_POSTGRES_REQUIRED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4

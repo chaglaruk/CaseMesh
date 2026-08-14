@@ -16,6 +16,8 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     public string AdminConnectionString { get; private set; } = string.Empty;
     public string AppConnectionString { get; private set; } = string.Empty;
+    internal string AdminRootConnectionString => _adminRootConnectionString
+        ?? throw new InvalidOperationException("PostgreSQL fixture is not initialized.");
 
     public async Task InitializeAsync()
     {
@@ -85,7 +87,9 @@ public sealed class PostgresFixture : IAsyncLifetime
             await terminate.ExecuteNonQueryAsync();
         }
 
-        await using (var dropDatabase = new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{_databaseName}\";", root))
+        await using (var dropDatabase = new NpgsqlCommand(
+                         $"DROP DATABASE IF EXISTS \"{_databaseName}\" WITH (FORCE);",
+                         root))
         {
             await dropDatabase.ExecuteNonQueryAsync();
         }

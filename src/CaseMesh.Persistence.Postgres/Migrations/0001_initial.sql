@@ -61,10 +61,10 @@ CREATE TABLE casemesh.source_spans (
     page_number integer NULL CHECK (page_number > 0),
     text_start integer NULL CHECK (text_start >= 0),
     text_end integer NULL CHECK (text_end >= text_start),
-    extracted_text text NOT NULL CHECK (extracted_text <> ''),
+    extracted_text text NOT NULL CHECK (btrim(extracted_text) <> ''),
     extracted_text_digest char(64) NOT NULL CHECK (extracted_text_digest ~ '^[0-9A-F]{64}$'),
     parser_version text NOT NULL CHECK (btrim(parser_version) <> ''),
-    extraction_confidence numeric(5,4) NULL CHECK (extraction_confidence BETWEEN 0 AND 1),
+    extraction_confidence numeric NULL CHECK (extraction_confidence BETWEEN 0 AND 1),
     PRIMARY KEY (tenant_id, matter_id, source_span_id),
     FOREIGN KEY (tenant_id, matter_id, document_version_id)
         REFERENCES casemesh.document_versions (tenant_id, matter_id, document_version_id) ON DELETE CASCADE,
@@ -88,7 +88,7 @@ CREATE TABLE casemesh.assertions (
     dispute_state smallint NOT NULL CHECK (dispute_state BETWEEN 0 AND 6),
     integrity_state smallint NOT NULL CHECK (integrity_state BETWEEN 0 AND 5),
     verification_state smallint NOT NULL CHECK (verification_state BETWEEN 0 AND 3),
-    extraction_confidence numeric(5,4) NULL CHECK (extraction_confidence BETWEEN 0 AND 1),
+    extraction_confidence numeric NULL CHECK (extraction_confidence BETWEEN 0 AND 1),
     created_by_model text NULL,
     superseded_by_assertion_id uuid NULL,
     PRIMARY KEY (tenant_id, matter_id, assertion_id),
@@ -411,11 +411,65 @@ CREATE TABLE casemesh.acas_process_events (
         REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id) DEFERRABLE INITIALLY DEFERRED
 );
 
+CREATE INDEX document_versions_document_ix
+    ON casemesh.document_versions (tenant_id, matter_id, document_id);
+CREATE INDEX document_versions_original_object_ix
+    ON casemesh.document_versions (tenant_id, matter_id, original_object_id, content_sha256);
+CREATE INDEX source_spans_document_version_ix
+    ON casemesh.source_spans (tenant_id, matter_id, document_version_id);
+CREATE INDEX assertions_source_span_ix
+    ON casemesh.assertions (tenant_id, matter_id, source_span_id);
+CREATE INDEX assertions_superseded_by_ix
+    ON casemesh.assertions (tenant_id, matter_id, superseded_by_assertion_id);
+CREATE INDEX matter_events_supersedes_ix
+    ON casemesh.matter_events (tenant_id, matter_id, supersedes_event_id);
+CREATE INDEX matter_events_superseded_by_ix
+    ON casemesh.matter_events (tenant_id, matter_id, superseded_by_event_id);
+CREATE INDEX assertion_event_links_assertion_ix
+    ON casemesh.assertion_event_links (tenant_id, matter_id, assertion_id);
+CREATE INDEX assertion_event_links_event_ix
+    ON casemesh.assertion_event_links (tenant_id, matter_id, event_id);
+CREATE INDEX contradictions_assertion_a_ix
+    ON casemesh.contradictions (tenant_id, matter_id, assertion_a_id);
+CREATE INDEX contradictions_assertion_b_ix
+    ON casemesh.contradictions (tenant_id, matter_id, assertion_b_id);
+CREATE INDEX analysis_nodes_superseded_by_ix
+    ON casemesh.analysis_nodes (tenant_id, matter_id, superseded_by_analysis_node_id);
+CREATE INDEX analysis_node_sources_source_span_ix
+    ON casemesh.analysis_node_sources (tenant_id, matter_id, source_span_id);
+CREATE INDEX employment_profile_assertions_assertion_ix
+    ON casemesh.employment_profile_assertions (tenant_id, matter_id, assertion_id);
+CREATE INDEX employment_terms_supersedes_ix
+    ON casemesh.employment_terms (tenant_id, matter_id, supersedes_employment_term_id);
+CREATE INDEX employment_term_assertions_assertion_ix
+    ON casemesh.employment_term_assertions (tenant_id, matter_id, assertion_id);
+CREATE INDEX health_absence_assertions_assertion_ix
+    ON casemesh.health_absence_assertions (tenant_id, matter_id, assertion_id);
+CREATE INDEX health_absence_events_event_ix
+    ON casemesh.health_absence_events (tenant_id, matter_id, event_id);
+CREATE INDEX adjustment_request_assertions_assertion_ix
+    ON casemesh.adjustment_request_assertions (tenant_id, matter_id, assertion_id);
+CREATE INDEX workplace_processes_supersedes_ix
+    ON casemesh.workplace_processes (tenant_id, matter_id, supersedes_workplace_process_id);
+CREATE INDEX workplace_processes_audit_ix
+    ON casemesh.workplace_processes (tenant_id, matter_id, supersession_audit_event_id);
+CREATE INDEX workplace_process_assertions_assertion_ix
+    ON casemesh.workplace_process_assertions (tenant_id, matter_id, assertion_id);
+CREATE INDEX workplace_process_events_event_ix
+    ON casemesh.workplace_process_events (tenant_id, matter_id, event_id);
+CREATE INDEX acas_process_assertions_assertion_ix
+    ON casemesh.acas_process_assertions (tenant_id, matter_id, assertion_id);
+CREATE INDEX acas_process_events_event_ix
+    ON casemesh.acas_process_events (tenant_id, matter_id, event_id);
+
 CREATE FUNCTION casemesh.reject_audit_mutation() RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN
+    IF TG_OP = 'DELETE' AND NOT EXISTS (
+        SELECT 1 FROM casemesh.matters
+        WHERE tenant_id = OLD.tenant_id AND matter_id = OLD.matter_id)
+    THEN
         RETURN OLD;
     END IF;
 
@@ -426,6 +480,18 @@ $$;
 CREATE TRIGGER audit_events_append_only
 BEFORE UPDATE OR DELETE ON casemesh.audit_events
 FOR EACH ROW EXECUTE FUNCTION casemesh.reject_audit_mutation();
+
+CREATE FUNCTION casemesh.reject_audit_truncate() RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'audit events are append-only';
+END;
+$$;
+
+CREATE TRIGGER audit_events_no_truncate
+BEFORE TRUNCATE ON casemesh.audit_events
+FOR EACH STATEMENT EXECUTE FUNCTION casemesh.reject_audit_truncate();
 
 DO $$
 DECLARE

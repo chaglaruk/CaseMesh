@@ -8,6 +8,39 @@ namespace CaseMesh.Core.Tests;
 public sealed class WorkplaceMatterTests
 {
     [Fact]
+    public void Rehydrate_rejects_self_referential_workplace_supersession()
+    {
+        var evidence = SyntheticWorkplaceMatterFixture.CreateGraph(10);
+        var workplace = new WorkplaceMatter(evidence);
+        var assertion = AddDocumentaryAssertion(evidence, 20, "Synthetic workplace evidence.");
+        var matterEvent = evidence.AddEvent(
+            Id(30),
+            "synthetic-event",
+            "Synthetic workplace event",
+            EventStatus.Candidate,
+            VerificationState.NotReviewed);
+        var term = workplace.AddEmploymentTerm(
+            Id(31), EmploymentTermKind.WorkingHours, "37.5 hours", [assertion.Id]);
+        var process = workplace.AddWorkplaceProcess(
+            Id(32), WorkplaceProcessKind.Grievance, "Initial", WorkplaceProcessStatus.Open,
+            [assertion.Id], [matterEvent.Id]);
+        var snapshot = workplace.CaptureSnapshot();
+
+        Assert.Throws<InvalidOperationException>(() => WorkplaceMatter.Rehydrate(evidence, snapshot with
+        {
+            EmploymentTerms = snapshot.EmploymentTerms.Select(item => item.Id == term.Id
+                ? item with { SupersedesEmploymentTermId = item.Id }
+                : item).ToArray()
+        }));
+        Assert.Throws<InvalidOperationException>(() => WorkplaceMatter.Rehydrate(evidence, snapshot with
+        {
+            WorkplaceProcesses = snapshot.WorkplaceProcesses.Select(item => item.Id == process.Id
+                ? item with { SupersedesWorkplaceProcessId = item.Id }
+                : item).ToArray()
+        }));
+    }
+
+    [Fact]
     public void ExtensionRecords_AllUseTheOwningMatterBoundary()
     {
         var evidence = SyntheticWorkplaceMatterFixture.CreateGraph();

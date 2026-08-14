@@ -13,6 +13,7 @@ public sealed record Matter
         string? jurisdiction = null)
     {
         if (id == Guid.Empty) throw new ArgumentException("Matter id is required.", nameof(id));
+        if (tenantId.Value == Guid.Empty) throw new ArgumentException("Tenant id is required.", nameof(tenantId));
         ArgumentException.ThrowIfNullOrWhiteSpace(matterType);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentException.ThrowIfNullOrWhiteSpace(status);

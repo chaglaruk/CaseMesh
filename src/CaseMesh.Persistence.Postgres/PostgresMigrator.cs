@@ -83,6 +83,17 @@ public sealed class PostgresMigrator
         NpgsqlTransaction? transaction,
         CancellationToken cancellationToken)
     {
+        await using (var exists = new NpgsqlCommand(
+                         "SELECT to_regclass('casemesh_internal.schema_migrations') IS NOT NULL;",
+                         connection,
+                         transaction))
+        {
+            if (await exists.ExecuteScalarAsync(cancellationToken) is not true)
+            {
+                return [];
+            }
+        }
+
         await using var command = new NpgsqlCommand("""
             SELECT version, checksum, applied_at
             FROM casemesh_internal.schema_migrations
@@ -116,7 +127,7 @@ public sealed class PostgresMigrator
         using var stream = assembly.GetManifestResourceStream(resourceName)
             ?? throw new InvalidOperationException($"Migration resource {resourceName} was not found.");
         using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        var sql = reader.ReadToEnd();
+        var sql = reader.ReadToEnd().Replace("\r\n", "\n", StringComparison.Ordinal);
         var fileName = resourceName[ResourcePrefix.Length..^4];
         var separator = fileName.IndexOf('_', StringComparison.Ordinal);
         var version = separator > 0 ? fileName[..separator] : fileName;

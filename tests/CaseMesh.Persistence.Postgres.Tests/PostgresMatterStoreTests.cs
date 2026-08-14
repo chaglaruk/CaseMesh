@@ -1,5 +1,6 @@
 using CaseMesh.Core.Models;
 using CaseMesh.Core.Services;
+using CaseMesh.Core.Snapshots;
 using CaseMesh.Core.Workplace;
 using Npgsql;
 
@@ -19,6 +20,38 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
         var migration = Assert.Single(after);
         Assert.Equal("0001", migration.Version);
         Assert.Equal(before, after);
+    }
+
+    [PostgresFact]
+    public async Task Migration_ledger_is_empty_before_zero_to_current_migration()
+    {
+        var databaseName = $"casemesh_unmigrated_{Guid.NewGuid():N}";
+        var rootBuilder = new NpgsqlConnectionStringBuilder(database.AdminRootConnectionString);
+        await using (var root = new NpgsqlConnection(rootBuilder.ConnectionString))
+        {
+            await root.OpenAsync();
+            await using var create = new NpgsqlCommand($"CREATE DATABASE \"{databaseName}\";", root);
+            await create.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            var emptyBuilder = new NpgsqlConnectionStringBuilder(rootBuilder.ConnectionString) { Database = databaseName };
+            var migrator = new PostgresMigrator();
+            Assert.Empty(await migrator.GetAppliedMigrationsAsync(emptyBuilder.ConnectionString));
+            var applied = await migrator.MigrateAsync(emptyBuilder.ConnectionString);
+            Assert.Equal("0001", Assert.Single(applied).Version);
+        }
+        finally
+        {
+            NpgsqlConnection.ClearAllPools();
+            await using var root = new NpgsqlConnection(rootBuilder.ConnectionString);
+            await root.OpenAsync();
+            await using var drop = new NpgsqlCommand(
+                $"DROP DATABASE IF EXISTS \"{databaseName}\" WITH (FORCE);",
+                root);
+            await drop.ExecuteNonQueryAsync();
+        }
     }
 
     [PostgresFact]
@@ -46,6 +79,180 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
         Assert.NotNull(actual);
         Assert.Equal(tenant, actual.Evidence.Matter.TenantId);
         Assert.Equal(matterId, actual.Evidence.Matter.Id);
+    }
+
+    [PostgresFact]
+    public async Task Non_utc_timestamps_and_full_decimal_confidence_round_trip_without_loss()
+    {
+        var tenant = NewTenant();
+        var matterId = Guid.NewGuid();
+        await using var store = await CreateStoreAsync(tenant);
+        var original = SyntheticPersistedMatterFactory.Create(tenant, matterId, 201);
+        var snapshot = original.Evidence.CaptureSnapshot();
+        var offset = TimeSpan.FromHours(1);
+        var createdAt = SyntheticPersistedMatterFactory.RecordedAt.ToOffset(offset);
+        const decimal confidence = 0.123456789m;
+        var evidence = MatterEvidenceGraph.Rehydrate(snapshot with
+        {
+            Matter = new Matter(
+                matterId,
+                tenant,
+                snapshot.Matter.MatterType,
+                snapshot.Matter.Title,
+                snapshot.Matter.Status,
+                createdAt,
+                createdAt,
+                snapshot.Matter.Jurisdiction),
+            SourceSpans = snapshot.SourceSpans
+                .Select(span => span with { ExtractionConfidence = confidence })
+                .ToArray(),
+            Assertions = snapshot.Assertions
+                .Select(assertion => assertion.SourceSpanId.HasValue
+                    ? assertion with { ExtractionConfidence = confidence }
+                    : assertion)
+                .ToArray()
+        });
+        var workplace = WorkplaceMatter.Rehydrate(evidence, original.Workplace.CaptureSnapshot());
+
+        await store.SaveAsync(evidence, workplace);
+        var loaded = Assert.IsType<PersistedMatter>(await store.LoadAsync(tenant, matterId));
+
+        Assert.Equal(createdAt.ToUniversalTime(), loaded.Evidence.Matter.CreatedAt);
+        Assert.All(loaded.Evidence.SourceSpans, span => Assert.Equal(confidence, span.ExtractionConfidence));
+        Assert.All(
+            loaded.Evidence.Assertions.Where(assertion => assertion.SourceSpanId.HasValue),
+            assertion => Assert.Equal(confidence, assertion.ExtractionConfidence));
+    }
+
+    [PostgresFact]
+    public async Task Existing_source_span_id_cannot_be_reused_for_different_provenance()
+    {
+        var tenant = NewTenant();
+        var matterId = Guid.NewGuid();
+        await using var store = await CreateStoreAsync(tenant);
+        var original = SyntheticPersistedMatterFactory.Create(tenant, matterId, 202);
+        await store.SaveAsync(original.Evidence, original.Workplace);
+
+        var snapshot = original.Evidence.CaptureSnapshot();
+        var conflictingEvidence = MatterEvidenceGraph.Rehydrate(snapshot with
+        {
+            SourceSpans = snapshot.SourceSpans
+                .Select((span, index) => index == 0 ? span with { ParserVersion = "conflicting-parser/2" } : span)
+                .ToArray()
+        });
+        var conflictingWorkplace = WorkplaceMatter.Rehydrate(
+            conflictingEvidence,
+            original.Workplace.CaptureSnapshot());
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.SaveAsync(conflictingEvidence, conflictingWorkplace));
+        Assert.Contains("source span id", exception.Message, StringComparison.OrdinalIgnoreCase);
+
+        var loaded = Assert.IsType<PersistedMatter>(await store.LoadAsync(tenant, matterId));
+        Assert.DoesNotContain(loaded.Evidence.SourceSpans, span => span.ParserVersion == "conflicting-parser/2");
+    }
+
+    [PostgresFact]
+    public async Task Existing_document_version_id_cannot_be_reused_for_different_provenance()
+    {
+        var tenant = NewTenant();
+        var matterId = Guid.NewGuid();
+        await using var store = await CreateStoreAsync(tenant);
+        var original = SyntheticPersistedMatterFactory.Create(tenant, matterId, 205);
+        await store.SaveAsync(original.Evidence, original.Workplace);
+
+        var snapshot = original.Evidence.CaptureSnapshot();
+        var conflictingEvidence = MatterEvidenceGraph.Rehydrate(snapshot with
+        {
+            DocumentVersions = snapshot.DocumentVersions
+                .Select((version, index) => index == 0 ? version with { DocumentId = Guid.NewGuid() } : version)
+                .ToArray()
+        });
+        var conflictingWorkplace = WorkplaceMatter.Rehydrate(
+            conflictingEvidence,
+            original.Workplace.CaptureSnapshot());
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.SaveAsync(conflictingEvidence, conflictingWorkplace));
+        Assert.Contains("document-version id", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [PostgresFact]
+    public async Task Stale_snapshot_cannot_reverse_event_supersession()
+    {
+        const int seed = 203;
+        var tenant = NewTenant();
+        var matterId = Guid.NewGuid();
+        await using var store = await CreateStoreAsync(tenant);
+        var current = SyntheticPersistedMatterFactory.Create(tenant, matterId, seed);
+        await store.SaveAsync(current.Evidence, current.Workplace);
+
+        var currentSnapshot = current.Evidence.CaptureSnapshot();
+        var originalEventId = SyntheticPersistedMatterFactory.Id(seed, 130);
+        var correctedEventId = SyntheticPersistedMatterFactory.Id(seed, 133);
+        var staleEvidence = MatterEvidenceGraph.Rehydrate(currentSnapshot with
+        {
+            Events = currentSnapshot.Events
+                .Where(matterEvent => matterEvent.Id != correctedEventId)
+                .Select(matterEvent => matterEvent.Id == originalEventId
+                    ? matterEvent with { Status = EventStatus.Candidate, SupersededByEventId = null }
+                    : matterEvent)
+                .ToArray(),
+            AssertionEventLinks = currentSnapshot.AssertionEventLinks
+                .Where(link => link.EventId != correctedEventId)
+                .ToArray(),
+            AuditEvents = []
+        });
+        var workplaceSnapshot = current.Workplace.CaptureSnapshot();
+        var staleWorkplace = WorkplaceMatter.Rehydrate(staleEvidence, workplaceSnapshot with
+        {
+            WorkplaceProcesses = workplaceSnapshot.WorkplaceProcesses
+                .Where(process => process.Id != SyntheticPersistedMatterFactory.Id(seed, 157))
+                .ToArray()
+        });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.SaveAsync(staleEvidence, staleWorkplace));
+        Assert.Contains("reverse supersession", exception.Message, StringComparison.OrdinalIgnoreCase);
+
+        var loaded = Assert.IsType<PersistedMatter>(await store.LoadAsync(tenant, matterId));
+        var originalEvent = Assert.Single(loaded.Evidence.Events, item => item.Id == originalEventId);
+        Assert.Equal(correctedEventId, originalEvent.SupersededByEventId);
+    }
+
+    [PostgresFact]
+    public async Task Contradiction_resolution_is_persisted_and_cannot_be_reversed()
+    {
+        var tenant = NewTenant();
+        var matterId = Guid.NewGuid();
+        await using var store = await CreateStoreAsync(tenant);
+        var original = SyntheticPersistedMatterFactory.Create(tenant, matterId, 204);
+        await store.SaveAsync(original.Evidence, original.Workplace);
+
+        var unresolvedSnapshot = original.Evidence.CaptureSnapshot();
+        var resolvedAt = SyntheticPersistedMatterFactory.RecordedAt.AddDays(1);
+        var resolvedEvidence = MatterEvidenceGraph.Rehydrate(unresolvedSnapshot with
+        {
+            Contradictions = unresolvedSnapshot.Contradictions
+                .Select(contradiction => contradiction with
+                {
+                    ResolutionState = ContradictionResolutionState.Resolved,
+                    ResolutionNote = "Synthetic records reconciled by reviewer.",
+                    ResolvedAt = resolvedAt
+                })
+                .ToArray()
+        });
+        var resolvedWorkplace = WorkplaceMatter.Rehydrate(resolvedEvidence, original.Workplace.CaptureSnapshot());
+        await store.SaveAsync(resolvedEvidence, resolvedWorkplace);
+
+        var loaded = Assert.IsType<PersistedMatter>(await store.LoadAsync(tenant, matterId));
+        var contradiction = Assert.Single(loaded.Evidence.Contradictions);
+        Assert.Equal(ContradictionResolutionState.Resolved, contradiction.ResolutionState);
+        Assert.Equal(resolvedAt, contradiction.ResolvedAt);
+
+        var reverseException = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.SaveAsync(original.Evidence, original.Workplace));
+        Assert.Contains("reverse a resolution", reverseException.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [PostgresFact]
@@ -78,6 +285,35 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
 
         var reloaded = Assert.IsType<PersistedMatter>(await store.LoadAsync(tenantB, matterId));
         Assert.Equal(tenantBMatter.Evidence.Matter.Title, reloaded.Evidence.Matter.Title);
+    }
+
+    [PostgresFact]
+    public async Task Owning_tenant_can_update_and_delete_but_cannot_move_updated_at_backwards()
+    {
+        var tenant = NewTenant();
+        var matterId = Guid.NewGuid();
+        await using var store = await CreateStoreAsync(tenant);
+        var matter = SyntheticPersistedMatterFactory.Create(tenant, matterId, 206);
+        await store.SaveAsync(matter.Evidence, matter.Workplace);
+
+        Assert.False(await store.UpdateMatterAsync(
+            tenant,
+            matterId,
+            "Stale synthetic title",
+            "closed",
+            SyntheticPersistedMatterFactory.RecordedAt.AddMinutes(-1)));
+        Assert.True(await store.UpdateMatterAsync(
+            tenant,
+            matterId,
+            "Updated synthetic title",
+            "closed",
+            SyntheticPersistedMatterFactory.RecordedAt.AddMinutes(1)));
+        var updated = Assert.IsType<PersistedMatter>(await store.LoadAsync(tenant, matterId));
+        Assert.Equal("Updated synthetic title", updated.Evidence.Matter.Title);
+        Assert.Equal("closed", updated.Evidence.Matter.Status);
+
+        Assert.True(await store.DeleteMatterAsync(tenant, matterId));
+        Assert.Null(await store.LoadAsync(tenant, matterId));
     }
 
     [PostgresFact]
@@ -262,6 +498,12 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
 
         await AssertAuditMutationRejectedAsync(tenant, matterId, "UPDATE casemesh.audit_events SET change_summary = 'overwrite' WHERE tenant_id = $1 AND matter_id = $2;");
         await AssertAuditMutationRejectedAsync(tenant, matterId, "DELETE FROM casemesh.audit_events WHERE tenant_id = $1 AND matter_id = $2;");
+
+        await using var admin = new NpgsqlConnection(database.AdminConnectionString);
+        await admin.OpenAsync();
+        await using var truncate = new NpgsqlCommand("TRUNCATE casemesh.audit_events;", admin);
+        var truncateException = await Assert.ThrowsAsync<PostgresException>(() => truncate.ExecuteNonQueryAsync());
+        Assert.Equal(PostgresErrorCodes.RaiseException, truncateException.SqlState);
     }
 
     [PostgresFact]

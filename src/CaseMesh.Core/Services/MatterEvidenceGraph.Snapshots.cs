@@ -157,7 +157,8 @@ public sealed partial class MatterEvidenceGraph
 
         foreach (var assertion in snapshot.Assertions.Where(item => item.SupersededByAssertionId.HasValue))
         {
-            if (!graph._assertions.ContainsKey(assertion.SupersededByAssertionId!.Value) ||
+            if (assertion.SupersededByAssertionId == assertion.Id ||
+                !graph._assertions.ContainsKey(assertion.SupersededByAssertionId!.Value) ||
                 assertion.DisputeState != DisputeState.Superseded)
             {
                 throw new InvalidOperationException("Persisted assertion supersession is invalid.");
@@ -198,9 +199,10 @@ public sealed partial class MatterEvidenceGraph
                 matterEvent.ParticipantIds);
         }
 
+        var eventsById = snapshot.Events.ToDictionary(item => item.Id);
         foreach (var matterEvent in snapshot.Events)
         {
-            ValidateEventSupersession(snapshot.Events, matterEvent);
+            ValidateEventSupersession(eventsById, matterEvent);
             graph._events[matterEvent.Id] = new MatterEvent(
                 matterEvent.Id,
                 snapshot.Matter.Id,
@@ -252,9 +254,10 @@ public sealed partial class MatterEvidenceGraph
                     throw new InvalidOperationException("An unresolved persisted contradiction has inconsistent state.");
                 }
             }
-            else if (!contradiction.ResolvedAt.HasValue)
+            else if (!contradiction.ResolvedAt.HasValue || contradiction.ResolvedAt < contradiction.CreatedAt)
             {
-                throw new InvalidOperationException("A resolved persisted contradiction requires a resolution timestamp.");
+                throw new InvalidOperationException(
+                    "A resolved persisted contradiction requires a resolution timestamp at or after creation.");
             }
 
             graph._contradictions.Add(contradiction.Id, new Contradiction(
@@ -287,7 +290,8 @@ public sealed partial class MatterEvidenceGraph
 
         foreach (var node in snapshot.AnalysisNodes.Where(item => item.SupersededByAnalysisNodeId.HasValue))
         {
-            if (!graph._analysisNodes.ContainsKey(node.SupersededByAnalysisNodeId!.Value))
+            if (node.SupersededByAnalysisNodeId == node.Id ||
+                !graph._analysisNodes.ContainsKey(node.SupersededByAnalysisNodeId!.Value))
             {
                 throw new InvalidOperationException("Persisted analysis supersession references an unknown node.");
             }
@@ -357,13 +361,13 @@ public sealed partial class MatterEvidenceGraph
     }
 
     private static void ValidateEventSupersession(
-        IReadOnlyList<MatterEventSnapshot> events,
+        IReadOnlyDictionary<Guid, MatterEventSnapshot> eventsById,
         MatterEventSnapshot matterEvent)
     {
-        var byId = events.ToDictionary(item => item.Id);
         if (matterEvent.SupersedesEventId.HasValue)
         {
-            if (!byId.TryGetValue(matterEvent.SupersedesEventId.Value, out var previous) ||
+            if (matterEvent.SupersedesEventId == matterEvent.Id ||
+                !eventsById.TryGetValue(matterEvent.SupersedesEventId.Value, out var previous) ||
                 previous.SupersededByEventId != matterEvent.Id)
             {
                 throw new InvalidOperationException("Persisted event supersession is not bidirectional.");
@@ -373,7 +377,8 @@ public sealed partial class MatterEvidenceGraph
         if (matterEvent.SupersededByEventId.HasValue)
         {
             if (matterEvent.Status != EventStatus.Superseded ||
-                !byId.TryGetValue(matterEvent.SupersededByEventId.Value, out var replacement) ||
+                matterEvent.SupersededByEventId == matterEvent.Id ||
+                !eventsById.TryGetValue(matterEvent.SupersededByEventId.Value, out var replacement) ||
                 replacement.SupersedesEventId != matterEvent.Id)
             {
                 throw new InvalidOperationException("Persisted superseded event state is invalid.");

@@ -25,7 +25,14 @@ internal static class PostgresMatterWriter
                 jurisdiction = EXCLUDED.jurisdiction,
                 updated_at = EXCLUDED.updated_at
             WHERE casemesh.matters.created_at = EXCLUDED.created_at
-              AND casemesh.matters.updated_at <= EXCLUDED.updated_at;
+              AND (
+                  casemesh.matters.updated_at < EXCLUDED.updated_at
+                  OR (
+                      casemesh.matters.updated_at = EXCLUDED.updated_at
+                      AND casemesh.matters.matter_type = EXCLUDED.matter_type
+                      AND casemesh.matters.title = EXCLUDED.title
+                      AND casemesh.matters.status = EXCLUDED.status
+                      AND casemesh.matters.jurisdiction IS NOT DISTINCT FROM EXCLUDED.jurisdiction));
             """, cancellationToken,
             tenantId, matterId, evidence.Matter.MatterType, evidence.Matter.Title, evidence.Matter.Status,
             evidence.Matter.Jurisdiction, evidence.Matter.CreatedAt, evidence.Matter.UpdatedAt);
@@ -39,12 +46,19 @@ internal static class PostgresMatterWriter
                      .GroupBy(item => new { item.OriginalObjectId, item.ContentSha256 })
                      .Select(group => group.Key))
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var originalWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.original_objects (
                     tenant_id, matter_id, original_object_id, content_sha256)
                 VALUES ($1, $2, $3, $4)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, original_object_id) DO UPDATE
+                SET original_object_id = EXCLUDED.original_object_id
+                WHERE casemesh.original_objects.content_sha256 = EXCLUDED.content_sha256;
                 """, cancellationToken, tenantId, matterId, original.OriginalObjectId, original.ContentSha256);
+            if (originalWriteCount != 1)
+            {
+                throw new InvalidOperationException(
+                    "An original-object id cannot be reused for a different content hash.");
+            }
         }
 
         foreach (var documentId in evidence.DocumentVersions.Select(item => item.DocumentId).Distinct())
@@ -58,74 +72,125 @@ internal static class PostgresMatterWriter
 
         foreach (var version in evidence.DocumentVersions)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var versionWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.document_versions (
                     tenant_id, matter_id, document_id, document_version_id, original_object_id, content_sha256)
                 VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, document_version_id) DO UPDATE
+                SET document_version_id = EXCLUDED.document_version_id
+                WHERE casemesh.document_versions.document_id = EXCLUDED.document_id
+                  AND casemesh.document_versions.original_object_id = EXCLUDED.original_object_id
+                  AND casemesh.document_versions.content_sha256 = EXCLUDED.content_sha256;
                 """, cancellationToken,
                 tenantId, matterId, version.DocumentId, version.DocumentVersionId,
                 version.OriginalObjectId, version.ContentSha256);
+            if (versionWriteCount != 1)
+            {
+                throw new InvalidOperationException(
+                    "A document-version id cannot be reused for different immutable provenance.");
+            }
         }
 
         foreach (var span in evidence.SourceSpans)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var spanWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.source_spans (
                     tenant_id, matter_id, source_span_id, document_version_id, page_number,
                     text_start, text_end, extracted_text, extracted_text_digest, parser_version,
                     extraction_confidence)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, source_span_id) DO UPDATE
+                SET source_span_id = EXCLUDED.source_span_id
+                WHERE casemesh.source_spans.document_version_id = EXCLUDED.document_version_id
+                  AND casemesh.source_spans.page_number IS NOT DISTINCT FROM EXCLUDED.page_number
+                  AND casemesh.source_spans.text_start IS NOT DISTINCT FROM EXCLUDED.text_start
+                  AND casemesh.source_spans.text_end IS NOT DISTINCT FROM EXCLUDED.text_end
+                  AND casemesh.source_spans.extracted_text = EXCLUDED.extracted_text
+                  AND casemesh.source_spans.extracted_text_digest = EXCLUDED.extracted_text_digest
+                  AND casemesh.source_spans.parser_version = EXCLUDED.parser_version
+                  AND casemesh.source_spans.extraction_confidence IS NOT DISTINCT FROM EXCLUDED.extraction_confidence;
                 """, cancellationToken,
                 tenantId, matterId, span.Id, span.DocumentVersionId, span.PageNumber,
                 span.TextStart, span.TextEnd, span.ExtractedText, span.ExtractedTextDigest,
                 span.ParserVersion, span.ExtractionConfidence);
+            if (spanWriteCount != 1)
+            {
+                throw new InvalidOperationException(
+                    "A source span id cannot be reused for different immutable provenance.");
+            }
         }
 
         foreach (var assertion in evidence.Assertions)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var assertionWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.assertions (
                     tenant_id, matter_id, assertion_id, subject_reference, predicate, value,
                     asserted_by, event_time, asserted_at, source_span_id, origin_class,
                     assertion_class, dispute_state, integrity_state, verification_state,
                     extraction_confidence, created_by_model, superseded_by_assertion_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULL)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                 ON CONFLICT (tenant_id, matter_id, assertion_id) DO UPDATE
                 SET dispute_state = EXCLUDED.dispute_state,
-                    verification_state = EXCLUDED.verification_state;
+                    verification_state = EXCLUDED.verification_state,
+                    superseded_by_assertion_id = EXCLUDED.superseded_by_assertion_id
+                WHERE casemesh.assertions.subject_reference = EXCLUDED.subject_reference
+                  AND casemesh.assertions.predicate = EXCLUDED.predicate
+                  AND casemesh.assertions.value = EXCLUDED.value
+                  AND casemesh.assertions.asserted_by = EXCLUDED.asserted_by
+                  AND casemesh.assertions.event_time IS NOT DISTINCT FROM EXCLUDED.event_time
+                  AND casemesh.assertions.asserted_at = EXCLUDED.asserted_at
+                  AND casemesh.assertions.source_span_id IS NOT DISTINCT FROM EXCLUDED.source_span_id
+                  AND casemesh.assertions.origin_class = EXCLUDED.origin_class
+                  AND casemesh.assertions.assertion_class = EXCLUDED.assertion_class
+                  AND casemesh.assertions.integrity_state = EXCLUDED.integrity_state
+                  AND casemesh.assertions.extraction_confidence IS NOT DISTINCT FROM EXCLUDED.extraction_confidence
+                  AND casemesh.assertions.created_by_model IS NOT DISTINCT FROM EXCLUDED.created_by_model
+                  AND (casemesh.assertions.superseded_by_assertion_id IS NULL
+                       OR casemesh.assertions.superseded_by_assertion_id = EXCLUDED.superseded_by_assertion_id);
                 """, cancellationToken,
                 tenantId, matterId, assertion.Id, assertion.SubjectReference, assertion.Predicate,
                 assertion.Value, assertion.AssertedBy, assertion.EventTime, assertion.AssertedAt,
                 assertion.SourceSpanId, (short)assertion.OriginClass, (short)assertion.AssertionClass,
                 (short)assertion.DisputeState, (short)assertion.IntegrityState,
-                (short)assertion.VerificationState, assertion.ExtractionConfidence, assertion.CreatedByModel);
-        }
-
-        foreach (var assertion in evidence.Assertions.Where(item => item.SupersededByAssertionId.HasValue))
-        {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
-                UPDATE casemesh.assertions
-                SET superseded_by_assertion_id = $4
-                WHERE tenant_id = $1 AND matter_id = $2 AND assertion_id = $3;
-                """, cancellationToken, tenantId, matterId, assertion.Id, assertion.SupersededByAssertionId);
+                (short)assertion.VerificationState, assertion.ExtractionConfidence, assertion.CreatedByModel,
+                assertion.SupersededByAssertionId);
+            if (assertionWriteCount != 1)
+            {
+                throw new InvalidOperationException(
+                    "An assertion id cannot overwrite immutable evidence or reverse supersession.");
+            }
         }
 
         foreach (var matterEvent in evidence.Events)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var eventWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.matter_events (
                     tenant_id, matter_id, event_id, event_type, start_time, end_time, label,
                     event_status, verification_state, supersedes_event_id, superseded_by_event_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NULL)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 ON CONFLICT (tenant_id, matter_id, event_id) DO UPDATE
                 SET event_status = EXCLUDED.event_status,
-                    verification_state = EXCLUDED.verification_state;
+                    verification_state = EXCLUDED.verification_state,
+                    supersedes_event_id = EXCLUDED.supersedes_event_id,
+                    superseded_by_event_id = EXCLUDED.superseded_by_event_id
+                WHERE casemesh.matter_events.event_type = EXCLUDED.event_type
+                  AND casemesh.matter_events.start_time IS NOT DISTINCT FROM EXCLUDED.start_time
+                  AND casemesh.matter_events.end_time IS NOT DISTINCT FROM EXCLUDED.end_time
+                  AND casemesh.matter_events.label = EXCLUDED.label
+                  AND (casemesh.matter_events.supersedes_event_id IS NULL
+                       OR casemesh.matter_events.supersedes_event_id = EXCLUDED.supersedes_event_id)
+                  AND (casemesh.matter_events.superseded_by_event_id IS NULL
+                       OR casemesh.matter_events.superseded_by_event_id = EXCLUDED.superseded_by_event_id);
                 """, cancellationToken,
                 tenantId, matterId, matterEvent.Id, matterEvent.EventType, matterEvent.StartTime,
                 matterEvent.EndTime, matterEvent.Label, (short)matterEvent.Status,
-                (short)matterEvent.VerificationState);
+                (short)matterEvent.VerificationState, matterEvent.SupersedesEventId,
+                matterEvent.SupersededByEventId);
+            if (eventWriteCount != 1)
+            {
+                throw new InvalidOperationException(
+                    "An event id cannot overwrite immutable history or reverse supersession.");
+            }
 
             for (var ordinal = 0; ordinal < matterEvent.ParticipantIds.Count; ordinal++)
             {
@@ -137,16 +202,6 @@ internal static class PostgresMatterWriter
                     """, cancellationToken,
                     tenantId, matterId, matterEvent.Id, matterEvent.ParticipantIds[ordinal], ordinal);
             }
-        }
-
-        foreach (var matterEvent in evidence.Events)
-        {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
-                UPDATE casemesh.matter_events
-                SET supersedes_event_id = $4, superseded_by_event_id = $5
-                WHERE tenant_id = $1 AND matter_id = $2 AND event_id = $3;
-                """, cancellationToken,
-                tenantId, matterId, matterEvent.Id, matterEvent.SupersedesEventId, matterEvent.SupersededByEventId);
         }
 
         foreach (var link in evidence.AssertionEventLinks)
@@ -162,17 +217,36 @@ internal static class PostgresMatterWriter
 
         foreach (var contradiction in evidence.Contradictions)
         {
-            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+            var contradictionWriteCount = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.contradictions (
                     tenant_id, matter_id, contradiction_id, assertion_a_id, assertion_b_id,
                     contradiction_type, detected_by, resolution_state, resolution_note, created_at, resolved_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (tenant_id, matter_id, contradiction_id) DO UPDATE
+                SET resolution_state = EXCLUDED.resolution_state,
+                    resolution_note = EXCLUDED.resolution_note,
+                    resolved_at = EXCLUDED.resolved_at
+                WHERE casemesh.contradictions.assertion_a_id = EXCLUDED.assertion_a_id
+                  AND casemesh.contradictions.assertion_b_id = EXCLUDED.assertion_b_id
+                  AND casemesh.contradictions.contradiction_type = EXCLUDED.contradiction_type
+                  AND casemesh.contradictions.detected_by = EXCLUDED.detected_by
+                  AND casemesh.contradictions.created_at = EXCLUDED.created_at
+                  AND (
+                      (casemesh.contradictions.resolution_state = 0 AND EXCLUDED.resolution_state <> 0)
+                      OR (
+                          casemesh.contradictions.resolution_state = EXCLUDED.resolution_state
+                          AND casemesh.contradictions.resolution_note IS NOT DISTINCT FROM EXCLUDED.resolution_note
+                          AND casemesh.contradictions.resolved_at IS NOT DISTINCT FROM EXCLUDED.resolved_at));
                 """, cancellationToken,
                 tenantId, matterId, contradiction.Id, contradiction.AssertionAId,
                 contradiction.AssertionBId, (short)contradiction.Type, contradiction.DetectedBy,
                 (short)contradiction.ResolutionState, contradiction.ResolutionNote,
                 contradiction.CreatedAt, contradiction.ResolvedAt);
+            if (contradictionWriteCount != 1)
+            {
+                throw new InvalidOperationException(
+                    "A contradiction id cannot overwrite its immutable evidence or reverse a resolution.");
+            }
         }
 
         foreach (var node in evidence.AnalysisNodes)

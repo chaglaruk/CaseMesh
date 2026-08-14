@@ -130,6 +130,11 @@ public sealed class PostgresMatterStore : IAsyncDisposable
         Func<NpgsqlConnection, NpgsqlTransaction, Task<T>> operation,
         CancellationToken cancellationToken)
     {
+        if (tenantId.Value == Guid.Empty)
+        {
+            throw new ArgumentException("Tenant id is required.", nameof(tenantId));
+        }
+
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await RejectRlsBypassRoleAsync(connection, cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -174,13 +179,16 @@ public sealed class PostgresMatterStore : IAsyncDisposable
     {
         foreach (var value in values)
         {
-            if (value is null)
+            var databaseValue = value is DateTimeOffset timestamp
+                ? timestamp.ToUniversalTime()
+                : value;
+            if (databaseValue is null)
             {
                 command.Parameters.Add(new NpgsqlParameter { Value = DBNull.Value, NpgsqlDbType = NpgsqlDbType.Unknown });
             }
             else
             {
-                command.Parameters.AddWithValue(value);
+                command.Parameters.AddWithValue(databaseValue);
             }
         }
     }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using CaseMesh.Core.Models;
@@ -474,12 +475,14 @@ public sealed partial class MatterEvidenceGraph
         }
     }
 
-    private static void RequireDefinedEnum<TEnum>(TEnum value)
+    private static void RequireDefinedEnum<TEnum>(
+        TEnum value,
+        [CallerArgumentExpression(nameof(value))] string? parameterName = null)
         where TEnum : struct, Enum
     {
         if (!Enum.IsDefined(value))
         {
-            throw new ArgumentOutOfRangeException(nameof(value), value, "A defined enum value is required.");
+            throw new ArgumentOutOfRangeException(parameterName, value, "A defined enum value is required.");
         }
     }
 

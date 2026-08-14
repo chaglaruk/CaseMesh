@@ -16,7 +16,7 @@ internal static class PostgresMatterReader
         CancellationToken cancellationToken)
     {
         await using var batch = new NpgsqlBatch(connection, transaction);
-        foreach (var statement in ReadSql.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var statement in ReadStatements)
         {
             var batchCommand = new NpgsqlBatchCommand(statement);
             batchCommand.Parameters.AddWithValue(tenantId.Value);
@@ -310,86 +310,33 @@ internal static class PostgresMatterReader
         return groups.ToDictionary(item => item.Key, item => (IReadOnlyList<Guid>)item.Value.AsReadOnly());
     }
 
-    private const string ReadSql = """
-        SELECT matter_id, tenant_id, matter_type, title, status, jurisdiction, created_at, updated_at
-        FROM casemesh.matters WHERE tenant_id = $1 AND matter_id = $2;
-
-        SELECT document_id, document_version_id, original_object_id, content_sha256
-        FROM casemesh.document_versions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY document_version_id;
-
-        SELECT source_span_id, document_version_id, page_number, text_start, text_end,
-               extracted_text, extracted_text_digest, parser_version, extraction_confidence
-        FROM casemesh.source_spans WHERE tenant_id = $1 AND matter_id = $2 ORDER BY source_span_id;
-
-        SELECT assertion_id, subject_reference, predicate, value, asserted_by, event_time, asserted_at,
-               source_span_id, origin_class, assertion_class, dispute_state, integrity_state,
-               verification_state, extraction_confidence, created_by_model, superseded_by_assertion_id
-        FROM casemesh.assertions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY assertion_id;
-
-        SELECT event_id, participant_id
-        FROM casemesh.matter_event_participants
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY event_id, ordinal;
-
-        SELECT event_id, event_type, start_time, end_time, label, event_status, verification_state,
-               supersedes_event_id, superseded_by_event_id
-        FROM casemesh.matter_events WHERE tenant_id = $1 AND matter_id = $2 ORDER BY event_id;
-
-        SELECT link_id, assertion_id, event_id, relation
-        FROM casemesh.assertion_event_links WHERE tenant_id = $1 AND matter_id = $2 ORDER BY link_id;
-
-        SELECT contradiction_id, assertion_a_id, assertion_b_id, contradiction_type, detected_by,
-               resolution_state, resolution_note, created_at, resolved_at
-        FROM casemesh.contradictions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY contradiction_id;
-
-        SELECT analysis_node_id, source_span_id
-        FROM casemesh.analysis_node_sources
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY analysis_node_id, ordinal;
-
-        SELECT analysis_node_id, analysis_type, provider, model, prompt_version, output,
-               generated_at, verification_state, superseded_by_analysis_node_id
-        FROM casemesh.analysis_nodes WHERE tenant_id = $1 AND matter_id = $2 ORDER BY analysis_node_id;
-
-        SELECT audit_event_id, audit_kind, entity_type, entity_id, replacement_entity_id,
-               actor, change_summary, occurred_at
-        FROM casemesh.audit_events WHERE tenant_id = $1 AND matter_id = $2 ORDER BY occurred_at, audit_event_id;
-
-        SELECT employment_profile_id, assertion_id FROM casemesh.employment_profile_assertions
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY employment_profile_id, assertion_id;
-        SELECT employment_profile_id, employer_reference, role_title, employment_started_on,
-               employment_ended_on, evidence_review_state
-        FROM casemesh.employment_profiles WHERE tenant_id = $1 AND matter_id = $2 ORDER BY employment_profile_id;
-
-        SELECT employment_term_id, assertion_id FROM casemesh.employment_term_assertions
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY employment_term_id, assertion_id;
-        SELECT employment_term_id, term_kind, term_value, effective_from, effective_to,
-               supersedes_employment_term_id
-        FROM casemesh.employment_terms WHERE tenant_id = $1 AND matter_id = $2 ORDER BY employment_term_id;
-
-        SELECT health_absence_record_id, assertion_id FROM casemesh.health_absence_assertions
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY health_absence_record_id, assertion_id;
-        SELECT health_absence_record_id, event_id FROM casemesh.health_absence_events
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY health_absence_record_id, event_id;
-        SELECT health_absence_record_id, record_kind, neutral_label, evidence_review_state
-        FROM casemesh.health_absence_records WHERE tenant_id = $1 AND matter_id = $2 ORDER BY health_absence_record_id;
-
-        SELECT adjustment_request_id, evidence_role, assertion_id FROM casemesh.adjustment_request_assertions
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY adjustment_request_id, evidence_role, assertion_id;
-        SELECT adjustment_request_id, neutral_label, response_status
-        FROM casemesh.adjustment_requests WHERE tenant_id = $1 AND matter_id = $2 ORDER BY adjustment_request_id;
-
-        SELECT workplace_process_id, assertion_id FROM casemesh.workplace_process_assertions
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY workplace_process_id, assertion_id;
-        SELECT workplace_process_id, event_id FROM casemesh.workplace_process_events
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY workplace_process_id, event_id;
-        SELECT workplace_process_id, process_kind, stage_label, process_status,
-               supersedes_workplace_process_id, supersession_audit_event_id
-        FROM casemesh.workplace_processes WHERE tenant_id = $1 AND matter_id = $2 ORDER BY workplace_process_id;
-
-        SELECT acas_process_state_id, assertion_id FROM casemesh.acas_process_assertions
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY acas_process_state_id, assertion_id;
-        SELECT acas_process_state_id, event_id FROM casemesh.acas_process_events
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY acas_process_state_id, event_id;
-        SELECT acas_process_state_id, acas_stage FROM casemesh.acas_process_states
-        WHERE tenant_id = $1 AND matter_id = $2 ORDER BY acas_process_state_id;
-        """;
+    private static readonly string[] ReadStatements =
+    [
+        """SELECT matter_id, tenant_id, matter_type, title, status, jurisdiction, created_at, updated_at FROM casemesh.matters WHERE tenant_id = $1 AND matter_id = $2""",
+        """SELECT document_id, document_version_id, original_object_id, content_sha256 FROM casemesh.document_versions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY document_version_id""",
+        """SELECT source_span_id, document_version_id, page_number, text_start, text_end, extracted_text, extracted_text_digest, parser_version, extraction_confidence FROM casemesh.source_spans WHERE tenant_id = $1 AND matter_id = $2 ORDER BY source_span_id""",
+        """SELECT assertion_id, subject_reference, predicate, value, asserted_by, event_time, asserted_at, source_span_id, origin_class, assertion_class, dispute_state, integrity_state, verification_state, extraction_confidence, created_by_model, superseded_by_assertion_id FROM casemesh.assertions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY assertion_id""",
+        """SELECT event_id, participant_id FROM casemesh.matter_event_participants WHERE tenant_id = $1 AND matter_id = $2 ORDER BY event_id, ordinal""",
+        """SELECT event_id, event_type, start_time, end_time, label, event_status, verification_state, supersedes_event_id, superseded_by_event_id FROM casemesh.matter_events WHERE tenant_id = $1 AND matter_id = $2 ORDER BY event_id""",
+        """SELECT link_id, assertion_id, event_id, relation FROM casemesh.assertion_event_links WHERE tenant_id = $1 AND matter_id = $2 ORDER BY link_id""",
+        """SELECT contradiction_id, assertion_a_id, assertion_b_id, contradiction_type, detected_by, resolution_state, resolution_note, created_at, resolved_at FROM casemesh.contradictions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY contradiction_id""",
+        """SELECT analysis_node_id, source_span_id FROM casemesh.analysis_node_sources WHERE tenant_id = $1 AND matter_id = $2 ORDER BY analysis_node_id, ordinal""",
+        """SELECT analysis_node_id, analysis_type, provider, model, prompt_version, output, generated_at, verification_state, superseded_by_analysis_node_id FROM casemesh.analysis_nodes WHERE tenant_id = $1 AND matter_id = $2 ORDER BY analysis_node_id""",
+        """SELECT audit_event_id, audit_kind, entity_type, entity_id, replacement_entity_id, actor, change_summary, occurred_at FROM casemesh.audit_events WHERE tenant_id = $1 AND matter_id = $2 ORDER BY occurred_at, audit_event_id""",
+        """SELECT employment_profile_id, assertion_id FROM casemesh.employment_profile_assertions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY employment_profile_id, assertion_id""",
+        """SELECT employment_profile_id, employer_reference, role_title, employment_started_on, employment_ended_on, evidence_review_state FROM casemesh.employment_profiles WHERE tenant_id = $1 AND matter_id = $2 ORDER BY employment_profile_id""",
+        """SELECT employment_term_id, assertion_id FROM casemesh.employment_term_assertions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY employment_term_id, assertion_id""",
+        """SELECT employment_term_id, term_kind, term_value, effective_from, effective_to, supersedes_employment_term_id FROM casemesh.employment_terms WHERE tenant_id = $1 AND matter_id = $2 ORDER BY employment_term_id""",
+        """SELECT health_absence_record_id, assertion_id FROM casemesh.health_absence_assertions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY health_absence_record_id, assertion_id""",
+        """SELECT health_absence_record_id, event_id FROM casemesh.health_absence_events WHERE tenant_id = $1 AND matter_id = $2 ORDER BY health_absence_record_id, event_id""",
+        """SELECT health_absence_record_id, record_kind, neutral_label, evidence_review_state FROM casemesh.health_absence_records WHERE tenant_id = $1 AND matter_id = $2 ORDER BY health_absence_record_id""",
+        """SELECT adjustment_request_id, evidence_role, assertion_id FROM casemesh.adjustment_request_assertions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY adjustment_request_id, evidence_role, assertion_id""",
+        """SELECT adjustment_request_id, neutral_label, response_status FROM casemesh.adjustment_requests WHERE tenant_id = $1 AND matter_id = $2 ORDER BY adjustment_request_id""",
+        """SELECT workplace_process_id, assertion_id FROM casemesh.workplace_process_assertions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY workplace_process_id, assertion_id""",
+        """SELECT workplace_process_id, event_id FROM casemesh.workplace_process_events WHERE tenant_id = $1 AND matter_id = $2 ORDER BY workplace_process_id, event_id""",
+        """SELECT workplace_process_id, process_kind, stage_label, process_status, supersedes_workplace_process_id, supersession_audit_event_id FROM casemesh.workplace_processes WHERE tenant_id = $1 AND matter_id = $2 ORDER BY workplace_process_id""",
+        """SELECT acas_process_state_id, assertion_id FROM casemesh.acas_process_assertions WHERE tenant_id = $1 AND matter_id = $2 ORDER BY acas_process_state_id, assertion_id""",
+        """SELECT acas_process_state_id, event_id FROM casemesh.acas_process_events WHERE tenant_id = $1 AND matter_id = $2 ORDER BY acas_process_state_id, event_id""",
+        """SELECT acas_process_state_id, acas_stage FROM casemesh.acas_process_states WHERE tenant_id = $1 AND matter_id = $2 ORDER BY acas_process_state_id"""
+    ];
 }

@@ -107,7 +107,8 @@ public sealed partial class WorkplaceMatter
 
         foreach (var term in workplace._employmentTerms.Values.Where(item => item.SupersedesEmploymentTermId.HasValue))
         {
-            if (!workplace._employmentTerms.TryGetValue(term.SupersedesEmploymentTermId!.Value, out var previous) ||
+            if (term.SupersedesEmploymentTermId == term.Id ||
+                !workplace._employmentTerms.TryGetValue(term.SupersedesEmploymentTermId!.Value, out var previous) ||
                 previous.Kind != term.Kind)
             {
                 throw new InvalidOperationException("Persisted employment-term supersession is invalid.");
@@ -186,7 +187,8 @@ public sealed partial class WorkplaceMatter
         {
             if (process.SupersedesWorkplaceProcessId.HasValue)
             {
-                if (!workplace._workplaceProcesses.TryGetValue(process.SupersedesWorkplaceProcessId.Value, out var previous) ||
+                if (process.SupersedesWorkplaceProcessId == process.Id ||
+                    !workplace._workplaceProcesses.TryGetValue(process.SupersedesWorkplaceProcessId.Value, out var previous) ||
                     previous.Kind != process.Kind)
                 {
                     throw new InvalidOperationException("Persisted workplace-process supersession is invalid.");
