@@ -277,7 +277,8 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
         {
             BucketName = fixture.BucketName,
             Key = fixture.KeyFor(scope),
-            InputStream = Stream(Bytes("synthetic-tampered"))
+            InputStream = Stream(Bytes("synthetic-tampered")),
+            UseChunkEncoding = false
         });
 
         await Assert.ThrowsAsync<OriginalEvidenceIntegrityException>(() =>

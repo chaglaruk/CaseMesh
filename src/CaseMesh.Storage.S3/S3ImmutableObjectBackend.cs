@@ -52,6 +52,7 @@ internal sealed class S3ImmutableObjectBackend : IImmutableObjectBackend
             Key = address.ObjectKey,
             InputStream = content,
             AutoCloseStream = false,
+            UseChunkEncoding = false,
             IfNoneMatch = "*"
         };
         request.Headers.ContentLength = byteLength;
