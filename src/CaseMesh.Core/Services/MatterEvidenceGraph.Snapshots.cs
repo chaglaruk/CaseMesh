@@ -374,19 +374,37 @@ public sealed partial class MatterEvidenceGraph
         string label)
     {
         var nextById = links.ToDictionary(item => item.Id, item => item.NextId);
+        var completed = new HashSet<Guid>();
         foreach (var startId in nextById.Keys)
         {
+            if (completed.Contains(startId))
+            {
+                continue;
+            }
+
             var visited = new HashSet<Guid>();
             var currentId = startId;
-            while (nextById.TryGetValue(currentId, out var nextId) && nextId.HasValue)
+            while (nextById.TryGetValue(currentId, out var nextId))
             {
+                if (completed.Contains(currentId))
+                {
+                    break;
+                }
+
                 if (!visited.Add(currentId))
                 {
                     throw new InvalidOperationException($"Persisted {label} supersession contains a cycle.");
                 }
 
+                if (!nextId.HasValue)
+                {
+                    break;
+                }
+
                 currentId = nextId.Value;
             }
+
+            completed.UnionWith(visited);
         }
     }
 
