@@ -160,6 +160,7 @@ CREATE TABLE casemesh.contradictions (
     created_at timestamptz NOT NULL,
     resolved_at timestamptz NULL,
     PRIMARY KEY (tenant_id, matter_id, contradiction_id),
+    FOREIGN KEY (tenant_id, matter_id) REFERENCES casemesh.matters (tenant_id, matter_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, assertion_a_id)
         REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY (tenant_id, matter_id, assertion_b_id)
