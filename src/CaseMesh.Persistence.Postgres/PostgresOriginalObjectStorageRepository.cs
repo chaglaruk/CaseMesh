@@ -65,7 +65,8 @@ public sealed class PostgresOriginalObjectStorageRepository : IOriginalObjectSto
                     tenant_id, matter_id, original_object_id, backend_kind,
                     bucket_name, object_key, content_sha256, byte_length, stored_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT DO NOTHING
+                RETURNING stored_at;
                 """, connection, transaction);
             PostgresMatterStore.AddParameters(
                 command,
@@ -80,10 +81,10 @@ public sealed class PostgresOriginalObjectStorageRepository : IOriginalObjectSto
                 metadata.StoredAt);
             try
             {
-                var inserted = await command.ExecuteNonQueryAsync(cancellationToken);
-                if (inserted == 1)
+                var inserted = await command.ExecuteScalarAsync(cancellationToken);
+                if (inserted is DateTimeOffset insertedAt)
                 {
-                    return metadata;
+                    return metadata with { StoredAt = insertedAt };
                 }
 
                 await using var verify = new NpgsqlCommand("""
