@@ -108,7 +108,7 @@ internal sealed class S3ImmutableObjectBackend : IImmutableObjectBackend
         CancellationToken cancellationToken)
     {
         RequireConfiguredAddress(address);
-        await EnsureBucketIsUnversionedAsync(cancellationToken);
+        await RevalidateBucketIsUnversionedAsync(cancellationToken);
         try
         {
             await _client.DeleteObjectAsync(
@@ -182,6 +182,19 @@ internal sealed class S3ImmutableObjectBackend : IImmutableObjectBackend
             throw new OriginalEvidenceAvailabilityException(
                 "The private object backend bucket versioning state could not be verified fail-closed.",
                 exception);
+        }
+    }
+
+    private async Task RevalidateBucketIsUnversionedAsync(CancellationToken cancellationToken)
+    {
+        await _bucketValidationGate.WaitAsync(cancellationToken);
+        try
+        {
+            await ValidateBucketVersioningAsync(cancellationToken);
+        }
+        finally
+        {
+            _bucketValidationGate.Release();
         }
     }
 

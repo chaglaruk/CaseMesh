@@ -354,6 +354,7 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
             scope.OriginalObjectId,
             Stream(scope.Bytes));
         Assert.NotSame(successfulTask, await Task.WhenAny(successfulTask, Task.Delay(TimeSpan.FromMilliseconds(200))));
+        Assert.Null(await fixture.ReadStoredKeyAsync(scope));
 
         gatedFailure.ContinueSave.SetResult();
         await Assert.ThrowsAsync<InvalidOperationException>(() => failingTask);
@@ -535,6 +536,34 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
         Assert.Contains(response.StatusCode, new[] { HttpStatusCode.Forbidden, HttpStatusCode.Unauthorized, HttpStatusCode.NotFound });
     }
 
+    [StorageFact]
+    public async Task Versioning_enabled_after_initial_validation_blocks_physical_deletion()
+    {
+        var scope = await fixture.CreateScopeAsync(Bytes("synthetic-versioning-change"));
+        var bucketName = $"{fixture.BucketName}-versioning";
+        await fixture.S3.PutBucketAsync(new PutBucketRequest { BucketName = bucketName });
+        try
+        {
+            await using var store = fixture.CreateStore(bucketName);
+            await store.StoreAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId, Stream(scope.Bytes));
+            await fixture.S3.PutBucketVersioningAsync(new PutBucketVersioningRequest
+            {
+                BucketName = bucketName,
+                VersioningConfig = new S3BucketVersioningConfig { Status = VersionStatus.Enabled }
+            });
+
+            await Assert.ThrowsAsync<OriginalEvidenceConflictException>(() =>
+                store.DeleteOriginalAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId));
+
+            Assert.NotNull(await store.GetMetadataAsync(scope.TenantId, scope.MatterId, scope.OriginalObjectId));
+            Assert.True(await fixture.PhysicalExistsAsync(bucketName, scope));
+        }
+        finally
+        {
+            await fixture.DeleteVersionedBucketAsync(bucketName);
+        }
+    }
+
     private static byte[] Bytes(string value) => System.Text.Encoding.UTF8.GetBytes(value);
     private static MemoryStream Stream(byte[] bytes) => new(bytes, writable: false);
 
@@ -604,7 +633,7 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
             OriginalObjectStorageMetadata metadata,
             CancellationToken cancellationToken)
         {
-            SaveReached.SetResult();
+            SaveReached.TrySetResult();
             await ContinueSave.Task.WaitAsync(cancellationToken);
             throw new InvalidOperationException("Synthetic gated metadata failure.");
         }

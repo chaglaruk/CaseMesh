@@ -163,7 +163,19 @@ public sealed class StorageIntegrationFixture : IAsyncLifetime
         await dropRole.ExecuteNonQueryAsync();
     }
 
-    internal S3OriginalEvidenceStore CreateStore() => new(AppConnectionString, Options);
+    internal S3OriginalEvidenceStore CreateStore() => CreateStore(BucketName);
+
+    internal S3OriginalEvidenceStore CreateStore(string bucketName) => new(
+        AppConnectionString,
+        new S3ObjectStorageOptions
+        {
+            Endpoint = Options.Endpoint,
+            Region = Options.Region,
+            BucketName = bucketName,
+            AccessKey = Options.AccessKey,
+            SecretKey = Options.SecretKey,
+            AllowInsecureLocalEndpoint = Options.AllowInsecureLocalEndpoint
+        });
 
     internal async Task<SyntheticObjectScope> CreateScopeAsync(
         byte[] bytes,
@@ -197,17 +209,49 @@ public sealed class StorageIntegrationFixture : IAsyncLifetime
     internal string KeyFor(SyntheticObjectScope scope) =>
         $"v1/tenants/{scope.TenantId.Value:D}/matters/{scope.MatterId:D}/originals/{scope.OriginalObjectId:D}";
 
-    internal async Task<bool> PhysicalExistsAsync(SyntheticObjectScope scope)
+    internal Task<bool> PhysicalExistsAsync(SyntheticObjectScope scope) =>
+        PhysicalExistsAsync(BucketName, scope);
+
+    internal async Task<bool> PhysicalExistsAsync(string bucketName, SyntheticObjectScope scope)
     {
         try
         {
-            await S3.GetObjectMetadataAsync(BucketName, KeyFor(scope));
+            await S3.GetObjectMetadataAsync(bucketName, KeyFor(scope));
             return true;
         }
         catch (AmazonS3Exception exception) when (exception.StatusCode == HttpStatusCode.NotFound)
         {
             return false;
         }
+    }
+
+    internal async Task DeleteVersionedBucketAsync(string bucketName)
+    {
+        string? keyMarker = null;
+        string? versionIdMarker = null;
+        do
+        {
+            var listed = await S3.ListVersionsAsync(new ListVersionsRequest
+            {
+                BucketName = bucketName,
+                KeyMarker = keyMarker,
+                VersionIdMarker = versionIdMarker
+            });
+            foreach (var version in listed.Versions ?? [])
+            {
+                await S3.DeleteObjectAsync(new DeleteObjectRequest
+                {
+                    BucketName = bucketName,
+                    Key = version.Key,
+                    VersionId = version.VersionId
+                });
+            }
+
+            keyMarker = listed.IsTruncated == true ? listed.NextKeyMarker : null;
+            versionIdMarker = listed.IsTruncated == true ? listed.NextVersionIdMarker : null;
+        } while (keyMarker is not null);
+
+        await S3.DeleteBucketAsync(bucketName);
     }
 
     internal async Task<string?> ReadStoredKeyAsync(SyntheticObjectScope scope)
