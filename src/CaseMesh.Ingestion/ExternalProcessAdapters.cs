@@ -189,8 +189,20 @@ public sealed class PopplerPdfPageRasterizer : IPdfPageRasterizer
         }
 
         return Directory.GetFiles(outputDirectory, "page-*.png")
-            .OrderBy(path => path, StringComparer.Ordinal)
+            .OrderBy(ParsePageNumber)
+            .ThenBy(path => path, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    internal static int ParsePageNumber(string path)
+    {
+        var name = Path.GetFileNameWithoutExtension(path);
+        var separator = name.LastIndexOf('-');
+        if (separator < 0 || !int.TryParse(name.AsSpan(separator + 1), NumberStyles.None,
+                CultureInfo.InvariantCulture, out var pageNumber) || pageNumber <= 0)
+            throw new EvidenceIngestionException(IngestionFailureKind.OcrFailure,
+                "invalid-raster-page-name", "The PDF rasterizer returned an invalid page identity.");
+        return pageNumber;
     }
 }
 

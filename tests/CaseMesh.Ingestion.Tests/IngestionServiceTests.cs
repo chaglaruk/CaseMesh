@@ -171,6 +171,24 @@ public sealed class IngestionServiceTests
     }
 
     [Fact]
+    public async Task Text_allowlist_rejects_utf16_bom_and_png_without_first_ihdr_chunk()
+    {
+        var utf16 = TestScope.Create(Encoding.Unicode.GetPreamble()
+            .Concat(Encoding.Unicode.GetBytes("Synthetic UTF-16 text.")).ToArray());
+        var encodingFailure = await Assert.ThrowsAsync<EvidenceIngestionException>(() =>
+            CreateService(utf16, new FakeRepository()).IngestAsync(utf16.Document));
+        Assert.Equal(IngestionFailureKind.UnsupportedMedia, encodingFailure.Kind);
+
+        var pngBytes = SyntheticPng().ToArray();
+        "IDAT"u8.CopyTo(pngBytes.AsSpan(12, 4));
+        var png = TestScope.Create(pngBytes);
+        var pngFailure = await Assert.ThrowsAsync<EvidenceIngestionException>(() =>
+            CreateService(png, new FakeRepository()).IngestAsync(png.Document));
+        Assert.Equal(IngestionFailureKind.MalformedMedia, pngFailure.Kind);
+        Assert.Equal("malformed-png", pngFailure.Code);
+    }
+
+    [Fact]
     public async Task Malware_and_scanner_unavailability_fail_closed_before_parse()
     {
         var bytes = Encoding.UTF8.GetBytes("EICAR synthetic scanner fixture");
@@ -421,12 +439,12 @@ public sealed class IngestionServiceTests
         public Task<CompletedIngestion?> FindCompletedAsync(IngestionDocument document, string pipelineFingerprint, CancellationToken cancellationToken) =>
             Task.FromResult(Completed.GetValueOrDefault(Key(document, pipelineFingerprint)));
         public Task<CompletedIngestion> SaveCompletedAsync(IngestionAttempt attempt, EvidenceMediaType mediaType,
-            string parserProvider, string parserVersion, string? ocrProvider, string? ocrVersion,
+            SpanSetProvenance provenance,
             IReadOnlyList<ExtractedRegion> regions, CancellationToken cancellationToken)
         {
             if (CompletedFailure is not null) throw CompletedFailure;
-            ParserProvider = parserProvider;
-            OcrProvider = ocrProvider;
+            ParserProvider = provenance.ParserProvider;
+            OcrProvider = provenance.OcrProvider;
             var result = new CompletedIngestion(attempt.AttemptId, attempt.SpanSetId!.Value, mediaType,
                 attempt.ByteLength, attempt.PipelineFingerprint, regions, false);
             Completed.Add(Key(attempt.Document, attempt.PipelineFingerprint), result);

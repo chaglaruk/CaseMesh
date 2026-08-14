@@ -172,6 +172,12 @@ public sealed record CompletedIngestion(
     IReadOnlyList<ExtractedRegion> Regions,
     bool WasAlreadyCompleted);
 
+public sealed record SpanSetProvenance(
+    string ParserProvider,
+    string ParserVersion,
+    string? OcrProvider,
+    string? OcrVersion);
+
 public interface IIngestionRepository
 {
     Task<CompletedIngestion?> FindCompletedAsync(
@@ -182,10 +188,7 @@ public interface IIngestionRepository
     Task<CompletedIngestion> SaveCompletedAsync(
         IngestionAttempt attempt,
         EvidenceMediaType mediaType,
-        string parserProvider,
-        string parserVersion,
-        string? ocrProvider,
-        string? ocrVersion,
+        SpanSetProvenance provenance,
         IReadOnlyList<ExtractedRegion> regions,
         CancellationToken cancellationToken);
 

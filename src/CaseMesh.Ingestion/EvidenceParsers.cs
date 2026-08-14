@@ -108,6 +108,17 @@ internal static class EvidenceParsers
                 ?? throw new InvalidDataException("DOCX has no document body.");
             var regions = new List<ExtractedRegion>();
             var tables = body.Descendants<Table>().ToList();
+            var cellCoordinates = new Dictionary<TableCell, (int Table, int Row, int Cell)>();
+            for (var tableIndex = 0; tableIndex < tables.Count; tableIndex++)
+            {
+                var rows = tables[tableIndex].Elements<TableRow>().ToList();
+                for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+                {
+                    var cells = rows[rowIndex].Elements<TableCell>().ToList();
+                    for (var cellIndex = 0; cellIndex < cells.Count; cellIndex++)
+                        cellCoordinates[cells[cellIndex]] = (tableIndex, rowIndex, cellIndex);
+                }
+            }
             var documentOffset = 0;
             var paragraphOrdinal = 0;
             foreach (var paragraph in body.Descendants<Paragraph>())
@@ -123,12 +134,8 @@ internal static class EvidenceParsers
                 }
                 else
                 {
-                    var row = cell.Ancestors<TableRow>().First();
-                    var table = row.Ancestors<Table>().First();
-                    var tableIndex = tables.IndexOf(table);
-                    var rowIndex = table.Elements<TableRow>().ToList().IndexOf(row);
-                    var cellIndex = row.Elements<TableCell>().ToList().IndexOf(cell);
-                    locator = $"docx:table:{tableIndex}:row:{rowIndex}:cell:{cellIndex}:paragraph:{paragraphOrdinal}";
+                    var coordinates = cellCoordinates[cell];
+                    locator = $"docx:table:{coordinates.Table}:row:{coordinates.Row}:cell:{coordinates.Cell}:paragraph:{paragraphOrdinal}";
                 }
                 regions.Add(CreateRegion(document, fingerprint, regions.Count, kind, locator, text,
                     ExtractionRoute.Native, "openxml", pipeline.ParserVersion, null,

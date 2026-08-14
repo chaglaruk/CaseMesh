@@ -42,10 +42,7 @@ public sealed class PostgresIngestionRepository : IIngestionRepository
     public Task<CompletedIngestion> SaveCompletedAsync(
         IngestionAttempt attempt,
         EvidenceMediaType mediaType,
-        string parserProvider,
-        string parserVersion,
-        string? ocrProvider,
-        string? ocrVersion,
+        SpanSetProvenance provenance,
         IReadOnlyList<ExtractedRegion> regions,
         CancellationToken cancellationToken) =>
         _store.InTenantTransactionAsync(attempt.Document.TenantId, async (connection, transaction) =>
@@ -64,14 +61,16 @@ public sealed class PostgresIngestionRepository : IIngestionRepository
                 """, cancellationToken,
                 attempt.Document.TenantId.Value, attempt.Document.MatterId, attempt.Document.DocumentId,
                 attempt.Document.DocumentVersionId, attempt.SpanSetId!.Value, attempt.PipelineFingerprint,
-                (short)mediaType, parserProvider, parserVersion, ocrProvider, ocrVersion, attempt.CompletedAt);
+                (short)mediaType, provenance.ParserProvider, provenance.ParserVersion,
+                provenance.OcrProvider, provenance.OcrVersion, attempt.CompletedAt);
 
             if (insertedSet == 0)
-                await RequireMatchingSpanSetAsync(connection, transaction, attempt, mediaType, parserProvider,
-                    parserVersion, ocrProvider, ocrVersion, cancellationToken);
+                await RequireMatchingSpanSetAsync(connection, transaction, attempt, mediaType, provenance,
+                    cancellationToken);
 
             foreach (var region in regions.OrderBy(item => item.Ordinal))
-                await SaveRegionAsync(connection, transaction, attempt, region, cancellationToken);
+                await SaveRegionAsync(connection, transaction, attempt, provenance.ParserVersion,
+                    region, cancellationToken);
 
             await SaveAttemptAsync(connection, transaction, attempt, cancellationToken);
             await SaveCurrentStateAsync(connection, transaction, attempt, cancellationToken);
@@ -128,6 +127,7 @@ public sealed class PostgresIngestionRepository : IIngestionRepository
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         IngestionAttempt attempt,
+        string parserVersion,
         ExtractedRegion region,
         CancellationToken cancellationToken)
     {
@@ -165,7 +165,7 @@ public sealed class PostgresIngestionRepository : IIngestionRepository
             """, cancellationToken,
             attempt.Document.TenantId.Value, attempt.Document.MatterId, region.SourceSpanId,
             attempt.Document.DocumentVersionId, region.PageNumber, region.TextStart, region.TextEnd,
-            region.Text, region.TextDigest, region.ProviderVersion, region.Confidence,
+            region.Text, region.TextDigest, parserVersion, region.Confidence,
             attempt.SpanSetId!.Value, region.Ordinal, (short)region.LocatorKind, region.Locator,
             (short)region.Route, region.Provider, region.ProviderVersion, region.BoundingBoxLeft,
             region.BoundingBoxTop, region.BoundingBoxWidth, region.BoundingBoxHeight);
@@ -267,10 +267,7 @@ public sealed class PostgresIngestionRepository : IIngestionRepository
         NpgsqlTransaction transaction,
         IngestionAttempt attempt,
         EvidenceMediaType mediaType,
-        string parserProvider,
-        string parserVersion,
-        string? ocrProvider,
-        string? ocrVersion,
+        SpanSetProvenance provenance,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand("""
@@ -282,7 +279,8 @@ public sealed class PostgresIngestionRepository : IIngestionRepository
             """, connection, transaction);
         PostgresMatterStore.AddParameters(command, attempt.Document.TenantId.Value, attempt.Document.MatterId,
             attempt.Document.DocumentId, attempt.Document.DocumentVersionId, attempt.SpanSetId!.Value,
-            attempt.PipelineFingerprint, (short)mediaType, parserProvider, parserVersion, ocrProvider, ocrVersion);
+            attempt.PipelineFingerprint, (short)mediaType, provenance.ParserProvider,
+            provenance.ParserVersion, provenance.OcrProvider, provenance.OcrVersion);
         if (await command.ExecuteScalarAsync(cancellationToken) is not int)
             throw new InvalidOperationException("The versioned ingestion span-set identity has divergent metadata.");
     }

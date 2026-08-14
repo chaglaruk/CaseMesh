@@ -97,11 +97,12 @@ public sealed class CommercialEvidenceIngestionService
             var attempt = new IngestionAttempt(attemptId, document, _pipeline.Fingerprint, startedAt,
                 completedAt, IngestionStatus.Completed, detected, byteLength, scan.Provider, scan.Version,
                 scan.ResultCode, null, null, spanSetId);
-            return await _repository.SaveCompletedAsync(attempt, detected.Value,
+            var provenance = new SpanSetProvenance(
                 regions.FirstOrDefault(region => region.Route == ExtractionRoute.Native)?.Provider ?? "none",
                 _pipeline.ParserVersion,
                 regions.Any(region => region.Route == ExtractionRoute.Ocr) ? _pipeline.OcrProvider : null,
-                regions.Any(region => region.Route == ExtractionRoute.Ocr) ? _pipeline.OcrVersion : null,
+                regions.Any(region => region.Route == ExtractionRoute.Ocr) ? _pipeline.OcrVersion : null);
+            return await _repository.SaveCompletedAsync(attempt, detected.Value, provenance,
                 regions, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

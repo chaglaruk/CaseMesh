@@ -81,9 +81,14 @@ public sealed class IngestionIntegrationTests(IngestionIntegrationFixture fixtur
         await using var transaction = await connection.BeginTransactionAsync();
         await SetTenantAsync(connection, transaction, scope.Document.TenantId);
         await using var provenance = new NpgsqlCommand("""
-            SELECT parser_provider, ocr_provider
-            FROM casemesh.ingestion_span_sets
-            WHERE tenant_id=$1 AND matter_id=$2 AND span_set_id=$3;
+            SELECT span_sets.parser_provider, span_sets.ocr_provider,
+                   spans.parser_version, spans.extraction_provider_version
+            FROM casemesh.ingestion_span_sets span_sets
+            JOIN casemesh.source_spans spans
+              ON spans.tenant_id=span_sets.tenant_id AND spans.matter_id=span_sets.matter_id
+             AND spans.span_set_id=span_sets.span_set_id
+            WHERE span_sets.tenant_id=$1 AND span_sets.matter_id=$2 AND span_sets.span_set_id=$3
+            LIMIT 1;
             """, connection, transaction);
         provenance.Parameters.AddWithValue(scope.Document.TenantId.Value);
         provenance.Parameters.AddWithValue(scope.Document.MatterId);
@@ -92,6 +97,8 @@ public sealed class IngestionIntegrationTests(IngestionIntegrationFixture fixtur
         Assert.True(await reader.ReadAsync());
         Assert.Equal("none", reader.GetString(0));
         Assert.Equal("tesseract-cli", reader.GetString(1));
+        Assert.Equal("native-1", reader.GetString(2));
+        Assert.Equal("ci", reader.GetString(3));
         await reader.DisposeAsync();
         await transaction.RollbackAsync();
     }
@@ -113,11 +120,7 @@ public sealed class IngestionIntegrationTests(IngestionIntegrationFixture fixtur
             Assert.Equal(0L, await missing.ExecuteScalarAsync());
 
         await using var transaction = await connection.BeginTransactionAsync();
-        await using (var context = new NpgsqlCommand("SELECT set_config('casemesh.tenant_id',$1,true);", connection, transaction))
-        {
-            context.Parameters.AddWithValue(scope.Document.TenantId.Value.ToString());
-            await context.ExecuteNonQueryAsync();
-        }
+        await SetTenantAsync(connection, transaction, scope.Document.TenantId);
         await using var cross = new NpgsqlCommand("""
             INSERT INTO casemesh.source_spans (
               tenant_id,matter_id,source_span_id,document_version_id,page_number,extracted_text,
@@ -155,11 +158,7 @@ public sealed class IngestionIntegrationTests(IngestionIntegrationFixture fixtur
         await using var connection = new NpgsqlConnection(fixture.AppConnection);
         await connection.OpenAsync();
         await using var transaction = await connection.BeginTransactionAsync();
-        await using (var context = new NpgsqlCommand("SELECT set_config('casemesh.tenant_id',$1,true);", connection, transaction))
-        {
-            context.Parameters.AddWithValue(scope.Document.TenantId.Value.ToString());
-            await context.ExecuteNonQueryAsync();
-        }
+        await SetTenantAsync(connection, transaction, scope.Document.TenantId);
         await using var update = new NpgsqlCommand(
             "UPDATE casemesh.ingestion_attempts SET failure_code='overwrite' WHERE attempt_id=$1;", connection, transaction);
         update.Parameters.AddWithValue(first.AttemptId);
@@ -169,11 +168,7 @@ public sealed class IngestionIntegrationTests(IngestionIntegrationFixture fixtur
         await using var spanConnection = new NpgsqlConnection(fixture.AppConnection);
         await spanConnection.OpenAsync();
         await using var spanTransaction = await spanConnection.BeginTransactionAsync();
-        await using (var spanContext = new NpgsqlCommand("SELECT set_config('casemesh.tenant_id',$1,true);", spanConnection, spanTransaction))
-        {
-            spanContext.Parameters.AddWithValue(scope.Document.TenantId.Value.ToString());
-            await spanContext.ExecuteNonQueryAsync();
-        }
+        await SetTenantAsync(spanConnection, spanTransaction, scope.Document.TenantId);
         await using var mutateSpan = new NpgsqlCommand(
             "UPDATE casemesh.source_spans SET extracted_text='tampered' WHERE span_set_id=$1;",
             spanConnection, spanTransaction);

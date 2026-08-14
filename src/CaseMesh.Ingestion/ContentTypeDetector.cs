@@ -33,7 +33,7 @@ public static class ContentTypeDetector
         string text;
         try
         {
-            using var reader = new StreamReader(stream, StrictUtf8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+            using var reader = new StreamReader(stream, StrictUtf8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
             text = reader.ReadToEnd();
         }
         catch (DecoderFallbackException exception)
@@ -121,6 +121,11 @@ public static class ContentTypeDetector
     private static void ValidatePngDimensions(Stream stream, IngestionLimits limits)
     {
         if (stream.Length < 24) throw MalformedImage("malformed-png");
+        Span<byte> chunkType = stackalloc byte[4];
+        stream.Position = 12;
+        if (stream.ReadAtLeast(chunkType, chunkType.Length, throwOnEndOfStream: false) != chunkType.Length ||
+            !chunkType.SequenceEqual("IHDR"u8))
+            throw MalformedImage("malformed-png");
         Span<byte> dimensions = stackalloc byte[8];
         stream.Position = 16;
         if (stream.Read(dimensions) != dimensions.Length) throw MalformedImage("malformed-png");
