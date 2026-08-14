@@ -134,7 +134,7 @@ public sealed class PostgresMatterStore : IAsyncDisposable
 
     public async ValueTask DisposeAsync() => await _dataSource.DisposeAsync();
 
-    private async Task<T> InTenantTransactionAsync<T>(
+    internal async Task<T> InTenantTransactionAsync<T>(
         TenantId tenantId,
         Func<NpgsqlConnection, NpgsqlTransaction, Task<T>> operation,
         CancellationToken cancellationToken)
