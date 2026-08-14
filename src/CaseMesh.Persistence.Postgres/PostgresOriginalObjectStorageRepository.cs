@@ -81,10 +81,18 @@ public sealed class PostgresOriginalObjectStorageRepository : IOriginalObjectSto
                 metadata.StoredAt);
             try
             {
-                var inserted = await command.ExecuteScalarAsync(cancellationToken);
-                if (inserted is DateTimeOffset insertedAt)
+                DateTimeOffset? insertedAt = null;
+                await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
                 {
-                    return metadata with { StoredAt = insertedAt };
+                    if (await reader.ReadAsync(cancellationToken))
+                    {
+                        insertedAt = reader.GetFieldValue<DateTimeOffset>(0);
+                    }
+                }
+
+                if (insertedAt is { } persistedAt)
+                {
+                    return metadata with { StoredAt = persistedAt };
                 }
 
                 await using var verify = new NpgsqlCommand("""
