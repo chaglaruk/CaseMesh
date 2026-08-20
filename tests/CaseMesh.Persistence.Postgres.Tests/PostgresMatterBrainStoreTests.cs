@@ -120,7 +120,9 @@ public sealed class PostgresMatterBrainStoreTests(PostgresFixture database)
         command.Parameters.AddWithValue(run.Id);
         command.Parameters.AddWithValue(personB);
         command.Parameters.AddWithValue(new string('A', 64));
-        var exception = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
+        await command.ExecuteNonQueryAsync();
+        await using var enforceConstraints = new NpgsqlCommand("SET CONSTRAINTS ALL IMMEDIATE;", connection, transaction);
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => enforceConstraints.ExecuteNonQueryAsync());
         Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
         await transaction.RollbackAsync();
     }
@@ -223,7 +225,9 @@ public sealed class PostgresMatterBrainStoreTests(PostgresFixture database)
         command.Parameters.AddWithValue(first.Evidence.Matter.Id);
         command.Parameters.AddWithValue(candidate.Id);
         command.Parameters.AddWithValue(foreignSource);
-        var exception = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
+        await command.ExecuteNonQueryAsync();
+        await using var enforceConstraints = new NpgsqlCommand("SET CONSTRAINTS ALL IMMEDIATE;", connection, transaction);
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => enforceConstraints.ExecuteNonQueryAsync());
         Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
         await transaction.RollbackAsync();
     }
