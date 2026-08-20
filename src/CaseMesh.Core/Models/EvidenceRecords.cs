@@ -136,6 +136,28 @@ public sealed record Assertion
         ExtractionConfidence,
         CreatedByModel,
         SupersededByAssertionId);
+
+    internal Assertion WithReview(
+        VerificationState verificationState,
+        DisputeState disputeState,
+        Guid? supersededByAssertionId = null) => new(
+        Id,
+        MatterId,
+        SubjectReference,
+        Predicate,
+        Value,
+        AssertedBy,
+        EventTime,
+        AssertedAt,
+        SourceSpanId,
+        OriginClass,
+        AssertionClass,
+        disputeState,
+        IntegrityState,
+        verificationState,
+        ExtractionConfidence,
+        CreatedByModel,
+        supersededByAssertionId ?? SupersededByAssertionId);
 }
 
 public sealed record MatterEvent
@@ -190,6 +212,19 @@ public sealed record MatterEvent
         VerificationState,
         SupersedesEventId,
         replacementId);
+
+    internal MatterEvent WithReview(EventStatus status, VerificationState verificationState) => new(
+        Id,
+        MatterId,
+        EventType,
+        StartTime,
+        EndTime,
+        ParticipantIds,
+        Label,
+        status,
+        verificationState,
+        SupersedesEventId,
+        SupersededByEventId);
 }
 
 public sealed record AssertionEventLink
@@ -251,6 +286,21 @@ public sealed record Contradiction
     public string? ResolutionNote { get; }
     public DateTimeOffset CreatedAt { get; }
     public DateTimeOffset? ResolvedAt { get; }
+
+    internal Contradiction Resolve(
+        ContradictionResolutionState state,
+        string note,
+        DateTimeOffset resolvedAt) => new(
+        Id,
+        MatterId,
+        AssertionAId,
+        AssertionBId,
+        Type,
+        DetectedBy,
+        state,
+        note,
+        CreatedAt,
+        resolvedAt);
 }
 
 public sealed record AnalysisNode
@@ -332,4 +382,13 @@ public sealed record AuditEvent
 public sealed record EventCorrectionResult(
     MatterEvent SupersededEvent,
     MatterEvent CorrectedEvent,
+    AuditEvent AuditEvent);
+
+public sealed record AssertionReviewResult(
+    Assertion ReviewedAssertion,
+    AuditEvent AuditEvent);
+
+public sealed record AssertionCorrectionResult(
+    Assertion SupersededAssertion,
+    Assertion CorrectedAssertion,
     AuditEvent AuditEvent);

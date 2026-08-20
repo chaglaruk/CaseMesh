@@ -17,7 +17,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
         var before = await migrator.GetAppliedMigrationsAsync(database.AdminConnectionString);
         var after = await migrator.MigrateAsync(database.AdminConnectionString);
 
-        Assert.Equal(["0001", "0002", "0003"], after.Select(migration => migration.Version));
+        Assert.Equal(["0001", "0002", "0003", "0004"], after.Select(migration => migration.Version));
         Assert.Equal(before, after);
     }
 
@@ -39,7 +39,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             var migrator = new PostgresMigrator();
             Assert.Empty(await migrator.GetAppliedMigrationsAsync(emptyBuilder.ConnectionString));
             var applied = await migrator.MigrateAsync(emptyBuilder.ConnectionString);
-            Assert.Equal(["0001", "0002", "0003"], applied.Select(migration => migration.Version));
+            Assert.Equal(["0001", "0002", "0003", "0004"], applied.Select(migration => migration.Version));
         }
         finally
         {
@@ -105,7 +105,11 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
                        has_table_privilege(current_user, 'casemesh.ingestion_span_sets', 'INSERT'),
                        has_table_privilege(current_user, 'casemesh.ingestion_span_sets', 'UPDATE'),
                        has_table_privilege(current_user, 'casemesh.ingestion_attempts', 'DELETE'),
-                       has_table_privilege(current_user, 'casemesh.document_ingestion_state', 'UPDATE');
+                       has_table_privilege(current_user, 'casemesh.document_ingestion_state', 'UPDATE'),
+                       has_table_privilege(current_user, 'casemesh.extraction_runs', 'SELECT'),
+                       has_table_privilege(current_user, 'casemesh.extraction_runs', 'INSERT'),
+                       has_table_privilege(current_user, 'casemesh.extraction_runs', 'UPDATE'),
+                       has_table_privilege(current_user, 'casemesh.extraction_candidates', 'DELETE');
                 """, app);
             await using var reader = await privileges.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
@@ -118,6 +122,10 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             Assert.False(reader.GetBoolean(6));
             Assert.False(reader.GetBoolean(7));
             Assert.True(reader.GetBoolean(8));
+            Assert.True(reader.GetBoolean(9));
+            Assert.True(reader.GetBoolean(10));
+            Assert.False(reader.GetBoolean(11));
+            Assert.False(reader.GetBoolean(12));
         }
         finally
         {
