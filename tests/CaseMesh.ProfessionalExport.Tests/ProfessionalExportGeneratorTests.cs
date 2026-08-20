@@ -65,6 +65,21 @@ public sealed class ProfessionalExportGeneratorTests
     }
 
     [Fact]
+    public async Task Oversized_canonical_snapshot_is_rejected_before_artifact_allocation()
+    {
+        var input = await CreateAsync();
+        var oversized = input with
+        {
+            Documents = input.Documents.Select((item, index) => index == 0
+                ? item with { ParserVersion = new string('x', 32 * 1024 * 1024) }
+                : item).ToArray()
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => Generator().Generate(Request(), oversized));
+        Assert.Contains("input is too large", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Employer_employee_third_party_and_AI_attribution_remain_distinct()
     {
         var assertions = (await GenerateAsync()).Manifest.Assertions;
@@ -209,6 +224,22 @@ public sealed class ProfessionalExportGeneratorTests
             Assert.Contains(',', lines[0]);
         });
         Assert.Equal(first.Artifacts.Select(item => item.Sha256), second.Artifacts.Select(item => item.Sha256));
+    }
+
+    [Theory]
+    [InlineData("=HYPERLINK(\"https://invalid.example\")")]
+    [InlineData("+SUM(1,1)")]
+    [InlineData("-1+2")]
+    [InlineData("@SUM(1,1)")]
+    [InlineData("\t=1+1")]
+    public void Csv_cells_cannot_become_spreadsheet_formulas(string untrustedValue)
+    {
+        var cell = ProfessionalExportGenerator.EscapeCsv(untrustedValue);
+        var unquoted = cell.Length >= 2 && cell[0] == '"' && cell[^1] == '"'
+            ? cell[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal)
+            : cell;
+
+        Assert.StartsWith("'", unquoted, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -27,6 +27,8 @@ Generation uses an explicit `TimeProvider`. Canonical snapshot material is norma
 
 DOCX is produced as a minimal Open Packaging Convention document without adding a production document-library dependency. The test project opens it through the existing centrally managed Open XML package. Filenames contain only typed Matter/export identifiers and fixed suffixes; Matter titles, evidence text, people, employers and source filenames cannot enter a path. ZIP entries are generated single-segment names and cannot traverse directories.
 
+All canonical collections have pre-generation count limits and the complete snapshot is measured through a non-buffering UTF-8 counting stream before artifact allocation. CSV cells beginning with spreadsheet formula-control characters are deterministically text-prefixed in addition to ordinary RFC-style quoting.
+
 The neutral brief and deterministic missing-evidence questions describe attribution, provenance and unresolved records. They do not provide legal advice, recommend action, calculate deadlines or predict liability, compensation or outcomes.
 
 ## PostgreSQL audit metadata and tenancy

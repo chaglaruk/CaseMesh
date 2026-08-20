@@ -15,7 +15,7 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
     public const string CurrentSchemaVersion = "professional-export/v1";
     public const string CurrentTemplateVersion = "neutral-handover/v1";
     private const int MaximumRecordsPerKind = 50_000;
-    private const long MaximumInputCharacters = 10_000_000;
+    private const long MaximumInputUtf8Bytes = 32L * 1024 * 1024;
     private const int MaximumArtifactBytes = 64 * 1024 * 1024;
     private static readonly DateTimeOffset StableArchiveTimestamp =
         new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
@@ -489,21 +489,30 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
             }
         }
 
+        RequireBound(input.Evidence.DocumentVersions.Count, nameof(input.Evidence.DocumentVersions));
         RequireBound(input.Evidence.SourceSpans.Count, nameof(input.Evidence.SourceSpans));
         RequireBound(input.Evidence.Assertions.Count, nameof(input.Evidence.Assertions));
         RequireBound(input.Evidence.Events.Count, nameof(input.Evidence.Events));
+        RequireBound(input.Evidence.AssertionEventLinks.Count, nameof(input.Evidence.AssertionEventLinks));
         RequireBound(input.Evidence.Contradictions.Count, nameof(input.Evidence.Contradictions));
-        RequireBound(input.Brain.People.Count + input.Brain.Organisations.Count, "entities");
-        long characters = input.Evidence.Assertions.Sum(item =>
-            (long)item.SubjectReference.Length + item.Predicate.Length + item.Value.Length + item.AssertedBy.Length) +
-            input.Evidence.Events.Sum(item => (long)item.EventType.Length + item.Label.Length) +
-            input.Brain.People.Sum(item => (long)item.DisplayName.Length) +
-            input.Brain.Organisations.Sum(item => (long)item.Name.Length) +
-            input.Workplace.AdjustmentRequests.Sum(item => (long)item.NeutralLabel.Length);
-        if (characters > MaximumInputCharacters)
-        {
-            throw new InvalidOperationException("The bounded professional export input is too large.");
-        }
+        RequireBound(input.Evidence.AnalysisNodes.Count, nameof(input.Evidence.AnalysisNodes));
+        RequireBound(input.Evidence.AuditEvents.Count, nameof(input.Evidence.AuditEvents));
+        RequireBound(input.Workplace.EmploymentProfiles.Count, nameof(input.Workplace.EmploymentProfiles));
+        RequireBound(input.Workplace.EmploymentTerms.Count, nameof(input.Workplace.EmploymentTerms));
+        RequireBound(input.Workplace.HealthAbsenceRecords.Count, nameof(input.Workplace.HealthAbsenceRecords));
+        RequireBound(input.Workplace.AdjustmentRequests.Count, nameof(input.Workplace.AdjustmentRequests));
+        RequireBound(input.Workplace.WorkplaceProcesses.Count, nameof(input.Workplace.WorkplaceProcesses));
+        RequireBound(input.Workplace.AcasProcessStates.Count, nameof(input.Workplace.AcasProcessStates));
+        RequireBound(input.Brain.People.Count, nameof(input.Brain.People));
+        RequireBound(input.Brain.Organisations.Count, nameof(input.Brain.Organisations));
+        RequireBound(input.Brain.Aliases.Count, nameof(input.Brain.Aliases));
+        RequireBound(input.Brain.Communications.Count, nameof(input.Brain.Communications));
+        RequireBound(input.Brain.Runs.Count, nameof(input.Brain.Runs));
+        RequireBound(input.Brain.Candidates.Count, nameof(input.Brain.Candidates));
+        RequireBound(input.Brain.Dependencies.Count, nameof(input.Brain.Dependencies));
+        RequireBound(input.Brain.DependencyInvalidations.Count, nameof(input.Brain.DependencyInvalidations));
+        RequireBound(input.Brain.EntityResolutionActions.Count, nameof(input.Brain.EntityResolutionActions));
+        ValidateBoundedSnapshot(input);
 
         var versionIds = input.Documents.Select(item => item.DocumentVersionId).ToHashSet();
         var spans = input.Evidence.SourceSpans.ToDictionary(item => item.Id);
@@ -529,6 +538,25 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         if (count > MaximumRecordsPerKind)
         {
             throw new InvalidOperationException($"The {label} collection exceeds the export record limit.");
+        }
+    }
+
+    private static void ValidateBoundedSnapshot(ProfessionalExportInput input)
+    {
+        using var counter = new BoundedWriteStream(MaximumInputUtf8Bytes);
+        try
+        {
+            JsonSerializer.Serialize(counter, new
+            {
+                evidence = input.Evidence.CaptureSnapshot(),
+                workplace = input.Workplace.CaptureSnapshot(),
+                brain = input.Brain.CaptureSnapshot(),
+                input.Documents
+            }, JsonOptions);
+        }
+        catch (InputSizeLimitExceededException exception)
+        {
+            throw new InvalidOperationException("The bounded professional export input is too large.", exception);
         }
     }
 
@@ -602,8 +630,16 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         return Encoding.UTF8.GetBytes(builder.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
     }
 
-    private static string EscapeCsv(string value) =>
-        value.IndexOfAny([',', '"', '\r', '\n']) >= 0 ? $"\"{value.Replace("\"", "\"\"", StringComparison.Ordinal)}\"" : value;
+    internal static string EscapeCsv(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var safeValue = value.Length > 0 && value[0] is '=' or '+' or '-' or '@' or '\t' or '\r' or '\n'
+            ? $"'{value}"
+            : value;
+        return safeValue.IndexOfAny([',', '"', '\r', '\n']) >= 0
+            ? $"\"{safeValue.Replace("\"", "\"\"", StringComparison.Ordinal)}\""
+            : safeValue;
+    }
 
     private static string Format(DateTimeOffset? value) =>
         value?.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture) ?? "";
@@ -804,4 +840,52 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
     internal static string Sha256(string value) => Sha256(Encoding.UTF8.GetBytes(value));
 
     internal static string Sha256(byte[] value) => Convert.ToHexString(SHA256.HashData(value));
+
+    private sealed class BoundedWriteStream(long maximumBytes) : Stream
+    {
+        private long _length;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _length;
+        public override long Position
+        {
+            get => _length;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            ArgumentNullException.ThrowIfNull(buffer);
+            ArgumentOutOfRangeException.ThrowIfNegative(offset);
+            ArgumentOutOfRangeException.ThrowIfNegative(count);
+            if (offset > buffer.Length - count)
+            {
+                throw new ArgumentException("The write range is outside the supplied buffer.");
+            }
+            Add(count);
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer) => Add(buffer.Length);
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        private void Add(int count)
+        {
+            if (_length > maximumBytes - count)
+            {
+                throw new InputSizeLimitExceededException();
+            }
+            _length += count;
+        }
+    }
+
+    private sealed class InputSizeLimitExceededException : Exception;
 }
