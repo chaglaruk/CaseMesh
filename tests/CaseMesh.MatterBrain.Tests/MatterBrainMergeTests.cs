@@ -206,7 +206,7 @@ public sealed class MatterBrainMergeTests
     }
 
     [Fact]
-    public async Task Correction_preserves_old_assertion_model_history_links_and_updates_dependents()
+    public async Task Correction_preserves_documentary_history_without_relabeling_the_human_replacement()
     {
         var graph = CreateGraph(15);
         var oldSource = AddSource(graph, 15, 10, "Meeting date was 12 March.", 'A');
@@ -234,7 +234,10 @@ public sealed class MatterBrainMergeTests
             {
                 Assertions = assertions,
                 Events = events,
-                AssertionEventLinks = links
+                AssertionEventLinks = links,
+                Contradictions = [new ContradictionCandidate(
+                    "date-conflict", "old-date", "new-date", ContradictionType.DirectConflict,
+                    "synthetic-rule", [oldSource.Id, otherSource.Id], 0.8m)]
             }));
         var old = graph.Assertions.Single(item => item.Value == "2026-03-12");
         var analysis = graph.AddAnalysisNode(
@@ -257,14 +260,30 @@ public sealed class MatterBrainMergeTests
         Assert.Contains(graph.AssertionEventLinks, item => item.AssertionId == old.Id);
         Assert.Contains(graph.AssertionEventLinks, item => item.AssertionId == correction.CorrectedAssertion.Id);
         Assert.Contains(graph.AuditEvents, item => item.Id == correction.AuditEvent.Id);
-        Assert.All(graph.Contradictions.Where(item => item.AssertionAId == old.Id || item.AssertionBId == old.Id),
+        var dismissed = graph.Contradictions
+            .Where(item => item.AssertionAId == old.Id || item.AssertionBId == old.Id)
+            .ToArray();
+        Assert.NotEmpty(dismissed);
+        Assert.All(dismissed,
             item => Assert.Equal(ContradictionResolutionState.Dismissed, item.ResolutionState));
+        Assert.All(dismissed, item => Assert.Contains(item.Id.ToString("N"), correction.AuditEvent.ChangeSummary));
+        Assert.Equal(oldSource.Id, correction.SupersededAssertion.SourceSpanId);
+        Assert.Equal(0.9m, correction.SupersededAssertion.ExtractionConfidence);
+        Assert.Null(correction.SupersededAssertion.CreatedByModel);
+        Assert.Null(correction.CorrectedAssertion.SourceSpanId);
+        Assert.Equal("synthetic-professional", correction.CorrectedAssertion.AssertedBy);
+        Assert.Equal(Now.AddHours(1), correction.CorrectedAssertion.AssertedAt);
+        Assert.Equal(EvidenceOriginClass.RetrospectiveNote, correction.CorrectedAssertion.OriginClass);
+        Assert.Equal(AssertionClass.AttributedAssertion, correction.CorrectedAssertion.AssertionClass);
+        Assert.Equal(VerificationState.NotReviewed, correction.CorrectedAssertion.VerificationState);
+        Assert.Null(correction.CorrectedAssertion.ExtractionConfidence);
+        Assert.Null(correction.CorrectedAssertion.CreatedByModel);
         Assert.Equal(oldDependencyCount + 1,
             state.DependencyInvalidations.Count(item => item.InvalidatedByAuditEventId == correction.AuditEvent.Id));
         Assert.Contains(state.DependencyInvalidations, item =>
             state.Dependencies.Single(dependency => dependency.Id == item.DependencyId).CanonicalId == analysis.Id);
         Assert.Contains(graph.AnalysisNodes, item => item.Id == analysis.Id);
-        Assert.Contains(state.ActiveDependencies, item => item.CanonicalId == correction.CorrectedAssertion.Id);
+        Assert.DoesNotContain(state.ActiveDependencies, item => item.CanonicalId == correction.CorrectedAssertion.Id);
     }
 
     [Fact]
@@ -303,6 +322,9 @@ public sealed class MatterBrainMergeTests
         Assert.Contains(graph.Assertions, item => item.Value == "wrong" && item.VerificationState == VerificationState.Rejected);
         Assert.Contains(graph.Assertions, item => item.Value == "context" && item.VerificationState == VerificationState.NeedsContext);
         Assert.Equal(3, graph.AuditEvents.Count);
+        Assert.Equal(AuditEventKind.AssertionReviewed, graph.AuditEvents.Single(item => item.Id == Id(151, 100)).Kind);
+        Assert.Equal(AuditEventKind.AssertionRejected, graph.AuditEvents.Single(item => item.Id == Id(151, 101)).Kind);
+        Assert.Equal(AuditEventKind.AssertionReviewed, graph.AuditEvents.Single(item => item.Id == Id(151, 102)).Kind);
         Assert.Equal(3, graph.Assertions.Count);
         Assert.Throws<InvalidOperationException>(() => state.ReviewAssertion(
             graph.Assertions.Single(item => item.Value == "confirmed").Id,
@@ -487,6 +509,211 @@ public sealed class MatterBrainMergeTests
         Assert.Single(state.Runs);
         Assert.Single(state.Candidates);
         Assert.Equal(1, provider.CallCount);
+    }
+
+    [Fact]
+    public async Task Null_candidate_key_fails_before_run_registration_and_a_valid_retry_can_complete()
+    {
+        var graph = CreateGraph(218);
+        var source = AddSource(graph, 218, 10, "Synthetic source.", 'A');
+        var malformed = Entity("temporary", "Alex Morgan", [], source) with { Key = null! };
+        var state = new MatterBrainState(graph);
+        var service = new MatterBrainMergeService(new FixedTimeProvider(Now));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExtractAndMergeAsync(
+            state, [source.Id], new GoldenProvider(Descriptor(), EmptyBatch() with { Entities = [malformed] })));
+        Assert.Empty(state.Runs);
+        Assert.Empty(state.Candidates);
+
+        var result = await service.ExtractAndMergeAsync(
+            state, [source.Id], new GoldenProvider(Descriptor(), EmptyBatch() with
+            {
+                Entities = [Entity("employee", "Alex Morgan", [], source)]
+            }));
+        Assert.False(result.WasAlreadyCompleted);
+        Assert.Single(state.Runs);
+        Assert.Single(state.People);
+    }
+
+    [Fact]
+    public async Task Automatic_contradictions_are_numeric_only_and_compare_numeric_values_semantically()
+    {
+        var graph = CreateGraph(219);
+        var first = AddSource(graph, 219, 10, "Synthetic value one.", 'A');
+        var second = AddSource(graph, 219, 20, "Synthetic value two.", 'B');
+        var state = new MatterBrainState(graph);
+
+        await new MatterBrainMergeService(new FixedTimeProvider(Now)).ExtractAndMergeAsync(
+            state, [first.Id, second.Id], new GoldenProvider(Descriptor(), EmptyBatch() with
+            {
+                Assertions =
+                [
+                    Assertion("symptom-a", first, "reported-symptom", "anxiety",
+                        EvidenceOriginClass.EmployeeAuthoredDocument, AssertionClass.UserAssertion, "Synthetic employee"),
+                    Assertion("symptom-b", second, "reported-symptom", "insomnia",
+                        EvidenceOriginClass.IndependentThirdPartyRecord, AssertionClass.ThirdPartyAssertion, "Synthetic clinician"),
+                    Assertion("count-a", first, "reported-count", "12",
+                        EvidenceOriginClass.EmployerAuthoredDocument, AssertionClass.EmployerAssertion, "Example Employer"),
+                    Assertion("count-b", second, "reported-count", "12.0",
+                        EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.DerivedCalculation, "Synthetic record")
+                ]
+            }));
+
+        Assert.Empty(graph.Contradictions);
+    }
+
+    [Fact]
+    public async Task Superseded_extraction_output_is_excluded_from_new_rule_contradictions()
+    {
+        var graph = CreateGraph(220);
+        var source = AddSource(graph, 220, 10, "Synthetic count source.", 'A');
+        var state = new MatterBrainState(graph);
+        var service = new MatterBrainMergeService(new FixedTimeProvider(Now));
+        var first = await service.ExtractAndMergeAsync(state, [source.Id], new GoldenProvider(
+            Descriptor(), EmptyBatch() with
+            {
+                Assertions = [Assertion("count-v1", source, "reported-count", "12",
+                    EvidenceOriginClass.EmployerAuthoredDocument, AssertionClass.EmployerAssertion, "Example Employer")]
+            }));
+
+        await service.ExtractAndMergeAsync(state, [source.Id], new GoldenProvider(
+            Descriptor("extract/v2"), EmptyBatch() with
+            {
+                Assertions = [Assertion("count-v2", source, "reported-count", "10",
+                    EvidenceOriginClass.EmployerAuthoredDocument, AssertionClass.EmployerAssertion, "Example Employer")]
+            }));
+
+        Assert.Equal(2, graph.Assertions.Count);
+        Assert.Empty(graph.Contradictions);
+        Assert.All(state.Dependencies.Where(item => item.RunId == first.Run.Id), dependency =>
+            Assert.Contains(state.DependencyInvalidations, item => item.DependencyId == dependency.Id));
+    }
+
+    [Fact]
+    public async Task Entity_resolution_is_transitive_and_rejects_cycles_and_self_matches()
+    {
+        var graph = CreateGraph(221);
+        var source = AddSource(graph, 221, 10, "Synthetic people.", 'A');
+        var state = new MatterBrainState(graph);
+        await new MatterBrainMergeService(new FixedTimeProvider(Now)).ExtractAndMergeAsync(
+            state, [source.Id], new GoldenProvider(Descriptor(), EmptyBatch() with
+            {
+                Entities =
+                [
+                    Entity("a", "Alex One", ["Shared Alias"], source),
+                    Entity("b", "Alex Two", ["Second Alias"], source),
+                    Entity("c", "Alex Three", ["Third Alias"], source),
+                    Entity("same-a", "Shared Alias", [], source)
+                ],
+                EntityMatches = [new EntityMatchCandidate(
+                    "self-match", CanonicalEntityKind.Person, "a", "same-a", 0.99m, [source.Id], 0.99m)]
+            }));
+
+        Assert.Equal(3, state.People.Count);
+        Assert.Equal(CandidateDisposition.Rejected,
+            state.Candidates.Single(item => item.ExternalKey == "self-match").Disposition);
+        var people = state.People.ToDictionary(item => item.DisplayName);
+        var a = people["Alex One"].Id;
+        var b = people["Alex Two"].Id;
+        var c = people["Alex Three"].Id;
+        var first = state.ProposeEntityMerge(Id(221, 100), CanonicalEntityKind.Person,
+            a, b, [source.Id], 0.8m, "synthetic-reviewer", Now.AddMinutes(1));
+        state.AcceptEntityMerge(Id(221, 101), first.Id, "synthetic-reviewer", Now.AddMinutes(2));
+        var second = state.ProposeEntityMerge(Id(221, 102), CanonicalEntityKind.Person,
+            b, c, [source.Id], 0.8m, "synthetic-reviewer", Now.AddMinutes(3));
+        state.AcceptEntityMerge(Id(221, 103), second.Id, "synthetic-reviewer", Now.AddMinutes(4));
+
+        Assert.Equal(c, state.ResolveEntityId(CanonicalEntityKind.Person, a));
+        var cycle = state.ProposeEntityMerge(Id(221, 104), CanonicalEntityKind.Person,
+            c, a, [source.Id], 0.8m, "synthetic-reviewer", Now.AddMinutes(5));
+        Assert.Throws<InvalidOperationException>(() => state.AcceptEntityMerge(
+            Id(221, 105), cycle.Id, "synthetic-reviewer", Now.AddMinutes(6)));
+        Assert.Equal(c, state.ResolveEntityId(CanonicalEntityKind.Person, a));
+    }
+
+    [Fact]
+    public async Task Review_is_atomic_for_early_timestamps_and_does_not_reject_superseded_events()
+    {
+        var graph = CreateGraph(222);
+        var source = AddSource(graph, 222, 10, "Synthetic numeric assertion.", 'A');
+        var other = AddSource(graph, 222, 20, "Synthetic conflicting assertion.", 'B');
+        var state = new MatterBrainState(graph);
+        await new MatterBrainMergeService(new FixedTimeProvider(Now)).ExtractAndMergeAsync(
+            state, [source.Id, other.Id], new GoldenProvider(Descriptor(), EmptyBatch() with
+            {
+                Assertions =
+                [
+                    Assertion("one", source, "reported-count", "12", EvidenceOriginClass.EmployerAuthoredDocument,
+                        AssertionClass.EmployerAssertion, "Example Employer"),
+                    Assertion("two", other, "reported-count", "10", EvidenceOriginClass.OriginalContemporaneousRecord,
+                        AssertionClass.DerivedCalculation, "Synthetic record")
+                ],
+                Events = [new EventCandidate("event", "reported-event", "Synthetic event", Now, Now, [], [source.Id], 0.8m)],
+                AssertionEventLinks = [new AssertionEventLinkCandidate(
+                    "link", "one", "event", AssertionEventRelation.Supports, [source.Id], 0.8m)]
+            }));
+        var assertion = graph.Assertions.Single(item => item.Value == "12");
+        var contradiction = Assert.Single(graph.Contradictions);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => state.ReviewAssertion(
+            assertion.Id, VerificationState.Rejected, Id(222, 100), "synthetic-reviewer", Now.AddMinutes(-1)));
+        Assert.Equal(VerificationState.NotReviewed, graph.Assertions.Single(item => item.Id == assertion.Id).VerificationState);
+        Assert.Equal(ContradictionResolutionState.Unresolved,
+            graph.Contradictions.Single(item => item.Id == contradiction.Id).ResolutionState);
+        Assert.Empty(graph.AuditEvents);
+
+        var originalEvent = graph.Events.Single();
+        var eventCorrection = graph.CorrectEventDate(
+            originalEvent.Id, Id(222, 101), Now.AddDays(1), Now.AddDays(1), "Corrected synthetic event",
+            Id(222, 102), "synthetic-reviewer", Now.AddMinutes(1));
+        state.ReviewAssertion(assertion.Id, VerificationState.Rejected,
+            Id(222, 103), "synthetic-reviewer", Now.AddMinutes(2));
+        Assert.Equal(EventStatus.Superseded,
+            graph.Events.Single(item => item.Id == eventCorrection.SupersededEvent.Id).Status);
+    }
+
+    [Fact]
+    public async Task Human_numeric_correction_recomputes_current_contradictions()
+    {
+        var graph = CreateGraph(223);
+        var first = AddSource(graph, 223, 10, "Synthetic count 12.", 'A');
+        var second = AddSource(graph, 223, 20, "Synthetic count 10.", 'B');
+        var state = new MatterBrainState(graph);
+        await new MatterBrainMergeService(new FixedTimeProvider(Now)).ExtractAndMergeAsync(
+            state, [first.Id, second.Id], new GoldenProvider(Descriptor(), EmptyBatch() with
+            {
+                Assertions =
+                [
+                    Assertion("twelve", first, "reported-count", "12", EvidenceOriginClass.EmployerAuthoredDocument,
+                        AssertionClass.EmployerAssertion, "Example Employer"),
+                    Assertion("ten", second, "reported-count", "10", EvidenceOriginClass.OriginalContemporaneousRecord,
+                        AssertionClass.DerivedCalculation, "Synthetic record")
+                ]
+            }));
+        var twelve = graph.Assertions.Single(item => item.Value == "12");
+
+        var correction = state.CorrectAssertion(
+            twelve.Id, Id(223, 100), "11", null, Id(223, 101), "synthetic-professional", Now.AddMinutes(1));
+
+        Assert.Contains(graph.Contradictions, item =>
+            item.ResolutionState == ContradictionResolutionState.Unresolved &&
+            (item.AssertionAId == correction.CorrectedAssertion.Id || item.AssertionBId == correction.CorrectedAssertion.Id));
+    }
+
+    [Fact]
+    public async Task Evaluation_detects_unhyphenated_forbidden_conclusions()
+    {
+        var graph = CreateGraph(224);
+        var source = AddSource(graph, 224, 10, "Synthetic source.", 'A');
+        var state = new MatterBrainState(graph);
+        await new MatterBrainMergeService(new FixedTimeProvider(Now)).ExtractAndMergeAsync(
+            state, [source.Id], new GoldenProvider(Descriptor(), EmptyBatch() with
+            {
+                Assertions = [Assertion("forbidden", source, "liability", "unknown",
+                    EvidenceOriginClass.EmployeeAuthoredDocument, AssertionClass.UserAssertion, "Synthetic employee")]
+            }));
+
+        Assert.Equal(1, MatterBrainEvaluation.Evaluate(state).ForbiddenConclusionCount);
     }
 
     [Fact]

@@ -8,7 +8,6 @@ namespace CaseMesh.MatterBrain;
 public sealed class MatterBrainMergeService(TimeProvider timeProvider)
 {
     private const int MaximumRawResultCharacters = 1_000_000;
-    private const int MaximumCandidatePayloadBytes = 1_000_000;
     private const int MaximumSelectedSourceSpans = 128;
     private const int MaximumSelectedSourceBytes = 2_000_000;
     private const int MaximumCandidates = 2_000;
@@ -26,7 +25,7 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
         ArgumentNullException.ThrowIfNull(sourceSpanIds);
         ArgumentNullException.ThrowIfNull(provider);
         var descriptor = provider.Descriptor;
-        ValidateDescriptor(descriptor);
+        MatterBrainIntegrity.ValidateDescriptor(descriptor);
         if (sourceSpanIds.Count == 0 || sourceSpanIds.Count > MaximumSelectedSourceSpans ||
             sourceSpanIds.Any(id => id == Guid.Empty))
         {
@@ -103,7 +102,7 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
                     canonical = MergeCandidate(
                         state, run, kind, candidate, canonicalByKey, changed);
                 }
-                catch (InvalidOperationException)
+                catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
                 {
                     rejection = "invalid-candidate-reference";
                 }
@@ -256,6 +255,11 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
                 var match = (EntityMatchCandidate)candidate;
                 var sourceId = ResolveEntityKey(match.SourceEntityKey, canonicalByKey) ?? throw new InvalidOperationException();
                 var targetId = ResolveEntityKey(match.TargetEntityKey, canonicalByKey) ?? throw new InvalidOperationException();
+                if (sourceId == targetId)
+                {
+                    throw new InvalidOperationException("An entity match must reference two distinct canonical identities.");
+                }
+
                 var proposalId = MatterBrainState.DeterministicId("entity-merge-proposal", run.Id, match.Key);
                 state.ProposeEntityMerge(proposalId, match.Kind, sourceId, targetId,
                     match.SourceSpanIds, match.MatchScore, "structured-extraction", run.GeneratedAt);
@@ -285,8 +289,21 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
         ISet<Guid> changed)
     {
         var generatedCount = 0;
+        var assertionDependencyIds = state.Dependencies
+            .Where(item => item.CanonicalKind == CanonicalRecordKind.Assertion)
+            .Select(item => item.CanonicalId)
+            .ToHashSet();
+        var activeAssertionIds = state.ActiveDependencies
+            .Where(item => item.CanonicalKind == CanonicalRecordKind.Assertion)
+            .Select(item => item.CanonicalId)
+            .ToHashSet();
+        var existingPairs = state.Evidence.Contradictions
+            .Select(item => OrderedPair(item.AssertionAId, item.AssertionBId))
+            .ToHashSet();
         var assertions = state.Evidence.Assertions
-            .Where(item => item.VerificationState != VerificationState.Rejected && item.IsSourceBacked)
+            .Where(item => item.VerificationState != VerificationState.Rejected &&
+                           item.DisputeState != DisputeState.Superseded && item.IsSourceBacked &&
+                           (!assertionDependencyIds.Contains(item.Id) || activeAssertionIds.Contains(item.Id)))
             .ToArray();
         foreach (var group in assertions.GroupBy(item => new
                  {
@@ -303,9 +320,10 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
 
             foreach (var pair in Pair(values.Select(item => item.First()).ToArray()))
             {
-                if (state.Evidence.Contradictions.Any(item =>
-                        (item.AssertionAId == pair.First.Id && item.AssertionBId == pair.Second.Id) ||
-                        (item.AssertionAId == pair.Second.Id && item.AssertionBId == pair.First.Id)))
+                if (!decimal.TryParse(pair.First.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var firstNumber) ||
+                    !decimal.TryParse(pair.Second.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var secondNumber) ||
+                    firstNumber == secondNumber ||
+                    !existingPairs.Add(OrderedPair(pair.First.Id, pair.Second.Id)))
                 {
                     continue;
                 }
@@ -316,7 +334,7 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
                     return;
                 }
 
-                var key = $"rule:numeric-or-value:{pair.First.Id:N}:{pair.Second.Id:N}";
+                var key = $"rule:numeric-mismatch:{pair.First.Id:N}:{pair.Second.Id:N}";
                 var candidateId = MatterBrainState.DeterministicId("extraction-candidate", run.Id, ExtractionCandidateKind.Contradiction, key);
                 var sourceIds = new[] { pair.First.SourceSpanId, pair.Second.SourceSpanId }
                     .OfType<Guid>().Distinct().Order().ToArray();
@@ -325,7 +343,7 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
                 {
                     assertionAId = pair.First.Id,
                     assertionBId = pair.Second.Id,
-                    detectedBy = "rule:same-subject-predicate-time-different-value:v1"
+                    detectedBy = "rule:same-subject-predicate-time-numeric-mismatch:v1"
                 }));
                 var candidate = new ExtractionCandidateRecord(
                     candidateId, state.MatterId, run.Id, key, ExtractionCandidateKind.Contradiction,
@@ -337,10 +355,8 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
                     contradictionId,
                     pair.First.Id,
                     pair.Second.Id,
-                    IsNumeric(pair.First.Value) && IsNumeric(pair.Second.Value)
-                        ? ContradictionType.NumericMismatch
-                        : ContradictionType.DirectConflict,
-                    "rule:same-subject-predicate-time-different-value:v1",
+                    ContradictionType.NumericMismatch,
+                    "rule:same-subject-predicate-time-numeric-mismatch:v1",
                     run.GeneratedAt);
                 state.AddCandidate(candidate);
                 candidates.Add(candidate);
@@ -529,12 +545,16 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
         }
 
         var candidates = Enumerate(batch).ToArray();
+        if (candidates.Any(item => string.IsNullOrWhiteSpace(item.Candidate.Key)))
+        {
+            throw new InvalidOperationException("Structured candidates require non-empty external keys.");
+        }
         long aggregateBytes = 0;
         return candidates.Select(item =>
         {
             var payloadJson = CandidateJson(item.Candidate);
             var payloadBytes = Encoding.UTF8.GetByteCount(payloadJson);
-            if (payloadBytes > MaximumCandidatePayloadBytes)
+            if (payloadBytes > MatterBrainIntegrity.MaximumCandidatePayloadBytes)
             {
                 throw new InvalidOperationException("A structured candidate exceeds the bounded metadata limit.");
             }
@@ -586,16 +606,7 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
     private static string CandidateJson(IStructuredCandidate candidate) =>
         MatterBrainIntegrity.CanonicalizeJson(JsonSerializer.Serialize(candidate, candidate.GetType()));
 
-    private static bool IsNumeric(string value) =>
-        decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out _);
+    private static (Guid First, Guid Second) OrderedPair(Guid first, Guid second) =>
+        first.CompareTo(second) <= 0 ? (first, second) : (second, first);
 
-    private static void ValidateDescriptor(StructuredExtractionProviderDescriptor descriptor)
-    {
-        ArgumentNullException.ThrowIfNull(descriptor);
-        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Provider);
-        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Model);
-        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.ExtractionVersion);
-        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.PromptVersion);
-        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.SchemaVersion);
-    }
 }

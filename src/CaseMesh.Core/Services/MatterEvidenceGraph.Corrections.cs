@@ -36,23 +36,29 @@ public sealed partial class MatterEvidenceGraph
             throw new InvalidOperationException("Audit event id already exists.");
         }
 
+        ValidateContradictionResolutionTime(assertionId, reviewedAt);
         var reviewed = assertion.WithReview(verificationState, assertion.DisputeState);
         _assertions[assertionId] = reviewed;
+        IReadOnlyList<Guid> dismissedContradictions = [];
         if (verificationState == VerificationState.Rejected)
         {
-            RecalculateRejectedAssertion(assertionId, reviewedAt, rejectUnsupportedEvents: true);
+            dismissedContradictions = RecalculateRejectedAssertion(
+                assertionId, reviewedAt, rejectUnsupportedEvents: true);
         }
+
         var audit = new AuditEvent(
             auditEventId,
             Matter.Id,
             verificationState == VerificationState.Rejected
                 ? AuditEventKind.AssertionRejected
-                : AuditEventKind.AssertionCorrected,
+                : AuditEventKind.AssertionReviewed,
             nameof(Assertion),
             assertionId,
             null,
             actor,
-            $"Assertion review changed from {assertion.VerificationState} to {verificationState}.",
+            AppendDismissedContradictions(
+                $"Assertion review changed from {assertion.VerificationState} to {verificationState}.",
+                dismissedContradictions),
             reviewedAt);
         _auditEvents.Add(audit);
         return new AssertionReviewResult(reviewed, audit);
@@ -83,28 +89,30 @@ public sealed partial class MatterEvidenceGraph
             throw new InvalidOperationException("Audit event id already exists.");
         }
 
+        ValidateContradictionResolutionTime(assertionId, correctedAt);
         var corrected = AddAssertion(
             correctedAssertionId,
             original.SubjectReference,
             original.Predicate,
             correctedValue,
-            original.AssertedBy,
-            original.AssertedAt,
-            original.OriginClass,
-            original.AssertionClass,
+            actor,
+            correctedAt,
+            EvidenceOriginClass.RetrospectiveNote,
+            AssertionClass.AttributedAssertion,
             DisputeState.Unverified,
-            original.IntegrityState,
-            VerificationState.Confirmed,
-            original.SourceSpanId,
+            IntegrityState.MetadataUncertain,
+            VerificationState.NotReviewed,
+            null,
             correctedEventTime,
-            original.ExtractionConfidence,
-            original.CreatedByModel);
+            null,
+            null);
         var superseded = original.WithReview(
             VerificationState.Rejected,
             DisputeState.Superseded,
             correctedAssertionId);
         _assertions[assertionId] = superseded;
-        RecalculateRejectedAssertion(assertionId, correctedAt, rejectUnsupportedEvents: false);
+        var dismissedContradictions = RecalculateRejectedAssertion(
+            assertionId, correctedAt, rejectUnsupportedEvents: false);
 
         var audit = new AuditEvent(
             auditEventId,
@@ -114,21 +122,21 @@ public sealed partial class MatterEvidenceGraph
             assertionId,
             correctedAssertionId,
             actor,
-            "Assertion corrected with an append-only replacement.",
+            AppendDismissedContradictions(
+                "Assertion corrected with an append-only human-attributed replacement; the original documentary source remains attached only to the superseded assertion.",
+                dismissedContradictions),
             correctedAt);
         _auditEvents.Add(audit);
         return new AssertionCorrectionResult(superseded, corrected, audit);
     }
 
-    private void RecalculateRejectedAssertion(
+    private IReadOnlyList<Guid> RecalculateRejectedAssertion(
         Guid assertionId,
         DateTimeOffset changedAt,
         bool rejectUnsupportedEvents)
     {
-        foreach (var contradiction in _contradictions.Values
-                     .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved &&
-                                    (item.AssertionAId == assertionId || item.AssertionBId == assertionId))
-                     .ToArray())
+        var contradictions = LinkedUnresolvedContradictions(assertionId);
+        foreach (var contradiction in contradictions)
         {
             _contradictions[contradiction.Id] = contradiction.Resolve(
                 ContradictionResolutionState.Dismissed,
@@ -138,7 +146,7 @@ public sealed partial class MatterEvidenceGraph
 
         if (!rejectUnsupportedEvents)
         {
-            return;
+            return contradictions.Select(item => item.Id).ToArray();
         }
 
         var affectedEventIds = _links.Values
@@ -148,6 +156,12 @@ public sealed partial class MatterEvidenceGraph
             .ToArray();
         foreach (var eventId in affectedEventIds)
         {
+            var matterEvent = _events[eventId];
+            if (matterEvent.Status == EventStatus.Superseded || matterEvent.SupersededByEventId.HasValue)
+            {
+                continue;
+            }
+
             var supportingAssertionIds = _links.Values
                 .Where(item => item.EventId == eventId && item.Relation is
                     AssertionEventRelation.Supports or AssertionEventRelation.Qualifies or AssertionEventRelation.Contextualizes)
@@ -158,8 +172,32 @@ public sealed partial class MatterEvidenceGraph
                     _assertions[id].VerificationState == VerificationState.Rejected ||
                     _assertions[id].DisputeState == DisputeState.Superseded))
             {
-                _events[eventId] = _events[eventId].WithReview(EventStatus.Rejected, VerificationState.Rejected);
+                _events[eventId] = matterEvent.WithReview(EventStatus.Rejected, VerificationState.Rejected);
             }
         }
+
+        return contradictions.Select(item => item.Id).ToArray();
     }
+
+    private Contradiction[] LinkedUnresolvedContradictions(Guid assertionId) =>
+        _contradictions.Values
+            .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved &&
+                           (item.AssertionAId == assertionId || item.AssertionBId == assertionId))
+            .OrderBy(item => item.Id)
+            .ToArray();
+
+    private void ValidateContradictionResolutionTime(Guid assertionId, DateTimeOffset changedAt)
+    {
+        if (LinkedUnresolvedContradictions(assertionId).Any(item => changedAt < item.CreatedAt))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(changedAt),
+                "An assertion review or correction cannot dismiss a contradiction before it was detected.");
+        }
+    }
+
+    private static string AppendDismissedContradictions(string summary, IReadOnlyList<Guid> contradictionIds) =>
+        contradictionIds.Count == 0
+            ? summary
+            : $"{summary} Dismissed contradiction ids: {string.Join(", ", contradictionIds.Select(item => item.ToString("N")))}.";
 }

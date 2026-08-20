@@ -91,8 +91,9 @@ public enum ContradictionResolutionState
 public enum AuditEventKind
 {
     EventCorrected = 0,
-    AssertionCorrected,
-    AssertionRejected,
-    ContradictionResolved,
-    AnalysisSuperseded
+    AssertionCorrected = 1,
+    AssertionRejected = 2,
+    ContradictionResolved = 3,
+    AnalysisSuperseded = 4,
+    AssertionReviewed = 5
 }

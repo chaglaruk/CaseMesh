@@ -48,7 +48,7 @@ public sealed class MatterBrainState
         RequireMatter(run.MatterId);
         RequireId(run.Id, nameof(run.Id));
         ArgumentException.ThrowIfNullOrWhiteSpace(run.Fingerprint);
-        ValidateDescriptor(run.Provider);
+        MatterBrainIntegrity.ValidateDescriptor(run.Provider);
         ValidateDigest(run.RawResultDigest, nameof(run.RawResultDigest));
         ValidateSources(run.SourceSpanIds);
         if (run.SourceSpanIds.Count == 0 || run.SourceSpanIds.Distinct().Count() != run.SourceSpanIds.Count)
@@ -62,7 +62,7 @@ public sealed class MatterBrainState
         }
         if (_runs.TryGetValue(run.Id, out var existing))
         {
-            if (existing != run)
+            if (!SameRun(existing, run))
             {
                 throw new InvalidOperationException("An extraction-run id cannot be reused with different metadata.");
             }
@@ -89,7 +89,7 @@ public sealed class MatterBrainState
         ValidateScore(candidate.ExtractionConfidence);
         ValidateDigest(candidate.PayloadDigest, nameof(candidate.PayloadDigest));
         ArgumentException.ThrowIfNullOrWhiteSpace(candidate.PayloadJson);
-        if (Encoding.UTF8.GetByteCount(candidate.PayloadJson) > 1_000_000)
+        if (Encoding.UTF8.GetByteCount(candidate.PayloadJson) > MatterBrainIntegrity.MaximumCandidatePayloadBytes)
         {
             throw new InvalidOperationException("Candidate payload metadata exceeds its bounded size.");
         }
@@ -152,7 +152,7 @@ public sealed class MatterBrainState
 
         if (_candidates.TryGetValue(candidate.Id, out var existing))
         {
-            if (existing != candidate)
+            if (!SameCandidate(existing, candidate))
             {
                 throw new InvalidOperationException("A candidate id cannot overwrite prior model output.");
             }
@@ -553,6 +553,11 @@ public sealed class MatterBrainState
             {
                 throw new InvalidOperationException("Persisted entity decision has no valid proposal.");
             }
+
+            if (action.Kind == EntityResolutionActionKind.Accepted && WouldCreateEntityMergeCycle(action))
+            {
+                throw new InvalidOperationException("Persisted entity decisions contain a merge cycle.");
+            }
         }
         else
         {
@@ -658,15 +663,19 @@ public sealed class MatterBrainState
     public Guid ResolveEntityId(CanonicalEntityKind kind, Guid entityId)
     {
         RequireEntity(kind, entityId);
-        var accepted = _entityResolutionActions
-            .Where(item => item.Kind == EntityResolutionActionKind.Accepted &&
-                           item.EntityKind == kind && item.SourceEntityId == entityId)
-            .Where(item => _entityResolutionActions.All(reversal =>
-                reversal.Kind != EntityResolutionActionKind.Reversed || reversal.ReversesActionId != item.Id))
-            .OrderBy(item => item.OccurredAt)
-            .ThenBy(item => item.Id)
-            .LastOrDefault();
-        return accepted?.TargetEntityId ?? entityId;
+        var current = entityId;
+        var visited = new HashSet<Guid> { current };
+        while (ActiveAcceptedMerge(kind, current) is { } accepted)
+        {
+            if (!visited.Add(accepted.TargetEntityId))
+            {
+                throw new InvalidOperationException("Entity-resolution history contains a merge cycle.");
+            }
+
+            current = accepted.TargetEntityId;
+        }
+
+        return current;
     }
 
     public AssertionReviewResult ReviewAssertion(
@@ -695,9 +704,6 @@ public sealed class MatterBrainState
         string actor,
         DateTimeOffset correctedAt)
     {
-        var activeDependencies = ActiveDependencies
-            .Where(item => item.CanonicalKind == CanonicalRecordKind.Assertion && item.CanonicalId == assertionId)
-            .ToArray();
         var linkedEvents = Evidence.AssertionEventLinks
             .Where(item => item.AssertionId == assertionId)
             .ToArray();
@@ -705,18 +711,6 @@ public sealed class MatterBrainState
             assertionId, correctedAssertionId, correctedValue, correctedEventTime,
             auditEventId, actor, correctedAt);
         InvalidateCanonicalDependencies(CanonicalRecordKind.Assertion, assertionId, auditEventId, correctedAt);
-
-        foreach (var dependency in activeDependencies)
-        {
-            AddDependency(new MatterBrainDependency(
-                DeterministicId("corrected-assertion-dependency", dependency.Id, correctedAssertionId),
-                MatterId,
-                dependency.RunId,
-                dependency.SourceSpanId,
-                dependency.CandidateId,
-                CanonicalRecordKind.Assertion,
-                correctedAssertionId));
-        }
 
         foreach (var link in linkedEvents)
         {
@@ -726,6 +720,8 @@ public sealed class MatterBrainState
                 link.EventId,
                 link.Relation);
         }
+
+        AddNumericCorrectionContradictions(result.CorrectedAssertion, correctedAt);
 
         return result;
     }
@@ -778,8 +774,79 @@ public sealed class MatterBrainState
         }
 
         var action = proposal with { Id = actionId, Kind = decision, Actor = actor, OccurredAt = occurredAt };
+        if (decision == EntityResolutionActionKind.Accepted && WouldCreateEntityMergeCycle(action))
+        {
+            throw new InvalidOperationException("Accepting this entity merge would create a cycle.");
+        }
+
         AddResolutionAction(action);
         return action;
+    }
+
+    private EntityResolutionAction? ActiveAcceptedMerge(CanonicalEntityKind kind, Guid sourceEntityId) =>
+        _entityResolutionActions
+            .Where(item => item.Kind == EntityResolutionActionKind.Accepted &&
+                           item.EntityKind == kind && item.SourceEntityId == sourceEntityId)
+            .Where(item => _entityResolutionActions.All(reversal =>
+                reversal.Kind != EntityResolutionActionKind.Reversed || reversal.ReversesActionId != item.Id))
+            .OrderBy(item => item.OccurredAt)
+            .ThenBy(item => item.Id)
+            .LastOrDefault();
+
+    private bool WouldCreateEntityMergeCycle(EntityResolutionAction action)
+    {
+        var current = action.TargetEntityId;
+        var visited = new HashSet<Guid> { action.SourceEntityId };
+        while (true)
+        {
+            if (!visited.Add(current))
+            {
+                return true;
+            }
+
+            var accepted = ActiveAcceptedMerge(action.EntityKind, current);
+            if (accepted is null)
+            {
+                return false;
+            }
+
+            current = accepted.TargetEntityId;
+        }
+    }
+
+    private void AddNumericCorrectionContradictions(Assertion corrected, DateTimeOffset detectedAt)
+    {
+        if (!decimal.TryParse(corrected.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var correctedNumber))
+        {
+            return;
+        }
+
+        foreach (var other in Evidence.Assertions.Where(item =>
+                     item.Id != corrected.Id && item.VerificationState != VerificationState.Rejected &&
+                     item.DisputeState != DisputeState.Superseded &&
+                     string.Equals(item.SubjectReference.Trim(), corrected.SubjectReference.Trim(), StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals(item.Predicate.Trim(), corrected.Predicate.Trim(), StringComparison.OrdinalIgnoreCase) &&
+                     item.EventTime == corrected.EventTime))
+        {
+            if (!decimal.TryParse(other.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var otherNumber) ||
+                otherNumber == correctedNumber || Evidence.Contradictions.Any(item =>
+                    (item.AssertionAId == corrected.Id && item.AssertionBId == other.Id) ||
+                    (item.AssertionAId == other.Id && item.AssertionBId == corrected.Id)))
+            {
+                continue;
+            }
+
+            var ordered = corrected.Id.CompareTo(other.Id) <= 0
+                ? (First: corrected.Id, Second: other.Id)
+                : (First: other.Id, Second: corrected.Id);
+            Evidence.AddContradiction(
+                DeterministicId("correction-numeric-contradiction", MatterId, ordered.First, ordered.Second),
+                ordered.First,
+                ordered.Second,
+                ContradictionType.NumericMismatch,
+                "rule:human-correction-numeric-mismatch:v1",
+                detectedAt);
+        }
     }
 
     private void AddResolutionAction(EntityResolutionAction action)
@@ -908,15 +975,20 @@ public sealed class MatterBrainState
         }
     }
 
-    private static void ValidateDescriptor(StructuredExtractionProviderDescriptor descriptor)
-    {
-        ArgumentNullException.ThrowIfNull(descriptor);
-        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Provider);
-        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Model);
-        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.ExtractionVersion);
-        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.PromptVersion);
-        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.SchemaVersion);
-    }
+    private static bool SameRun(ExtractionRun first, ExtractionRun second) =>
+        first.Id == second.Id && first.MatterId == second.MatterId &&
+        first.Fingerprint == second.Fingerprint && first.Provider == second.Provider &&
+        first.SourceSpanIds.SequenceEqual(second.SourceSpanIds) &&
+        first.GeneratedAt == second.GeneratedAt && first.RawResultDigest == second.RawResultDigest;
+
+    private static bool SameCandidate(ExtractionCandidateRecord first, ExtractionCandidateRecord second) =>
+        first.Id == second.Id && first.MatterId == second.MatterId && first.RunId == second.RunId &&
+        first.ExternalKey == second.ExternalKey && first.Kind == second.Kind &&
+        first.Disposition == second.Disposition && first.RejectionCode == second.RejectionCode &&
+        first.SourceSpanIds.SequenceEqual(second.SourceSpanIds) &&
+        first.ExtractionConfidence == second.ExtractionConfidence &&
+        first.CanonicalKind == second.CanonicalKind && first.CanonicalId == second.CanonicalId &&
+        first.PayloadJson == second.PayloadJson && first.PayloadDigest == second.PayloadDigest;
 
     private static void ValidateDigest(string digest, string parameterName)
     {

@@ -22,7 +22,8 @@ public static class MatterBrainEvaluation
 {
     private static readonly string[] ForbiddenConclusionTerms =
     [
-        "legal-liability", "win-probability", "compensation-estimate", "merits-score"
+        "legal-liability", "liability", "win-probability", "winprobability",
+        "compensation-estimate", "compensationestimate", "merits-score", "meritsscore"
     ];
 
     public static MatterBrainEvaluationReport Evaluate(MatterBrainState state)
@@ -55,19 +56,20 @@ public static class MatterBrainEvaluation
             }
         }
 
+        var assertionsById = state.Evidence.Assertions.ToDictionary(item => item.Id);
+        var linksByEvent = state.Evidence.AssertionEventLinks
+            .GroupBy(item => item.EventId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
         foreach (var matterEvent in state.Evidence.Events)
         {
-            var linkedAssertions = state.Evidence.AssertionEventLinks
-                .Where(item => item.EventId == matterEvent.Id)
-                .Select(item => state.Evidence.Assertions.Single(assertion => assertion.Id == item.AssertionId))
-                .ToArray();
-            if (linkedAssertions.Length == 0)
+            if (!linksByEvent.TryGetValue(matterEvent.Id, out var links) || links.Length == 0)
             {
                 continue;
             }
 
             total++;
-            if (linkedAssertions.Any(item => item.SourceSpanId.HasValue && spans.ContainsKey(item.SourceSpanId.Value)))
+            if (links.Any(link => assertionsById.TryGetValue(link.AssertionId, out var assertion) &&
+                                  assertion.SourceSpanId.HasValue && spans.ContainsKey(assertion.SourceSpanId.Value)))
             {
                 valid++;
             }

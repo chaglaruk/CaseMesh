@@ -1,3 +1,7 @@
+ALTER TABLE casemesh.audit_events
+    DROP CONSTRAINT audit_events_audit_kind_check,
+    ADD CONSTRAINT audit_events_audit_kind_check CHECK (audit_kind BETWEEN 0 AND 5);
+
 CREATE TABLE casemesh.people (
     tenant_id uuid NOT NULL,
     matter_id uuid NOT NULL,

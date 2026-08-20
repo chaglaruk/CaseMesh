@@ -6,6 +6,8 @@ namespace CaseMesh.MatterBrain;
 
 internal static class MatterBrainIntegrity
 {
+    internal const int MaximumCandidatePayloadBytes = 1_000_000;
+
     internal static string Digest(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
@@ -38,6 +40,16 @@ internal static class MatterBrainIntegrity
             descriptor.SchemaVersion,
             SourceSpanIds = sourceIds.Order().Select(id => id.ToString("N")).ToArray()
         })));
+
+    internal static void ValidateDescriptor(StructuredExtractionProviderDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Model);
+        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.ExtractionVersion);
+        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.PromptVersion);
+        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.SchemaVersion);
+    }
 
     private static void WriteCanonical(Utf8JsonWriter writer, JsonElement element)
     {

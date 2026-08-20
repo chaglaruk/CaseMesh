@@ -62,7 +62,7 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
                 return null;
             }
 
-            var snapshot = await ReadAsync(connection, transaction, matterId, cancellationToken);
+            var snapshot = await ReadAsync(connection, transaction, tenantId.Value, matterId, cancellationToken);
             var brain = MatterBrainState.Rehydrate(persisted.Evidence, snapshot);
             return new PersistedMatterBrain(persisted.Evidence, persisted.Workplace, brain);
         }, cancellationToken);
@@ -81,6 +81,13 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         if (snapshot.MatterId != matterId)
         {
             throw new InvalidOperationException("Matter Brain snapshot ownership changed before persistence.");
+        }
+
+        var personIds = snapshot.People.Select(item => item.Id).ToHashSet();
+        var organisationIds = snapshot.Organisations.Select(item => item.Id).ToHashSet();
+        if (personIds.Overlaps(organisationIds))
+        {
+            throw new InvalidOperationException("A canonical entity id cannot identify both a person and an organisation.");
         }
 
         foreach (var person in snapshot.People)
@@ -128,10 +135,15 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
 
         foreach (var communication in snapshot.Communications)
         {
-            var senderPerson = snapshot.People.Any(item => item.Id == communication.SenderEntityId)
+            var senderPerson = communication.SenderEntityId.HasValue && personIds.Contains(communication.SenderEntityId.Value)
                 ? communication.SenderEntityId : null;
-            var senderOrganisation = snapshot.Organisations.Any(item => item.Id == communication.SenderEntityId)
+            var senderOrganisation = communication.SenderEntityId.HasValue && organisationIds.Contains(communication.SenderEntityId.Value)
                 ? communication.SenderEntityId : null;
+            if (communication.SenderEntityId.HasValue && !senderPerson.HasValue && !senderOrganisation.HasValue)
+            {
+                throw new InvalidOperationException(
+                    $"Communication {communication.Id:N} references an unregistered sender entity.");
+            }
             await EnsureAsync(connection, transaction,
                 """
                 INSERT INTO casemesh.communications
@@ -152,7 +164,14 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
             for (var ordinal = 0; ordinal < communication.ParticipantEntityIds.Count; ordinal++)
             {
                 var participantId = communication.ParticipantEntityIds[ordinal];
-                var isPerson = snapshot.People.Any(item => item.Id == participantId);
+                var isPerson = personIds.Contains(participantId);
+                var isOrganisation = organisationIds.Contains(participantId);
+                if (!isPerson && !isOrganisation)
+                {
+                    throw new InvalidOperationException(
+                        $"Communication {communication.Id:N} references an unregistered participant entity.");
+                }
+
                 await EnsureAsync(connection, transaction,
                     """
                     INSERT INTO casemesh.communication_participants
@@ -306,15 +325,17 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
     private static async Task<MatterBrainSnapshot> ReadAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
+        Guid tenantId,
         Guid matterId,
         CancellationToken cancellationToken)
     {
         var people = new List<Person>();
         var roles = await ReadOrderedIdsAndTextAsync(connection, transaction,
-            "SELECT person_id,ordinal,role_label FROM casemesh.person_roles WHERE matter_id=$1 ORDER BY person_id,ordinal",
-            matterId, cancellationToken);
+            "SELECT person_id,ordinal,role_label FROM casemesh.person_roles WHERE tenant_id=$1 AND matter_id=$2 ORDER BY person_id,ordinal",
+            tenantId, matterId, cancellationToken);
         await using (var command = Command(connection, transaction,
-                         "SELECT person_id,display_name FROM casemesh.people WHERE matter_id=$1 ORDER BY person_id", matterId))
+                         "SELECT person_id,display_name FROM casemesh.people WHERE tenant_id=$1 AND matter_id=$2 ORDER BY person_id",
+                         tenantId, matterId))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -327,7 +348,8 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
 
         var organisations = new List<Organisation>();
         await using (var command = Command(connection, transaction,
-                         "SELECT organisation_id,name,type_label FROM casemesh.organisations WHERE matter_id=$1 ORDER BY organisation_id", matterId))
+                         "SELECT organisation_id,name,type_label FROM casemesh.organisations WHERE tenant_id=$1 AND matter_id=$2 ORDER BY organisation_id",
+                         tenantId, matterId))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -339,8 +361,8 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         var aliases = new List<EntityAlias>();
         await using (var command = Command(connection, transaction, """
                          SELECT alias_id,entity_kind,person_id,organisation_id,alias_value,normalized_value,source_span_id
-                         FROM casemesh.entity_aliases WHERE matter_id=$1 ORDER BY alias_id
-                         """, matterId))
+                         FROM casemesh.entity_aliases WHERE tenant_id=$1 AND matter_id=$2 ORDER BY alias_id
+                         """, tenantId, matterId))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -352,16 +374,17 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
             }
         }
 
-        var participantIds = await ReadCommunicationParticipantsAsync(connection, transaction, matterId, cancellationToken);
+        var participantIds = await ReadCommunicationParticipantsAsync(
+            connection, transaction, tenantId, matterId, cancellationToken);
         var communicationSources = await ReadOrderedIdsAsync(connection, transaction,
-            "SELECT communication_id,ordinal,source_span_id FROM casemesh.communication_sources WHERE matter_id=$1 ORDER BY communication_id,ordinal",
-            matterId, cancellationToken);
+            "SELECT communication_id,ordinal,source_span_id FROM casemesh.communication_sources WHERE tenant_id=$1 AND matter_id=$2 ORDER BY communication_id,ordinal",
+            tenantId, matterId, cancellationToken);
         var communications = new List<Communication>();
         await using (var command = Command(connection, transaction, """
                          SELECT communication_id,communication_kind,neutral_label,occurred_at,
                                 sender_person_id,sender_organisation_id,verification_state
-                         FROM casemesh.communications WHERE matter_id=$1 ORDER BY communication_id
-                         """, matterId))
+                         FROM casemesh.communications WHERE tenant_id=$1 AND matter_id=$2 ORDER BY communication_id
+                         """, tenantId, matterId))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -377,14 +400,14 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         }
 
         var runSources = await ReadOrderedIdsAsync(connection, transaction,
-            "SELECT extraction_run_id,ordinal,source_span_id FROM casemesh.extraction_run_sources WHERE matter_id=$1 ORDER BY extraction_run_id,ordinal",
-            matterId, cancellationToken);
+            "SELECT extraction_run_id,ordinal,source_span_id FROM casemesh.extraction_run_sources WHERE tenant_id=$1 AND matter_id=$2 ORDER BY extraction_run_id,ordinal",
+            tenantId, matterId, cancellationToken);
         var runs = new List<ExtractionRun>();
         await using (var command = Command(connection, transaction, """
                          SELECT extraction_run_id,fingerprint,provider,model,extraction_version,prompt_version,
                                 schema_version,generated_at,raw_result_digest
-                         FROM casemesh.extraction_runs WHERE matter_id=$1 ORDER BY generated_at,extraction_run_id
-                         """, matterId))
+                         FROM casemesh.extraction_runs WHERE tenant_id=$1 AND matter_id=$2 ORDER BY generated_at,extraction_run_id
+                         """, tenantId, matterId))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -399,15 +422,15 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         }
 
         var candidateSources = await ReadOrderedIdsAsync(connection, transaction,
-            "SELECT candidate_id,ordinal,source_span_id FROM casemesh.extraction_candidate_sources WHERE matter_id=$1 ORDER BY candidate_id,ordinal",
-            matterId, cancellationToken);
+            "SELECT candidate_id,ordinal,source_span_id FROM casemesh.extraction_candidate_sources WHERE tenant_id=$1 AND matter_id=$2 ORDER BY candidate_id,ordinal",
+            tenantId, matterId, cancellationToken);
         var candidates = new List<ExtractionCandidateRecord>();
         await using (var command = Command(connection, transaction, """
                          SELECT candidate_id,extraction_run_id,external_key,candidate_kind,disposition,rejection_code,
                                 extraction_confidence,canonical_kind,person_id,organisation_id,communication_id,
                                 assertion_id,event_id,assertion_event_link_id,contradiction_id,payload_json::text,payload_digest
-                         FROM casemesh.extraction_candidates WHERE matter_id=$1 ORDER BY extraction_run_id,candidate_id
-                         """, matterId))
+                         FROM casemesh.extraction_candidates WHERE tenant_id=$1 AND matter_id=$2 ORDER BY extraction_run_id,candidate_id
+                         """, tenantId, matterId))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -429,8 +452,8 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
                          SELECT dependency_id,extraction_run_id,source_span_id,candidate_id,canonical_kind,
                                 person_id,organisation_id,communication_id,assertion_id,event_id,
                                 assertion_event_link_id,contradiction_id,analysis_node_id
-                         FROM casemesh.matter_brain_dependencies WHERE matter_id=$1 ORDER BY dependency_id
-                         """, matterId))
+                         FROM casemesh.matter_brain_dependencies WHERE tenant_id=$1 AND matter_id=$2 ORDER BY dependency_id
+                         """, tenantId, matterId))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -444,8 +467,8 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         var invalidations = new List<DependencyInvalidation>();
         await using (var command = Command(connection, transaction, """
                          SELECT invalidation_id,dependency_id,invalidated_by_run_id,invalidated_by_audit_event_id,invalidated_at
-                         FROM casemesh.dependency_invalidations WHERE matter_id=$1 ORDER BY invalidated_at,invalidation_id
-                         """, matterId))
+                         FROM casemesh.dependency_invalidations WHERE tenant_id=$1 AND matter_id=$2 ORDER BY invalidated_at,invalidation_id
+                         """, tenantId, matterId))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -457,14 +480,14 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         }
 
         var actionSources = await ReadOrderedIdsAsync(connection, transaction,
-            "SELECT action_id,ordinal,source_span_id FROM casemesh.entity_resolution_sources WHERE matter_id=$1 ORDER BY action_id,ordinal",
-            matterId, cancellationToken);
+            "SELECT action_id,ordinal,source_span_id FROM casemesh.entity_resolution_sources WHERE tenant_id=$1 AND matter_id=$2 ORDER BY action_id,ordinal",
+            tenantId, matterId, cancellationToken);
         var actions = new List<EntityResolutionAction>();
         await using (var command = Command(connection, transaction, """
                          SELECT action_id,proposal_id,action_kind,entity_kind,source_person_id,target_person_id,
                                 source_organisation_id,target_organisation_id,match_score,actor,occurred_at,reverses_action_id
-                         FROM casemesh.entity_resolution_actions WHERE matter_id=$1 ORDER BY occurred_at,action_id
-                         """, matterId))
+                         FROM casemesh.entity_resolution_actions WHERE tenant_id=$1 AND matter_id=$2 ORDER BY occurred_at,action_id
+                         """, tenantId, matterId))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -552,9 +575,11 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         string sql,
+        Guid tenantId,
         Guid matterId)
     {
         var command = new NpgsqlCommand(sql, connection, transaction);
+        command.Parameters.AddWithValue(tenantId);
         command.Parameters.AddWithValue(matterId);
         return command;
     }
@@ -563,11 +588,12 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         string sql,
+        Guid tenantId,
         Guid matterId,
         CancellationToken cancellationToken)
     {
         var values = new Dictionary<Guid, List<Guid>>();
-        await using var command = Command(connection, transaction, sql, matterId);
+        await using var command = Command(connection, transaction, sql, tenantId, matterId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -587,11 +613,12 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         string sql,
+        Guid tenantId,
         Guid matterId,
         CancellationToken cancellationToken)
     {
         var values = new Dictionary<Guid, List<string>>();
-        await using var command = Command(connection, transaction, sql, matterId);
+        await using var command = Command(connection, transaction, sql, tenantId, matterId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -610,13 +637,14 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
     private static async Task<Dictionary<Guid, List<Guid>>> ReadCommunicationParticipantsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
+        Guid tenantId,
         Guid matterId,
         CancellationToken cancellationToken) =>
         await ReadOrderedIdsAsync(connection, transaction, """
             SELECT communication_id,ordinal,COALESCE(person_id,organisation_id)
-            FROM casemesh.communication_participants WHERE matter_id=$1
+            FROM casemesh.communication_participants WHERE tenant_id=$1 AND matter_id=$2
             ORDER BY communication_id,ordinal
-            """, matterId, cancellationToken);
+            """, tenantId, matterId, cancellationToken);
 
     private static Guid? FirstGuid(NpgsqlDataReader reader, int start, int end)
     {

@@ -5,13 +5,13 @@ namespace CaseMesh.MatterBrain;
 public enum ExtractionCandidateKind
 {
     Person = 0,
-    Organisation,
-    Communication,
-    Assertion,
-    Event,
-    AssertionEventLink,
-    EntityMatch,
-    Contradiction
+    Organisation = 1,
+    Communication = 2,
+    Assertion = 3,
+    Event = 4,
+    AssertionEventLink = 5,
+    EntityMatch = 6,
+    Contradiction = 7
 }
 
 public enum CandidateDisposition
@@ -23,21 +23,21 @@ public enum CandidateDisposition
 public enum CanonicalRecordKind
 {
     Person = 0,
-    Organisation,
-    Communication,
-    Assertion,
-    Event,
-    AssertionEventLink,
-    Contradiction,
-    AnalysisNode
+    Organisation = 1,
+    Communication = 2,
+    Assertion = 3,
+    Event = 4,
+    AssertionEventLink = 5,
+    Contradiction = 6,
+    AnalysisNode = 7
 }
 
 public enum EntityResolutionActionKind
 {
     Proposed = 0,
-    Accepted,
-    Rejected,
-    Reversed
+    Accepted = 1,
+    Rejected = 2,
+    Reversed = 3
 }
 
 public sealed record StructuredExtractionProviderDescriptor(

@@ -33,6 +33,12 @@ public sealed class PostgresMatterBrainStoreTests(PostgresFixture database)
         state.ReverseEntityMerge(
             SyntheticPersistedMatterFactory.Id(810, 302), accepted.Id,
             "synthetic-reviewer", SyntheticPersistedMatterFactory.RecordedAt.AddHours(4));
+        var reviewedAssertion = state.Evidence.Assertions.Single(item =>
+            item.Predicate == "extracted-sickness-count" && item.Value == "12");
+        state.ReviewAssertion(
+            reviewedAssertion.Id, VerificationState.Confirmed,
+            SyntheticPersistedMatterFactory.Id(810, 303), "synthetic-reviewer",
+            SyntheticPersistedMatterFactory.RecordedAt.AddHours(5));
 
         await using var matterStore = new PostgresMatterStore(database.AppConnectionString);
         await matterStore.CreateTenantAsync(tenant, "Synthetic tenant", SyntheticPersistedMatterFactory.RecordedAt);
@@ -62,6 +68,13 @@ public sealed class PostgresMatterBrainStoreTests(PostgresFixture database)
         Assert.Equal(64, version.ContentSha256.Length);
         Assert.Single(loaded.Brain.Aliases, item =>
             item.EntityId == people[0].Id && item.NormalizedValue == "MORGAN");
+        var expectedCommunication = Assert.Single(state.Communications);
+        var loadedCommunication = Assert.Single(loaded.Brain.Communications);
+        Assert.Equal(expectedCommunication.SenderEntityId, loadedCommunication.SenderEntityId);
+        Assert.Equal(expectedCommunication.ParticipantEntityIds, loadedCommunication.ParticipantEntityIds);
+        Assert.Equal(expectedCommunication.SourceSpanIds, loadedCommunication.SourceSpanIds);
+        Assert.Equal(AuditEventKind.AssertionReviewed,
+            loaded.Evidence.AuditEvents.Single(item => item.Id == SyntheticPersistedMatterFactory.Id(810, 303)).Kind);
     }
 
     [PostgresFact]
@@ -84,6 +97,35 @@ public sealed class PostgresMatterBrainStoreTests(PostgresFixture database)
         await using var command = new NpgsqlCommand(
             "SELECT COUNT(*) FROM casemesh.extraction_candidates;", connection);
         Assert.Equal(0L, await command.ExecuteScalarAsync());
+    }
+
+    [PostgresFact]
+    public async Task Explicit_tenant_predicates_isolate_identical_Matter_ids()
+    {
+        var tenantA = new TenantId(SyntheticPersistedMatterFactory.Id(819, 1));
+        var tenantB = new TenantId(SyntheticPersistedMatterFactory.Id(819, 2));
+        var sharedMatterId = SyntheticPersistedMatterFactory.Id(819, 3);
+        var matterA = SyntheticPersistedMatterFactory.Create(tenantA, sharedMatterId, 819);
+        var matterB = SyntheticPersistedMatterFactory.Create(tenantB, sharedMatterId, 820);
+        var stateA = await CreateBrainAsync(matterA);
+        var stateB = await CreateBrainAsync(matterB);
+        await using var matterStore = new PostgresMatterStore(database.AppConnectionString);
+        await matterStore.CreateTenantAsync(tenantA, "Tenant A", SyntheticPersistedMatterFactory.RecordedAt);
+        await matterStore.CreateTenantAsync(tenantB, "Tenant B", SyntheticPersistedMatterFactory.RecordedAt);
+        await using var store = new PostgresMatterBrainStore(database.AppConnectionString);
+        await store.SaveAsync(stateA, matterA.Workplace);
+        await store.SaveAsync(stateB, matterB.Workplace);
+
+        var loadedA = await store.LoadAsync(tenantA, sharedMatterId);
+        var loadedB = await store.LoadAsync(tenantB, sharedMatterId);
+
+        Assert.NotNull(loadedA);
+        Assert.NotNull(loadedB);
+        Assert.Equal(tenantA, loadedA.Evidence.Matter.TenantId);
+        Assert.Equal(tenantB, loadedB.Evidence.Matter.TenantId);
+        Assert.Equal(stateA.Runs.Select(item => item.Id), loadedA.Brain.Runs.Select(item => item.Id));
+        Assert.Equal(stateB.Runs.Select(item => item.Id), loadedB.Brain.Runs.Select(item => item.Id));
+        Assert.DoesNotContain(loadedA.Brain.Runs, item => stateB.Runs.Any(other => other.Id == item.Id));
     }
 
     [PostgresFact]
@@ -156,11 +198,28 @@ public sealed class PostgresMatterBrainStoreTests(PostgresFixture database)
         }
         await transaction.RollbackAsync();
 
+        await using var deleteTransaction = await connection.BeginTransactionAsync();
+        await SetTenantAsync(connection, deleteTransaction, tenant);
+        await using (var delete = new NpgsqlCommand(
+                         "DELETE FROM casemesh.extraction_runs WHERE tenant_id=$1 AND matter_id=$2 AND extraction_run_id=$3;",
+                         connection, deleteTransaction))
+        {
+            delete.Parameters.AddWithValue(tenant.Value);
+            delete.Parameters.AddWithValue(persisted.Evidence.Matter.Id);
+            delete.Parameters.AddWithValue(runId);
+            var exception = await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync());
+            Assert.Contains("append-only", exception.MessageText, StringComparison.OrdinalIgnoreCase);
+        }
+        await deleteTransaction.RollbackAsync();
+
         await using var admin = new NpgsqlConnection(database.AdminConnectionString);
         await admin.OpenAsync();
         await using var truncate = new NpgsqlCommand("TRUNCATE casemesh.extraction_runs CASCADE;", admin);
         var truncateException = await Assert.ThrowsAsync<PostgresException>(() => truncate.ExecuteNonQueryAsync());
         Assert.Contains("append-only", truncateException.MessageText, StringComparison.OrdinalIgnoreCase);
+
+        Assert.True(await matterStore.DeleteMatterAsync(tenant, persisted.Evidence.Matter.Id));
+        Assert.Null(await store.LoadAsync(tenant, persisted.Evidence.Matter.Id));
     }
 
     [PostgresFact]
