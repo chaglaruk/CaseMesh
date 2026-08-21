@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using System.Xml;
 using CaseMesh.Core.Models;
 using CaseMesh.Core.Workplace;
+using CaseMesh.MatterBrain;
 
 namespace CaseMesh.ProfessionalExport;
 
@@ -15,7 +16,7 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
     public const string CurrentSchemaVersion = "professional-export/v1";
     public const string CurrentTemplateVersion = "neutral-handover/v1";
     private const int MaximumRecordsPerKind = 50_000;
-    private const long MaximumInputUtf8Bytes = 32L * 1024 * 1024;
+    internal const long MaximumInputUtf8Bytes = 32L * 1024 * 1024;
     private const int MaximumArtifactBytes = 64 * 1024 * 1024;
     private static readonly DateTimeOffset StableArchiveTimestamp =
         new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
@@ -109,31 +110,49 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         var eventReferences = events.Select((item, index) => (item.Id, Reference: $"EVT-{index + 1:D5}"))
             .ToDictionary(item => item.Id, item => item.Reference);
         var contradictions = evidence.Contradictions.OrderBy(item => item.Id).ToArray();
+        var assertionsById = assertions.ToDictionary(item => item.Id);
         var contradictionReferences = contradictions
             .Select((item, index) => (item.Id, Reference: $"CTR-{index + 1:D5}"))
             .ToDictionary(item => item.Id, item => item.Reference);
 
-        var documentItems = input.Documents
-            .OrderBy(item => documentReferences[item.DocumentVersionId], StringComparer.Ordinal)
-            .Select(item => new ExportDocumentItem(
-                documentReferences[item.DocumentVersionId], item.DocumentId, item.DocumentVersionId,
-                item.OriginalObjectId, item.ContentSha256, item.DetectedMediaType ?? "not-recorded",
-                item.ByteLength, item.ProcessingStatus, item.ExtractionRoutes, item.ParserVersion,
-                item.OcrProvider, item.OcrVersion,
-                sources.Count(span => span.DocumentVersion.DocumentVersionId == item.DocumentVersionId),
-                input.Documents.Count(other => other.OriginalObjectId == item.OriginalObjectId) > 1))
-            .ToArray();
-        var sourceItems = sources.Select(item => new ExportSourceItem(
-            sourceReferences[item.Id], item.Id, documentReferences[item.DocumentVersion.DocumentVersionId],
-            item.DocumentVersion.DocumentVersionId, item.PageNumber, item.TextStart, item.TextEnd,
-            item.ExtractedTextDigest, item.ParserVersion, item.ExtractionConfidence)).ToArray();
+        var sourceMetadata = input.SourceMetadata.ToDictionary(item => item.SourceSpanId);
+        var sourceItems = sources.Select(item =>
+        {
+            var metadata = sourceMetadata[item.Id];
+            return new ExportSourceItem(
+                sourceReferences[item.Id], item.Id, documentReferences[item.DocumentVersion.DocumentVersionId],
+                item.DocumentVersion.DocumentVersionId, item.PageNumber, item.TextStart, item.TextEnd,
+                item.ExtractedTextDigest, item.ParserVersion, item.ExtractionConfidence,
+                metadata.LocatorKind, metadata.StableLocator, metadata.ExtractionRoute,
+                metadata.ExtractionProvider, metadata.ExtractionProviderVersion,
+                metadata.BoundingBoxLeft, metadata.BoundingBoxTop,
+                metadata.BoundingBoxWidth, metadata.BoundingBoxHeight);
+        }).ToArray();
+        var dependencyAssertionIds = input.Brain.Dependencies
+            .Where(item => item.CanonicalKind == CanonicalRecordKind.Assertion)
+            .Select(item => item.CanonicalId).ToHashSet();
+        var activeAssertionIds = input.Brain.ActiveDependencies
+            .Where(item => item.CanonicalKind == CanonicalRecordKind.Assertion)
+            .Select(item => item.CanonicalId).ToHashSet();
         var assertionItems = assertions.Select(item => new ExportAssertionItem(
-            assertionReferences[item.Id], item.Id, item.Predicate, item.SubjectReference, item.Predicate,
-            item.Value, item.AssertedBy, item.EventTime, item.AssertedAt,
-            $"{item.OriginClass}/{item.AssertionClass}", item.DisputeState, item.VerificationState,
-            item.SourceSpanId.HasValue ? sourceReferences[item.SourceSpanId.Value] : null,
-            !item.SupersededByAssertionId.HasValue && item.DisputeState != DisputeState.Superseded,
-            item.SupersededByAssertionId.HasValue
+            Reference: assertionReferences[item.Id],
+            AssertionId: item.Id,
+            TopicLabel: $"Predicate: {item.Predicate}",
+            SubjectReference: item.SubjectReference,
+            Predicate: item.Predicate,
+            Value: item.Value,
+            AssertedBy: item.AssertedBy,
+            AllegedEventTime: item.EventTime,
+            AssertedAt: item.AssertedAt,
+            OriginLabel: $"{item.OriginClass}/{item.AssertionClass}",
+            DisputeState: item.DisputeState,
+            IntegrityState: item.IntegrityState,
+            VerificationState: item.VerificationState,
+            ExtractionConfidence: item.ExtractionConfidence,
+            SourceReference: item.SourceSpanId.HasValue ? sourceReferences[item.SourceSpanId.Value] : null,
+            IsCurrent: !item.SupersededByAssertionId.HasValue && item.DisputeState != DisputeState.Superseded &&
+                       (!dependencyAssertionIds.Contains(item.Id) || activeAssertionIds.Contains(item.Id)),
+            SupersededByReference: item.SupersededByAssertionId.HasValue
                 ? assertionReferences.GetValueOrDefault(item.SupersededByAssertionId.Value)
                 : null)).ToArray();
         var entities = CreateEntityItems(input, sourceReferences);
@@ -141,8 +160,8 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
             input, assertionReferences, eventReferences, sourceReferences);
         var contradictionItems = contradictions.Select(item =>
         {
-            var first = assertions.Single(assertion => assertion.Id == item.AssertionAId);
-            var second = assertions.Single(assertion => assertion.Id == item.AssertionBId);
+            var first = assertionsById[item.AssertionAId];
+            var second = assertionsById[item.AssertionBId];
             return new ExportContradictionItem(
                 contradictionReferences[item.Id], item.Id, item.Type, item.ResolutionState,
                 assertionReferences[item.AssertionAId], assertionReferences[item.AssertionBId],
@@ -151,18 +170,42 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
                 item.ResolutionNote);
         }).ToArray();
         var history = CreateHistory(input, assertionReferences, eventReferences, sourceReferences);
+        var auditTrail = evidence.AuditEvents.OrderBy(item => item.OccurredAt).ThenBy(item => item.Id)
+            .Select((item, index) => new ExportAuditItem(
+                $"AUD-{index + 1:D5}", item.Id, item.Kind, item.EntityType, item.EntityId,
+                item.ReplacementEntityId, item.Actor, item.ChangeSummary, item.OccurredAt))
+            .ToArray();
         var workplace = CreateWorkplace(input, assertionReferences, eventReferences);
         var questions = CreateOpenQuestions(
             input, assertionItems, contradictionItems, eventReferences, sourceReferences, workplace);
         var neutralBrief = CreateNeutralBrief(assertionItems, chronology, contradictionItems, questions);
         GuardNeutralBrief(neutralBrief);
+        var citedSourceReferences = assertionItems.Select(item => item.SourceReference).OfType<string>()
+            .Concat(entities.SelectMany(item => item.SourceReferences))
+            .Concat(chronology.SelectMany(item => item.SourceReferences))
+            .Concat(contradictionItems.SelectMany(item => item.SourceReferences))
+            .Concat(history.SelectMany(item => item.SourceReferences))
+            .ToHashSet(StringComparer.Ordinal);
+        var documentItems = input.Documents
+            .OrderBy(item => documentReferences[item.DocumentVersionId], StringComparer.Ordinal)
+            .Select(item => new ExportDocumentItem(
+                documentReferences[item.DocumentVersionId], item.DocumentId, item.DocumentVersionId,
+                item.OriginalObjectId, item.ContentSha256, item.DetectedMediaType ?? "not-recorded",
+                item.ByteLength, item.ProcessingStatus, item.ExtractionRoutes,
+                item.ParserVersions.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                item.OcrProviders.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                item.OcrVersions.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                sourceItems.Count(source => source.DocumentVersionId == item.DocumentVersionId &&
+                                            citedSourceReferences.Contains(source.Reference)),
+                input.Documents.Count(other => other.OriginalObjectId == item.OriginalObjectId) > 1))
+            .ToArray();
         var snapshotDigest = CreateSnapshotDigest(input);
         return new ProfessionalExportManifest(
             CurrentSchemaVersion, CurrentTemplateVersion, request.ExportId, request.TenantId,
             request.MatterId, $"MAT-{request.MatterId:N}", evidence.Matter.MatterType,
             evidence.Matter.Title, evidence.Matter.Status, evidence.Matter.Jurisdiction,
             generatedAt, snapshotDigest, neutralBrief, documentItems, sourceItems, entities,
-            chronology, assertionItems, contradictionItems, history, questions, workplace, []);
+            chronology, assertionItems, contradictionItems, history, auditTrail, questions, workplace, []);
     }
 
     private static IReadOnlyList<ExportEntityItem> CreateEntityItems(
@@ -170,6 +213,7 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         IReadOnlyDictionary<Guid, string> sourceReferences)
     {
         var result = new List<ExportEntityItem>();
+        var activeDependencies = input.Brain.ActiveDependencies.ToArray();
         var people = input.Brain.People.OrderBy(item => item.DisplayName, StringComparer.Ordinal)
             .ThenBy(item => item.Id).ToArray();
         foreach (var (person, index) in people.Select((item, index) => (item, index)))
@@ -180,7 +224,11 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
                 $"PER-{index + 1:D4}", person.Id, "Person", person.DisplayName,
                 person.RoleLabels.Order(StringComparer.Ordinal).ToArray(),
                 aliases.Select(item => item.Value).ToArray(),
-                aliases.Select(item => item.SourceSpanId).OfType<Guid>().Select(id => sourceReferences[id])
+                aliases.Select(item => item.SourceSpanId).OfType<Guid>()
+                    .Concat(activeDependencies.Where(item =>
+                            item.CanonicalKind == CanonicalRecordKind.Person && item.CanonicalId == person.Id)
+                        .Select(item => item.SourceSpanId))
+                    .Select(id => sourceReferences[id])
                     .Distinct().Order(StringComparer.Ordinal).ToArray()));
         }
 
@@ -193,7 +241,12 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
             result.Add(new ExportEntityItem(
                 $"ORG-{index + 1:D4}", organisation.Id, "Organisation", organisation.Name,
                 [organisation.TypeLabel], aliases.Select(item => item.Value).ToArray(),
-                aliases.Select(item => item.SourceSpanId).OfType<Guid>().Select(id => sourceReferences[id])
+                aliases.Select(item => item.SourceSpanId).OfType<Guid>()
+                    .Concat(activeDependencies.Where(item =>
+                            item.CanonicalKind == CanonicalRecordKind.Organisation &&
+                            item.CanonicalId == organisation.Id)
+                        .Select(item => item.SourceSpanId))
+                    .Select(id => sourceReferences[id])
                     .Distinct().Order(StringComparer.Ordinal).ToArray()));
         }
 
@@ -440,7 +493,8 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
             dependencies = brain.Dependencies.OrderBy(item => item.Id),
             invalidations = brain.DependencyInvalidations.OrderBy(item => item.Id),
             resolutionActions = brain.EntityResolutionActions.OrderBy(item => item.Id),
-            documents = input.Documents.OrderBy(item => item.DocumentVersionId)
+            documents = input.Documents.OrderBy(item => item.DocumentVersionId),
+            sourceMetadata = input.SourceMetadata.OrderBy(item => item.SourceSpanId)
         };
         return Sha256(JsonSerializer.Serialize(fingerprint, JsonOptions));
     }
@@ -453,6 +507,7 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         ArgumentNullException.ThrowIfNull(input.Workplace);
         ArgumentNullException.ThrowIfNull(input.Brain);
         ArgumentNullException.ThrowIfNull(input.Documents);
+        ArgumentNullException.ThrowIfNull(input.SourceMetadata);
         if (request.MatterId == Guid.Empty || request.ExportId == Guid.Empty)
         {
             throw new ArgumentException("Matter and export identifiers must be non-empty.");
@@ -472,11 +527,17 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         }
         foreach (var metadata in input.Documents)
         {
+            ArgumentNullException.ThrowIfNull(metadata.ParserVersions);
+            ArgumentNullException.ThrowIfNull(metadata.OcrProviders);
+            ArgumentNullException.ThrowIfNull(metadata.OcrVersions);
             if (metadata.TenantId != request.TenantId || metadata.MatterId != request.MatterId ||
                 metadata.DocumentId == Guid.Empty || metadata.DocumentVersionId == Guid.Empty ||
                 metadata.OriginalObjectId == Guid.Empty || !IsSha256(metadata.ContentSha256) ||
                 metadata.ByteLength is < 0 || !Enum.IsDefined(metadata.ProcessingStatus) ||
-                metadata.ExtractionRoutes is < ExportExtractionRoute.None or > (ExportExtractionRoute.Native | ExportExtractionRoute.Ocr))
+                metadata.ExtractionRoutes is < ExportExtractionRoute.None or > (ExportExtractionRoute.Native | ExportExtractionRoute.Ocr) ||
+                metadata.ParserVersions.Any(string.IsNullOrWhiteSpace) ||
+                metadata.OcrProviders.Any(string.IsNullOrWhiteSpace) ||
+                metadata.OcrVersions.Any(string.IsNullOrWhiteSpace))
             {
                 throw new InvalidOperationException("Export document metadata is invalid or not owned by the requested Matter.");
             }
@@ -486,6 +547,14 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
                 version.ContentSha256 != metadata.ContentSha256)
             {
                 throw new InvalidOperationException("Export document metadata diverges from immutable provenance.");
+            }
+        }
+        foreach (var original in input.Documents.GroupBy(item => item.OriginalObjectId))
+        {
+            if (original.Select(item => item.ContentSha256).Distinct(StringComparer.Ordinal).Skip(1).Any())
+            {
+                throw new InvalidOperationException(
+                    $"Logical original {original.Key:N} has divergent immutable content digests.");
             }
         }
 
@@ -512,10 +581,43 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         RequireBound(input.Brain.Dependencies.Count, nameof(input.Brain.Dependencies));
         RequireBound(input.Brain.DependencyInvalidations.Count, nameof(input.Brain.DependencyInvalidations));
         RequireBound(input.Brain.EntityResolutionActions.Count, nameof(input.Brain.EntityResolutionActions));
+        RequireBound(input.SourceMetadata.Count, nameof(input.SourceMetadata));
         ValidateBoundedSnapshot(input);
 
         var versionIds = input.Documents.Select(item => item.DocumentVersionId).ToHashSet();
         var spans = input.Evidence.SourceSpans.ToDictionary(item => item.Id);
+        if (input.SourceMetadata.Count != spans.Count ||
+            input.SourceMetadata.Select(item => item.SourceSpanId).Distinct().Count() != input.SourceMetadata.Count)
+        {
+            throw new InvalidOperationException("Export source metadata must cover each source span exactly once.");
+        }
+        foreach (var metadata in input.SourceMetadata)
+        {
+            var hasIngestionMetadata = metadata.LocatorKind.HasValue;
+            var hasCompleteBoundingBox = metadata.BoundingBoxLeft.HasValue;
+            if (metadata.TenantId != request.TenantId || metadata.MatterId != request.MatterId ||
+                !spans.TryGetValue(metadata.SourceSpanId, out var source) ||
+                source.DocumentVersion.DocumentVersionId != metadata.DocumentVersionId ||
+                (metadata.LocatorKind.HasValue && !Enum.IsDefined(metadata.LocatorKind.Value)) ||
+                (hasIngestionMetadata && metadata.ExtractionRoute is not (ExportExtractionRoute.Native or ExportExtractionRoute.Ocr)) ||
+                (!hasIngestionMetadata && metadata.ExtractionRoute != ExportExtractionRoute.None) ||
+                (metadata.LocatorKind is null) != (metadata.StableLocator is null) ||
+                (metadata.StableLocator is not null && string.IsNullOrWhiteSpace(metadata.StableLocator)) ||
+                hasIngestionMetadata != (metadata.ExtractionProvider is not null) ||
+                hasIngestionMetadata != (metadata.ExtractionProviderVersion is not null) ||
+                (metadata.ExtractionProvider is not null && string.IsNullOrWhiteSpace(metadata.ExtractionProvider)) ||
+                (metadata.ExtractionProviderVersion is not null && string.IsNullOrWhiteSpace(metadata.ExtractionProviderVersion)) ||
+                new[] { metadata.BoundingBoxLeft, metadata.BoundingBoxTop,
+                    metadata.BoundingBoxWidth, metadata.BoundingBoxHeight }.Count(item => item.HasValue) is not (0 or 4) ||
+                (hasCompleteBoundingBox && (metadata.ExtractionRoute != ExportExtractionRoute.Ocr ||
+                    metadata.LocatorKind != ExportSourceLocatorKind.ImageBoundingBox ||
+                    metadata.BoundingBoxLeft < 0 || metadata.BoundingBoxTop < 0 ||
+                    metadata.BoundingBoxWidth <= 0 || metadata.BoundingBoxHeight <= 0)))
+            {
+                throw new InvalidOperationException(
+                    "Export source metadata is incomplete, divergent, or not owned by the requested Matter.");
+            }
+        }
         foreach (var span in spans.Values)
         {
             if (!versionIds.Contains(span.DocumentVersion.DocumentVersionId) || !IsSha256(span.ExtractedTextDigest))
@@ -551,7 +653,8 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
                 evidence = input.Evidence.CaptureSnapshot(),
                 workplace = input.Workplace.CaptureSnapshot(),
                 brain = input.Brain.CaptureSnapshot(),
-                input.Documents
+                input.Documents,
+                input.SourceMetadata
             }, JsonOptions);
         }
         catch (InputSizeLimitExceededException exception)
@@ -577,19 +680,21 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
     }
 
     private static ProfessionalExportArtifactDigest ToDigest(GeneratedProfessionalExportArtifact artifact) =>
-        new(artifact.Kind, artifact.FileName, artifact.Sha256, artifact.Content.LongLength);
+        new(artifact.Kind, artifact.FileName, artifact.Sha256, artifact.ByteLength);
 
     private static byte[] JsonBytes<T>(T value) =>
         Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value, JsonOptions) + "\n");
 
     private static byte[] EvidenceCsv(ProfessionalExportManifest manifest) => Csv(
-        ["reference", "document_id", "document_version_id", "original_object_id", "sha256", "media_type", "byte_length", "processing_status", "extraction_routes", "cited_source_span_count", "shares_logical_original"],
+        ["reference", "document_id", "document_version_id", "original_object_id", "sha256", "media_type", "byte_length", "processing_status", "extraction_routes", "parser_versions", "ocr_providers", "ocr_versions", "cited_source_span_count", "shares_logical_original"],
         manifest.Documents.Select(item => new[]
         {
             item.Reference, item.DocumentId.ToString("N"), item.DocumentVersionId.ToString("N"),
             item.OriginalObjectId.ToString("N"), item.ContentSha256, item.DetectedMediaType,
             item.ByteLength?.ToString(CultureInfo.InvariantCulture) ?? "", item.ProcessingStatus.ToString(),
-            item.ExtractionRoutes.ToString(), item.CitedSourceSpanCount.ToString(CultureInfo.InvariantCulture),
+            item.ExtractionRoutes.ToString(), string.Join(';', item.ParserVersions),
+            string.Join(';', item.OcrProviders), string.Join(';', item.OcrVersions),
+            item.CitedSourceSpanCount.ToString(CultureInfo.InvariantCulture),
             item.SharesLogicalOriginal.ToString(CultureInfo.InvariantCulture)
         }));
 
@@ -602,12 +707,13 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         }));
 
     private static byte[] AssertionsCsv(ProfessionalExportManifest manifest) => Csv(
-        ["reference", "assertion_id", "topic", "subject", "predicate", "value", "asserted_by", "alleged_event_time", "asserted_at", "origin", "dispute_state", "verification_state", "source_reference", "is_current", "superseded_by"],
+        ["reference", "assertion_id", "topic", "subject", "predicate", "value", "asserted_by", "alleged_event_time", "asserted_at", "origin", "dispute_state", "integrity_state", "verification_state", "extraction_confidence", "source_reference", "is_current", "superseded_by"],
         manifest.Assertions.Select(item => new[]
         {
-            item.Reference, item.AssertionId.ToString("N"), item.Topic, item.SubjectReference, item.Predicate,
+            item.Reference, item.AssertionId.ToString("N"), item.TopicLabel, item.SubjectReference, item.Predicate,
             item.Value, item.AssertedBy, Format(item.AllegedEventTime), Format(item.AssertedAt), item.OriginLabel,
-            item.DisputeState.ToString(), item.VerificationState.ToString(), item.SourceReference ?? "",
+            item.DisputeState.ToString(), item.IntegrityState.ToString(), item.VerificationState.ToString(),
+            item.ExtractionConfidence?.ToString(CultureInfo.InvariantCulture) ?? "", item.SourceReference ?? "",
             item.IsCurrent.ToString(CultureInfo.InvariantCulture), item.SupersededByReference ?? ""
         }));
 
@@ -679,12 +785,15 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         paragraphs.Add(("Evidence and document index", 2));
         paragraphs.AddRange(manifest.Documents.Select(item =>
             ($"{item.Reference} | version {item.DocumentVersionId:N} | type {item.DetectedMediaType} | processing {item.ProcessingStatus}/{item.ExtractionRoutes} | cited spans {item.CitedSourceSpanCount}", 0)));
+        paragraphs.Add(("Exact source index", 2));
+        paragraphs.AddRange(manifest.Sources.Select(item =>
+            ($"{item.Reference} | document {item.DocumentReference} | locator {item.StableLocator ?? FormatOffsets(item)} | route {item.ExtractionRoute} | provider {item.ExtractionProvider ?? item.ParserVersion}/{item.ExtractionProviderVersion ?? "not recorded"} | bounding box {FormatBoundingBox(item)}", 0)));
         paragraphs.Add(("Attributed assertions by topic", 2));
-        foreach (var group in manifest.Assertions.GroupBy(item => item.Topic).OrderBy(item => item.Key, StringComparer.Ordinal))
+        foreach (var group in manifest.Assertions.GroupBy(item => item.TopicLabel).OrderBy(item => item.Key, StringComparer.Ordinal))
         {
             paragraphs.Add((group.Key, 0));
             paragraphs.AddRange(group.Select(item =>
-                ($"{item.Reference} | {item.AssertedBy} ({item.OriginLabel}) asserted: {item.SubjectReference} / {item.Predicate} / {item.Value} | state {item.DisputeState}/{item.VerificationState} | source {item.SourceReference ?? "none; origin labelled above"}", 0)));
+                ($"{item.Reference} | {item.AssertedBy} ({item.OriginLabel}) asserted: {item.SubjectReference} / {item.Predicate} / {item.Value} | state {item.DisputeState}/{item.IntegrityState}/{item.VerificationState} | extraction confidence {item.ExtractionConfidence?.ToString(CultureInfo.InvariantCulture) ?? "not recorded"} | source {item.SourceReference ?? "none; origin labelled above"}", 0)));
         }
         paragraphs.Add(("Contradictions and disputed records", 2));
         paragraphs.AddRange(manifest.Contradictions.Select(item =>
@@ -692,6 +801,9 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         paragraphs.Add(("Corrections and superseded history", 2));
         paragraphs.AddRange(manifest.SupersededHistory.Select(item =>
             ($"{item.Reference} | {item.Kind} {item.HistoricalId:N} | {item.HistoricalStatus} | replacement {item.ReplacementReference ?? "none"} | sources: {JoinOrNone(item.SourceReferences)}", 0)));
+        paragraphs.Add(("Correction and review audit trail", 2));
+        paragraphs.AddRange(manifest.AuditTrail.Select(item =>
+            ($"{item.Reference} | {item.Kind} | {item.EntityType} {item.EntityId:N} | replacement {item.ReplacementEntityId?.ToString("N") ?? "none"} | actor {item.Actor} | occurred {Format(item.OccurredAt)} | {item.ChangeSummary}", 0)));
         paragraphs.Add(("Open factual questions and missing evidence", 2));
         paragraphs.AddRange(manifest.OpenQuestions.Select(item =>
             ($"{item.Reference} | {item.Category} | {item.NeutralQuestion} | related: {JoinOrNone(item.RelatedReferences)}", 0)));
@@ -801,6 +913,16 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
         return array.Length == 0 ? "none" : string.Join(", ", array);
     }
 
+    private static string FormatOffsets(ExportSourceItem item) =>
+        item.PageNumber.HasValue || item.TextStart.HasValue || item.TextEnd.HasValue
+            ? $"page={item.PageNumber?.ToString(CultureInfo.InvariantCulture) ?? "n/a"};text={item.TextStart?.ToString(CultureInfo.InvariantCulture) ?? "n/a"}-{item.TextEnd?.ToString(CultureInfo.InvariantCulture) ?? "n/a"}"
+            : "not recorded";
+
+    private static string FormatBoundingBox(ExportSourceItem item) =>
+        item.BoundingBoxLeft.HasValue
+            ? $"{item.BoundingBoxLeft},{item.BoundingBoxTop},{item.BoundingBoxWidth},{item.BoundingBoxHeight}"
+            : "not recorded";
+
     private static byte[] CreateBundle(IReadOnlyCollection<GeneratedProfessionalExportArtifact> artifacts)
     {
         using var output = new MemoryStream();
@@ -812,7 +934,7 @@ public sealed class ProfessionalExportGenerator(TimeProvider timeProvider)
                 var entry = archive.CreateEntry(artifact.FileName, CompressionLevel.NoCompression);
                 entry.LastWriteTime = StableArchiveTimestamp;
                 using var stream = entry.Open();
-                stream.Write(artifact.Content);
+                stream.Write(artifact.ContentSpan);
             }
         }
         return output.ToArray();

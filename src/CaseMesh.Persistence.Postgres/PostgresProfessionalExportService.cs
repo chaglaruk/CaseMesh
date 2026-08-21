@@ -1,4 +1,5 @@
 using CaseMesh.Core.Models;
+using CaseMesh.Ingestion;
 using CaseMesh.ProfessionalExport;
 using Npgsql;
 
@@ -7,12 +8,12 @@ namespace CaseMesh.Persistence.Postgres;
 public sealed class PostgresProfessionalExportService : IAsyncDisposable
 {
     private readonly PostgresMatterStore _store;
-    private readonly ProfessionalExportGenerator _generator;
+    private readonly TimeProvider _timeProvider;
 
     public PostgresProfessionalExportService(string connectionString, TimeProvider timeProvider)
     {
         _store = new PostgresMatterStore(connectionString);
-        _generator = new ProfessionalExportGenerator(timeProvider);
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public async Task<ProfessionalExportPackage?> GenerateAsync(
@@ -20,26 +21,32 @@ public sealed class PostgresProfessionalExportService : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var input = await _store.InTenantTransactionAsync(request.TenantId, async (connection, transaction) =>
+        var loaded = await _store.InTenantTransactionAsync(request.TenantId, async (connection, transaction) =>
         {
             var persisted = await PostgresMatterBrainStore.ReadPersistedAsync(
                 connection, transaction, request.TenantId, request.MatterId, cancellationToken);
             if (persisted is null)
             {
-                return null;
+                return (LoadedExportInput?)null;
             }
 
             var documents = await ReadDocumentsAsync(
                 connection, transaction, request.TenantId, request.MatterId, cancellationToken);
-            return new ProfessionalExportInput(
-                persisted.Evidence, persisted.Workplace, persisted.Brain, documents);
+            var sources = await ReadSourceMetadataAsync(
+                connection, transaction, request.TenantId, request.MatterId, cancellationToken);
+            var generatedAt = await ReadExistingGeneratedAtAsync(
+                connection, transaction, request.TenantId, request.MatterId, request.ExportId, cancellationToken);
+            return new LoadedExportInput(new ProfessionalExportInput(
+                persisted.Evidence, persisted.Workplace, persisted.Brain, documents, sources), generatedAt);
         }, cancellationToken);
-        if (input is null)
+        if (loaded is null)
         {
             return null;
         }
 
-        var package = _generator.Generate(request, input);
+        var generationTime = loaded.GeneratedAt ?? _timeProvider.GetUtcNow();
+        var package = new ProfessionalExportGenerator(new FixedTimeProvider(generationTime))
+            .Generate(request, loaded.Input);
         await _store.InTenantTransactionAsync(request.TenantId, async (connection, transaction) =>
         {
             await SaveRunAsync(connection, transaction, package.Run, cancellationToken);
@@ -108,9 +115,7 @@ public sealed class PostgresProfessionalExportService : IAsyncDisposable
                    state.detected_media_type,state.byte_length,state.status,
                    COALESCE(bool_or(span.extraction_route = 1) FILTER (WHERE span.source_span_id IS NOT NULL),false),
                    COALESCE(bool_or(span.extraction_route = 2) FILTER (WHERE span.source_span_id IS NOT NULL),false),
-                   max(span.parser_version),
-                   max(span.extraction_provider) FILTER (WHERE span.extraction_route = 2),
-                   max(span.extraction_provider_version) FILTER (WHERE span.extraction_route = 2)
+                   current_set.parser_version,current_set.ocr_provider,current_set.ocr_version
             FROM casemesh.document_versions dv
             LEFT JOIN casemesh.document_ingestion_state state
               ON state.tenant_id=dv.tenant_id AND state.matter_id=dv.matter_id
@@ -118,9 +123,15 @@ public sealed class PostgresProfessionalExportService : IAsyncDisposable
             LEFT JOIN casemesh.source_spans span
               ON span.tenant_id=dv.tenant_id AND span.matter_id=dv.matter_id
              AND span.document_version_id=dv.document_version_id
+             AND span.span_set_id=state.current_span_set_id
+            LEFT JOIN casemesh.ingestion_span_sets current_set
+              ON current_set.tenant_id=state.tenant_id AND current_set.matter_id=state.matter_id
+             AND current_set.document_version_id=state.document_version_id
+             AND current_set.span_set_id=state.current_span_set_id
             WHERE dv.tenant_id=$1 AND dv.matter_id=$2
             GROUP BY dv.document_id,dv.document_version_id,dv.original_object_id,dv.content_sha256,
-                     state.detected_media_type,state.byte_length,state.status
+                     state.detected_media_type,state.byte_length,state.status,
+                     current_set.parser_version,current_set.ocr_provider,current_set.ocr_version
             ORDER BY dv.document_id,dv.document_version_id;
             """, connection, transaction);
         PostgresMatterStore.AddParameters(command, tenantId.Value, matterId);
@@ -136,11 +147,62 @@ public sealed class PostgresProfessionalExportService : IAsyncDisposable
                 reader.GetString(3), reader.IsDBNull(4) ? null : MediaType(reader.GetInt16(4)),
                 reader.IsDBNull(5) ? null : reader.GetInt64(5),
                 reader.IsDBNull(6) ? ExportDocumentProcessingStatus.NotRecorded : Status(reader.GetInt16(6)),
-                routes, reader.IsDBNull(9) ? null : reader.GetString(9),
-                reader.IsDBNull(10) ? null : reader.GetString(10),
-                reader.IsDBNull(11) ? null : reader.GetString(11)));
+                routes,
+                reader.IsDBNull(9) ? [] : [reader.GetString(9)],
+                reader.IsDBNull(10) ? [] : [reader.GetString(10)],
+                reader.IsDBNull(11) ? [] : [reader.GetString(11)]));
         }
         return documents;
+    }
+
+    private static async Task<IReadOnlyList<ExportSourceMetadata>> ReadSourceMetadataAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        TenantId tenantId,
+        Guid matterId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT source_span_id,document_version_id,locator_kind,stable_locator,extraction_route,
+                   extraction_provider,extraction_provider_version,
+                   bbox_left,bbox_top,bbox_width,bbox_height
+            FROM casemesh.source_spans
+            WHERE tenant_id=$1 AND matter_id=$2
+            ORDER BY source_span_id;
+            """, connection, transaction);
+        PostgresMatterStore.AddParameters(command, tenantId.Value, matterId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var sources = new List<ExportSourceMetadata>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            sources.Add(new ExportSourceMetadata(
+                tenantId, matterId, reader.GetGuid(0), reader.GetGuid(1),
+                reader.IsDBNull(2) ? null : (ExportSourceLocatorKind)ReadEnum<SourceLocatorKind>(
+                    reader.GetInt16(2), "source locator kind"),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? ExportExtractionRoute.None :
+                    (ExportExtractionRoute)ReadEnum<ExtractionRoute>(reader.GetInt16(4), "extraction route"),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                NullableInt(reader, 7), NullableInt(reader, 8), NullableInt(reader, 9), NullableInt(reader, 10)));
+        }
+        return sources;
+    }
+
+    private static async Task<DateTimeOffset?> ReadExistingGeneratedAtAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        TenantId tenantId,
+        Guid matterId,
+        Guid exportId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT generated_at FROM casemesh.professional_export_runs
+            WHERE tenant_id=$1 AND matter_id=$2 AND export_id=$3;
+            """, connection, transaction);
+        PostgresMatterStore.AddParameters(command, tenantId.Value, matterId, exportId);
+        return await command.ExecuteScalarAsync(cancellationToken) is DateTimeOffset value ? value : null;
     }
 
     private static async Task SaveRunAsync(
@@ -166,15 +228,15 @@ public sealed class PostgresProfessionalExportService : IAsyncDisposable
             run.TemplateVersion, run.GeneratedAt, run.ArtifactManifestDigest);
 
         await SaveInclusionsAsync(connection, transaction, run, ExportInclusionKind.DocumentVersion,
-            run.DocumentVersionIds, "document_version_id", cancellationToken);
+            run.DocumentVersionIds, cancellationToken);
         await SaveInclusionsAsync(connection, transaction, run, ExportInclusionKind.SourceSpan,
-            run.SourceSpanIds, "source_span_id", cancellationToken);
+            run.SourceSpanIds, cancellationToken);
         await SaveInclusionsAsync(connection, transaction, run, ExportInclusionKind.Assertion,
-            run.AssertionIds, "assertion_id", cancellationToken);
+            run.AssertionIds, cancellationToken);
         await SaveInclusionsAsync(connection, transaction, run, ExportInclusionKind.Event,
-            run.EventIds, "event_id", cancellationToken);
+            run.EventIds, cancellationToken);
         await SaveInclusionsAsync(connection, transaction, run, ExportInclusionKind.Contradiction,
-            run.ContradictionIds, "contradiction_id", cancellationToken);
+            run.ContradictionIds, cancellationToken);
         foreach (var artifact in run.Artifacts.OrderBy(item => item.Kind))
         {
             await EnsureAsync(connection, transaction,
@@ -199,7 +261,6 @@ public sealed class PostgresProfessionalExportService : IAsyncDisposable
         ProfessionalExportRun run,
         ExportInclusionKind kind,
         IReadOnlyList<Guid> ids,
-        string column,
         CancellationToken cancellationToken)
     {
         var allowedColumn = kind switch
@@ -211,15 +272,11 @@ public sealed class PostgresProfessionalExportService : IAsyncDisposable
             ExportInclusionKind.Contradiction => "contradiction_id",
             _ => throw new ArgumentOutOfRangeException(nameof(kind))
         };
-        if (column != allowedColumn)
-        {
-            throw new InvalidOperationException("Export inclusion column is not valid for its typed kind.");
-        }
         for (var ordinal = 0; ordinal < ids.Count; ordinal++)
         {
             await EnsureAsync(connection, transaction,
-                $"INSERT INTO casemesh.professional_export_inclusions (tenant_id,matter_id,export_id,inclusion_kind,ordinal,{column}) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING;",
-                $"SELECT EXISTS (SELECT 1 FROM casemesh.professional_export_inclusions WHERE tenant_id=$1 AND matter_id=$2 AND export_id=$3 AND inclusion_kind=$4 AND ordinal=$5 AND {column}=$6);",
+                $"INSERT INTO casemesh.professional_export_inclusions (tenant_id,matter_id,export_id,inclusion_kind,ordinal,{allowedColumn}) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING;",
+                $"SELECT EXISTS (SELECT 1 FROM casemesh.professional_export_inclusions WHERE tenant_id=$1 AND matter_id=$2 AND export_id=$3 AND inclusion_kind=$4 AND ordinal=$5 AND {allowedColumn}=$6);",
                 cancellationToken, run.TenantId.Value, run.MatterId, run.ExportId, (short)kind, ordinal, ids[ordinal]);
         }
     }
@@ -303,21 +360,21 @@ public sealed class PostgresProfessionalExportService : IAsyncDisposable
 
     private static ExportDocumentProcessingStatus Status(short value) => value switch
     {
-        1 => ExportDocumentProcessingStatus.Pending,
-        2 => ExportDocumentProcessingStatus.Completed,
-        3 => ExportDocumentProcessingStatus.Quarantined,
-        4 => ExportDocumentProcessingStatus.Failed,
+        (short)IngestionStatus.Pending => ExportDocumentProcessingStatus.Pending,
+        (short)IngestionStatus.Completed => ExportDocumentProcessingStatus.Completed,
+        (short)IngestionStatus.Quarantined => ExportDocumentProcessingStatus.Quarantined,
+        (short)IngestionStatus.Failed => ExportDocumentProcessingStatus.Failed,
         _ => throw new InvalidOperationException("Persisted ingestion status is invalid for export.")
     };
 
     private static string MediaType(short value) => value switch
     {
-        1 => "pdf",
-        2 => "docx",
-        3 => "eml",
-        4 => "text",
-        5 => "png",
-        6 => "jpeg",
+        (short)EvidenceMediaType.Pdf => "pdf",
+        (short)EvidenceMediaType.Docx => "docx",
+        (short)EvidenceMediaType.Eml => "eml",
+        (short)EvidenceMediaType.PlainText => "text",
+        (short)EvidenceMediaType.Png => "png",
+        (short)EvidenceMediaType.Jpeg => "jpeg",
         _ => throw new InvalidOperationException("Persisted media type is invalid for export.")
     };
 
@@ -326,4 +383,16 @@ public sealed class PostgresProfessionalExportService : IAsyncDisposable
         var result = (T)Enum.ToObject(typeof(T), value);
         return Enum.IsDefined(result) ? result : throw new InvalidOperationException($"Persisted {label} is invalid.");
     }
+
+    private static int? NullableInt(NpgsqlDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
+
+    private sealed class FixedTimeProvider(DateTimeOffset value) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => value;
+    }
+
+    private sealed record LoadedExportInput(
+        ProfessionalExportInput Input,
+        DateTimeOffset? GeneratedAt);
 }

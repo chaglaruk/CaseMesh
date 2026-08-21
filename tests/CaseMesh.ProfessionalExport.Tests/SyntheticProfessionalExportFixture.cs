@@ -15,7 +15,9 @@ internal static class SyntheticProfessionalExportFixture
 
     internal static async Task<ProfessionalExportInput> CreateAsync(int seed = 700)
     {
-        var matter = new Matter(MatterId, Tenant, "workplace-dispute", "Synthetic professional handover",
+        var tenant = seed == 700 ? Tenant : new TenantId(Id(seed, 1));
+        var matterId = seed == 700 ? MatterId : Id(seed, 2);
+        var matter = new Matter(matterId, tenant, "workplace-dispute", "Synthetic professional handover",
             "open", RecordedAt, RecordedAt, "England and Wales");
         var evidence = new MatterEvidenceGraph(matter);
         var workplace = new WorkplaceMatter(evidence);
@@ -106,12 +108,14 @@ internal static class SyntheticProfessionalExportFixture
             "Meeting date corrected", WorkplaceProcessStatus.Open, [correctedDateAssertion.Id],
             [correction.CorrectedEvent.Id], originalProcess.Id, correction.AuditEvent.Id);
         workplace.AddAcasProcessState(Id(seed, 239), AcasStage.NotRecorded);
+        evidence.ReviewAssertion(actionAssertion.Id, VerificationState.Confirmed,
+            Id(seed, 240), "synthetic-reviewer", RecordedAt.AddHours(1));
 
         var brain = new MatterBrainState(evidence);
         var batch = new StructuredCandidateBatch(
             [
                 new EntityCandidate("employee", CanonicalEntityKind.Person, "Alex Example", "person",
-                    ["the employee"], ["employee"], [request.Id], 0.9m),
+                    ["the employee"], ["employee"], [request.Id, response.Id], 0.9m),
                 new EntityCandidate("employer", CanonicalEntityKind.Organisation, "Example Employer", "employer",
                     ["the employer"], [], [employer.Id], 0.9m),
                 new EntityCandidate("oh-provider", CanonicalEntityKind.Organisation, "Synthetic OH Service", "health provider",
@@ -119,23 +123,38 @@ internal static class SyntheticProfessionalExportFixture
             ],
             [new CommunicationCandidate("response-letter", CommunicationKind.Letter, "Adjustment response letter",
                 RecordedAt, "employer", ["employee", "employer"], [response.Id], 0.9m)],
-            [], [], [], [], []);
+            [new AssertionCandidate("extracted-context", "synthetic-employee", "extracted-context",
+                "context candidate", "Synthetic employee", RecordedAt, null, request.Id,
+                EvidenceOriginClass.EmployeeAuthoredDocument, AssertionClass.AttributedAssertion,
+                IntegrityState.OriginalHashVerified, [request.Id], 0.8m)],
+            [], [], [], []);
         await new MatterBrainMergeService(new FixedTimeProvider(RecordedAt.AddHours(2)))
             .ExtractAndMergeAsync(brain, [request.Id, employer.Id, oh.Id, response.Id], new GoldenProvider(batch));
 
         var documents = evidence.DocumentVersions.OrderBy(item => item.DocumentVersionId).Select((item, index) =>
             new ExportDocumentMetadata(
-                Tenant, MatterId, item.DocumentId, item.DocumentVersionId, item.OriginalObjectId,
+                tenant, matterId, item.DocumentId, item.DocumentVersionId, item.OriginalObjectId,
                 item.ContentSha256, (index % 4) switch { 0 => "pdf", 1 => "docx", 2 => "eml", _ => "png" },
                 1_000 + index, ExportDocumentProcessingStatus.Completed,
                 item.DocumentVersionId == oh.DocumentVersion.DocumentVersionId
                     ? ExportExtractionRoute.Ocr
                     : ExportExtractionRoute.Native,
-                item.DocumentVersionId == oh.DocumentVersion.DocumentVersionId ? "none" : "synthetic-parser/1",
-                item.DocumentVersionId == oh.DocumentVersion.DocumentVersionId ? "synthetic-ocr" : null,
-                item.DocumentVersionId == oh.DocumentVersion.DocumentVersionId ? "1.0" : null)).ToArray();
-        _ = actionAssertion;
-        return new ProfessionalExportInput(evidence, workplace, brain, documents);
+                [item.DocumentVersionId == oh.DocumentVersion.DocumentVersionId ? "none" : "synthetic-parser/1"],
+                item.DocumentVersionId == oh.DocumentVersion.DocumentVersionId ? ["synthetic-ocr"] : [],
+                item.DocumentVersionId == oh.DocumentVersion.DocumentVersionId ? ["1.0"] : [])).ToArray();
+        var sourceMetadata = evidence.SourceSpans.OrderBy(item => item.Id).Select(item =>
+        {
+            var isOcr = item.Id == oh.Id;
+            return new ExportSourceMetadata(
+                tenant, matterId, item.Id, item.DocumentVersion.DocumentVersionId,
+                isOcr ? ExportSourceLocatorKind.ImageBoundingBox : ExportSourceLocatorKind.PdfPage,
+                isOcr ? "ocr:page:1:bbox:10,20,30,40" : "pdf:page:1",
+                isOcr ? ExportExtractionRoute.Ocr : ExportExtractionRoute.Native,
+                isOcr ? "synthetic-ocr" : "synthetic-parser",
+                isOcr ? "1.0" : "1",
+                isOcr ? 10 : null, isOcr ? 20 : null, isOcr ? 30 : null, isOcr ? 40 : null);
+        }).ToArray();
+        return new ProfessionalExportInput(evidence, workplace, brain, documents, sourceMetadata);
     }
 
     internal static ProfessionalExportRequest Request(Guid? exportId = null) =>

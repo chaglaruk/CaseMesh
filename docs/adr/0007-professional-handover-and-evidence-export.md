@@ -19,7 +19,7 @@ Each export contains:
 - an original-evidence logical-identity JSON manifest; and
 - a ZIP containing those payload artifacts.
 
-The generator assigns stable scoped references such as `DOC-00001`, `SRC-00001`, `AST-00001` and `CHR-00001` after deterministic sorting. Documentary citations retain the complete assertion → source span → document version → original-object/hash chain. Conflicting, rejected and superseded records remain visible. AI inference is labelled and never receives a fabricated documentary citation. Workplace request, response and implementation records remain separate, as do occupational-health recommendations and employer actions.
+The generator assigns stable scoped references such as `DOC-0001`, `SRC-00001`, `AST-00001` and `CHR-00001` after deterministic sorting. Documentary citations retain the complete assertion → exact source locator (including OCR bounding boxes) → source span → document version → original-object/hash chain. Assertion integrity and extraction confidence remain separate fields. Conflicting, rejected and superseded records remain visible, together with the actor, timestamp and summary from canonical correction/review audit events. AI inference is labelled and never receives a fabricated documentary citation. Workplace request, response and implementation records remain separate, as do occupational-health recommendations and employer actions.
 
 ## Determinism and safety
 
@@ -37,7 +37,7 @@ Migration `0005_professional_exports.sql` adds relational export-run, inclusion 
 
 Every row carries `(tenant_id, matter_id)`. Composite foreign keys require every included document version, source span, assertion, event and contradiction to belong to the export's tenant/Matter. All tables use `RLS` and `FORCE ROW LEVEL SECURITY` with ADR 0002's transaction-local context. The restricted runtime role receives `SELECT` and `INSERT` only. Rows reject update, direct delete and truncate, while database-driven whole-Matter or tenant privacy cascades remain possible.
 
-`PostgresProfessionalExportService` resolves canonical state and ingestion metadata inside a tenant-scoped transaction, generates the package in memory, and then appends its audit metadata. A wrong or missing tenant context cannot resolve the Matter or export run. Reusing an export identity is idempotent only when all metadata is equal; divergent reuse fails. The service returns no raw bucket key, storage credential or public URL.
+`PostgresProfessionalExportService` resolves canonical state and ingestion metadata inside a tenant-scoped transaction, using the current ingestion span-set pointer for document processing provenance while retaining exact locators for historical spans cited by canonical records. It reuses an already persisted generation timestamp before regenerating a retry, then appends audit metadata. A wrong or missing tenant context cannot resolve the Matter or export run. Reusing an export identity is idempotent only when all metadata is equal; divergent snapshot reuse fails. The service returns no raw bucket key, storage credential or public URL.
 
 ## Consequences and deferred work
 

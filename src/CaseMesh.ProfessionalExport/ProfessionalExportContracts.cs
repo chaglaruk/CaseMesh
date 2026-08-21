@@ -43,6 +43,18 @@ public enum ExportInclusionKind
     Contradiction = 4
 }
 
+public enum ExportSourceLocatorKind
+{
+    PdfPage = 1,
+    DocxParagraph = 2,
+    DocxTableCell = 3,
+    EmailHeader = 4,
+    EmailBody = 5,
+    EmailAttachment = 6,
+    TextCharacters = 7,
+    ImageBoundingBox = 8
+}
+
 public sealed record ProfessionalExportRequest(
     TenantId TenantId,
     Guid MatterId,
@@ -59,15 +71,31 @@ public sealed record ExportDocumentMetadata(
     long? ByteLength,
     ExportDocumentProcessingStatus ProcessingStatus,
     ExportExtractionRoute ExtractionRoutes,
-    string? ParserVersion,
-    string? OcrProvider,
-    string? OcrVersion);
+    IReadOnlyList<string> ParserVersions,
+    IReadOnlyList<string> OcrProviders,
+    IReadOnlyList<string> OcrVersions);
+
+public sealed record ExportSourceMetadata(
+    TenantId TenantId,
+    Guid MatterId,
+    Guid SourceSpanId,
+    Guid DocumentVersionId,
+    ExportSourceLocatorKind? LocatorKind,
+    string? StableLocator,
+    ExportExtractionRoute ExtractionRoute,
+    string? ExtractionProvider,
+    string? ExtractionProviderVersion,
+    int? BoundingBoxLeft,
+    int? BoundingBoxTop,
+    int? BoundingBoxWidth,
+    int? BoundingBoxHeight);
 
 public sealed record ProfessionalExportInput(
     MatterEvidenceGraph Evidence,
     WorkplaceMatter Workplace,
     MatterBrainState Brain,
-    IReadOnlyList<ExportDocumentMetadata> Documents);
+    IReadOnlyList<ExportDocumentMetadata> Documents,
+    IReadOnlyList<ExportSourceMetadata> SourceMetadata);
 
 public sealed record ExportDocumentItem(
     string Reference,
@@ -79,9 +107,9 @@ public sealed record ExportDocumentItem(
     long? ByteLength,
     ExportDocumentProcessingStatus ProcessingStatus,
     ExportExtractionRoute ExtractionRoutes,
-    string? ParserVersion,
-    string? OcrProvider,
-    string? OcrVersion,
+    IReadOnlyList<string> ParserVersions,
+    IReadOnlyList<string> OcrProviders,
+    IReadOnlyList<string> OcrVersions,
     int CitedSourceSpanCount,
     bool SharesLogicalOriginal);
 
@@ -95,12 +123,21 @@ public sealed record ExportSourceItem(
     int? TextEnd,
     string ExtractedTextDigest,
     string ParserVersion,
-    decimal? ExtractionConfidence);
+    decimal? ExtractionConfidence,
+    ExportSourceLocatorKind? LocatorKind,
+    string? StableLocator,
+    ExportExtractionRoute ExtractionRoute,
+    string? ExtractionProvider,
+    string? ExtractionProviderVersion,
+    int? BoundingBoxLeft,
+    int? BoundingBoxTop,
+    int? BoundingBoxWidth,
+    int? BoundingBoxHeight);
 
 public sealed record ExportAssertionItem(
     string Reference,
     Guid AssertionId,
-    string Topic,
+    string TopicLabel,
     string SubjectReference,
     string Predicate,
     string Value,
@@ -109,7 +146,9 @@ public sealed record ExportAssertionItem(
     DateTimeOffset AssertedAt,
     string OriginLabel,
     DisputeState DisputeState,
+    IntegrityState IntegrityState,
     VerificationState VerificationState,
+    decimal? ExtractionConfidence,
     string? SourceReference,
     bool IsCurrent,
     string? SupersededByReference);
@@ -152,6 +191,17 @@ public sealed record ExportHistoryItem(
     string? ReplacementReference,
     Guid? ReplacementId,
     IReadOnlyList<string> SourceReferences);
+
+public sealed record ExportAuditItem(
+    string Reference,
+    Guid AuditEventId,
+    AuditEventKind Kind,
+    string EntityType,
+    Guid EntityId,
+    Guid? ReplacementEntityId,
+    string Actor,
+    string ChangeSummary,
+    DateTimeOffset OccurredAt);
 
 public sealed record ExportOpenQuestion(
     string Reference,
@@ -206,6 +256,7 @@ public sealed record ProfessionalExportManifest(
     IReadOnlyList<ExportAssertionItem> Assertions,
     IReadOnlyList<ExportContradictionItem> Contradictions,
     IReadOnlyList<ExportHistoryItem> SupersededHistory,
+    IReadOnlyList<ExportAuditItem> AuditTrail,
     IReadOnlyList<ExportOpenQuestion> OpenQuestions,
     ExportWorkplaceSection Workplace,
     IReadOnlyList<ProfessionalExportArtifactDigest> PayloadArtifacts);
@@ -216,11 +267,36 @@ public sealed record ProfessionalExportArtifactDigest(
     string Sha256,
     long ByteLength);
 
-public sealed record GeneratedProfessionalExportArtifact(
-    ProfessionalExportArtifactKind Kind,
-    string FileName,
-    byte[] Content,
-    string Sha256);
+public sealed class GeneratedProfessionalExportArtifact : IEquatable<GeneratedProfessionalExportArtifact>
+{
+    private readonly byte[] _content;
+
+    internal GeneratedProfessionalExportArtifact(
+        ProfessionalExportArtifactKind kind,
+        string fileName,
+        byte[] content,
+        string sha256)
+    {
+        Kind = kind;
+        FileName = fileName;
+        _content = content.ToArray();
+        Sha256 = sha256;
+    }
+
+    public ProfessionalExportArtifactKind Kind { get; }
+    public string FileName { get; }
+    public byte[] Content => _content.ToArray();
+    public string Sha256 { get; }
+    public long ByteLength => _content.LongLength;
+    internal ReadOnlySpan<byte> ContentSpan => _content;
+
+    public bool Equals(GeneratedProfessionalExportArtifact? other) =>
+        other is not null && Kind == other.Kind && FileName == other.FileName &&
+        Sha256 == other.Sha256 && ByteLength == other.ByteLength;
+
+    public override bool Equals(object? obj) => Equals(obj as GeneratedProfessionalExportArtifact);
+    public override int GetHashCode() => HashCode.Combine(Kind, FileName, Sha256, ByteLength);
+}
 
 public sealed record ProfessionalExportRun(
     Guid ExportId,

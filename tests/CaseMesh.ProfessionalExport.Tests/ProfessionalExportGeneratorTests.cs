@@ -2,8 +2,10 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using CaseMesh.Core.Models;
+using CaseMesh.MatterBrain;
 using CaseMesh.ProfessionalExport;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
 using static CaseMesh.ProfessionalExport.Tests.SyntheticProfessionalExportFixture;
 
 namespace CaseMesh.ProfessionalExport.Tests;
@@ -71,7 +73,7 @@ public sealed class ProfessionalExportGeneratorTests
         var oversized = input with
         {
             Documents = input.Documents.Select((item, index) => index == 0
-                ? item with { ParserVersion = new string('x', 32 * 1024 * 1024) }
+                ? item with { ParserVersions = [new string('x', checked((int)ProfessionalExportGenerator.MaximumInputUtf8Bytes + 1))] }
                 : item).ToArray()
         };
 
@@ -88,6 +90,28 @@ public sealed class ProfessionalExportGeneratorTests
         Assert.Contains(assertions, item => item.OriginLabel == "EmployeeAuthoredDocument/UserAssertion");
         Assert.Contains(assertions, item => item.OriginLabel == "IndependentThirdPartyRecord/ThirdPartyAssertion");
         Assert.Contains(assertions, item => item.OriginLabel == "AiGeneratedInference/AiInference" && item.SourceReference is null);
+    }
+
+    [Fact]
+    public async Task Assertions_export_integrity_and_assertion_level_extraction_confidence()
+    {
+        var assertions = (await GenerateAsync()).Manifest.Assertions;
+
+        Assert.Contains(assertions, item => item.IntegrityState == IntegrityState.OriginalHashVerified &&
+                                           item.ExtractionConfidence == 0.9m);
+        Assert.Contains(assertions, item => item.IntegrityState == IntegrityState.MetadataUncertain);
+    }
+
+    [Fact]
+    public async Task Ocr_source_exports_stable_locator_and_bounding_box()
+    {
+        var source = Assert.Single((await GenerateAsync()).Manifest.Sources,
+            item => item.ExtractionRoute == ExportExtractionRoute.Ocr);
+
+        Assert.Equal(ExportSourceLocatorKind.ImageBoundingBox, source.LocatorKind);
+        Assert.Equal("ocr:page:1:bbox:10,20,30,40", source.StableLocator);
+        Assert.Equal((10, 20, 30, 40),
+            (source.BoundingBoxLeft, source.BoundingBoxTop, source.BoundingBoxWidth, source.BoundingBoxHeight));
     }
 
     [Fact]
@@ -127,6 +151,36 @@ public sealed class ProfessionalExportGeneratorTests
         Assert.StartsWith("EVT-", history.ReplacementReference, StringComparison.Ordinal);
         Assert.NotEmpty(history.SourceReferences);
         Assert.Contains(manifest.Chronology, item => item.CanonicalId == history.HistoricalId && item.Status.Contains("Superseded", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Correction_and_review_audit_events_export_actor_time_and_change_summary()
+    {
+        var audit = (await GenerateAsync()).Manifest.AuditTrail;
+
+        Assert.Contains(audit, item => item.Kind == AuditEventKind.EventCorrected &&
+                                       item.ReplacementEntityId.HasValue &&
+                                       item.Actor == "synthetic-reviewer" &&
+                                       item.OccurredAt == RecordedAt.AddHours(1) &&
+                                       !string.IsNullOrWhiteSpace(item.ChangeSummary));
+        Assert.Contains(audit, item => item.Kind == AuditEventKind.AssertionReviewed &&
+                                       item.ReplacementEntityId is null);
+    }
+
+    [Fact]
+    public async Task Cited_span_count_counts_only_references_used_by_exported_records()
+    {
+        var manifest = (await GenerateAsync()).Manifest;
+        var cited = manifest.Assertions.Select(item => item.SourceReference).OfType<string>()
+            .Concat(manifest.PeopleAndOrganisations.SelectMany(item => item.SourceReferences))
+            .Concat(manifest.Chronology.SelectMany(item => item.SourceReferences))
+            .Concat(manifest.Contradictions.SelectMany(item => item.SourceReferences))
+            .Concat(manifest.SupersededHistory.SelectMany(item => item.SourceReferences))
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.All(manifest.Documents, document => Assert.Equal(
+            manifest.Sources.Count(source => source.DocumentReference == document.Reference && cited.Contains(source.Reference)),
+            document.CitedSourceSpanCount));
     }
 
     [Fact]
@@ -193,6 +247,7 @@ public sealed class ProfessionalExportGeneratorTests
         var artifact = (await GenerateAsync()).Artifacts.Single(item => item.Kind == ProfessionalExportArtifactKind.BriefDocx);
         using var stream = new MemoryStream(artifact.Content);
         using var document = WordprocessingDocument.Open(stream, false);
+        Assert.Empty(new OpenXmlValidator().Validate(document));
         var mainDocumentPart = Assert.IsType<MainDocumentPart>(document.MainDocumentPart);
         var wordDocument = Assert.IsType<DocumentFormat.OpenXml.Wordprocessing.Document>(mainDocumentPart.Document);
         var text = Assert.IsType<DocumentFormat.OpenXml.Wordprocessing.Body>(wordDocument.Body).InnerText;
@@ -200,8 +255,10 @@ public sealed class ProfessionalExportGeneratorTests
         Assert.Contains("Matter header", text);
         Assert.Contains("Source-linked chronology", text);
         Assert.Contains("Evidence and document index", text);
+        Assert.Contains("Exact source index", text);
         Assert.Contains("Attributed assertions by topic", text);
         Assert.Contains("Contradictions and disputed records", text);
+        Assert.Contains("Correction and review audit trail", text);
         Assert.Contains("Open factual questions and missing evidence", text);
         Assert.Contains("Workplace-specific neutral context", text);
         Assert.Contains("Provenance and generation metadata", text);
@@ -278,6 +335,44 @@ public sealed class ProfessionalExportGeneratorTests
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 WriteIndented = true
             })), package.Run.ArtifactManifestDigest);
+    }
+
+    [Fact]
+    public async Task Artifact_content_is_defensively_copied()
+    {
+        var artifact = (await GenerateAsync()).Artifacts.First();
+        var originalHash = artifact.Sha256;
+        var firstRead = artifact.Content;
+        firstRead[0] ^= 0xFF;
+
+        Assert.Equal(originalHash, ProfessionalExportGenerator.Sha256(artifact.Content));
+        Assert.NotEqual(firstRead, artifact.Content);
+    }
+
+    [Fact]
+    public async Task Invalidated_extracted_assertion_is_not_current()
+    {
+        var input = await CreateAsync();
+        var dependency = input.Brain.Dependencies.Single(item => item.CanonicalKind == CanonicalRecordKind.Assertion);
+        var snapshot = input.Brain.CaptureSnapshot();
+        var invalidation = new DependencyInvalidation(
+            Id(700, 999), MatterId, dependency.Id, snapshot.Runs.Single().Id, null, RecordedAt.AddHours(3));
+        var invalidatedBrain = MatterBrainState.Rehydrate(input.Evidence, snapshot with
+        {
+            DependencyInvalidations = snapshot.DependencyInvalidations.Append(invalidation).ToArray()
+        });
+
+        var manifest = Generator().Generate(Request(), input with { Brain = invalidatedBrain }).Manifest;
+        Assert.False(manifest.Assertions.Single(item => item.AssertionId == dependency.CanonicalId).IsCurrent);
+    }
+
+    [Fact]
+    public async Task Multi_span_entities_keep_active_dependency_citations()
+    {
+        var person = Assert.Single((await GenerateAsync()).Manifest.PeopleAndOrganisations,
+            item => item.Kind == "Person");
+
+        Assert.Equal(2, person.SourceReferences.Count);
     }
 
     [Fact]

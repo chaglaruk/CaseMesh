@@ -64,11 +64,22 @@ public sealed class PostgresProfessionalExportTests(PostgresFixture database)
 
         await using var connection = new NpgsqlConnection(database.AppConnectionString);
         await connection.OpenAsync();
-        await using var transaction = await connection.BeginTransactionAsync();
-        await using var command = new NpgsqlCommand(
-            "SELECT count(*) FROM casemesh.professional_export_runs;", connection, transaction);
-        Assert.Equal(0L, await command.ExecuteScalarAsync());
-        await transaction.RollbackAsync();
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await SetTenantAsync(connection, transaction, tenantB);
+            await using var command = new NpgsqlCommand(
+                "SELECT count(*) FROM casemesh.professional_export_runs;", connection, transaction);
+            Assert.Equal(0L, await command.ExecuteScalarAsync());
+            await transaction.RollbackAsync();
+        }
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await SetTenantAsync(connection, transaction, tenantA);
+            await using var command = new NpgsqlCommand(
+                "SELECT count(*) FROM casemesh.professional_export_runs;", connection, transaction);
+            Assert.Equal(1L, await command.ExecuteScalarAsync());
+            await transaction.RollbackAsync();
+        }
     }
 
     [PostgresFact]
@@ -97,15 +108,27 @@ public sealed class PostgresProfessionalExportTests(PostgresFixture database)
         var request = new ProfessionalExportRequest(
             tenant, persisted.Evidence.Matter.Id, SyntheticPersistedMatterFactory.Id(905, 500));
 
-        await using (var service = Service(ExportedAt))
+        await using (var service = new PostgresProfessionalExportService(
+                         database.AppConnectionString,
+                         new SequenceTimeProvider(ExportedAt, ExportedAt.AddMinutes(1))))
         {
             var first = Assert.IsType<ProfessionalExportPackage>(await service.GenerateAsync(request));
             var retry = Assert.IsType<ProfessionalExportPackage>(await service.GenerateAsync(request));
             Assert.Equal(first.Run.ArtifactManifestDigest, retry.Run.ArtifactManifestDigest);
+            Assert.Equal(first.Run.GeneratedAt, retry.Run.GeneratedAt);
             Assert.All(first.Artifacts, artifact =>
                 Assert.Equal(artifact.Content, retry.Artifacts.Single(item => item.Kind == artifact.Kind).Content));
         }
 
+        persisted.Evidence.AddAssertion(
+            SyntheticPersistedMatterFactory.Id(905, 501), "synthetic-matter", "later-context", "changed",
+            "synthetic-reviewer", ExportedAt.AddMinutes(2), EvidenceOriginClass.RetrospectiveNote,
+            AssertionClass.AttributedAssertion, DisputeState.Unverified, IntegrityState.MetadataUncertain,
+            VerificationState.NotReviewed);
+        await using (var brainStore = new PostgresMatterBrainStore(database.AppConnectionString))
+        {
+            await brainStore.SaveAsync(new MatterBrainState(persisted.Evidence), persisted.Workplace);
+        }
         await using var divergentService = Service(ExportedAt.AddMinutes(1));
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             divergentService.GenerateAsync(request));
@@ -225,8 +248,30 @@ public sealed class PostgresProfessionalExportTests(PostgresFixture database)
         Assert.Contains("append-only", exception.MessageText, StringComparison.OrdinalIgnoreCase);
     }
 
+    private static async Task SetTenantAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        TenantId tenant)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT set_config('casemesh.tenant_id', $1, true);", connection, transaction);
+        command.Parameters.AddWithValue(tenant.Value.ToString());
+        await command.ExecuteNonQueryAsync();
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset value) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => value;
+    }
+
+    private sealed class SequenceTimeProvider(params DateTimeOffset[] values) : TimeProvider
+    {
+        private int _index;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var index = Interlocked.Increment(ref _index) - 1;
+            return values[Math.Min(index, values.Length - 1)];
+        }
     }
 }

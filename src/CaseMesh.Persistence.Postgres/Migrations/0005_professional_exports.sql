@@ -27,15 +27,15 @@ CREATE TABLE casemesh.professional_export_inclusions (
     FOREIGN KEY (tenant_id, matter_id, export_id)
         REFERENCES casemesh.professional_export_runs (tenant_id, matter_id, export_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, document_version_id)
-        REFERENCES casemesh.document_versions (tenant_id, matter_id, document_version_id) DEFERRABLE INITIALLY DEFERRED,
+        REFERENCES casemesh.document_versions (tenant_id, matter_id, document_version_id),
     FOREIGN KEY (tenant_id, matter_id, source_span_id)
-        REFERENCES casemesh.source_spans (tenant_id, matter_id, source_span_id) DEFERRABLE INITIALLY DEFERRED,
+        REFERENCES casemesh.source_spans (tenant_id, matter_id, source_span_id),
     FOREIGN KEY (tenant_id, matter_id, assertion_id)
-        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id) DEFERRABLE INITIALLY DEFERRED,
+        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id),
     FOREIGN KEY (tenant_id, matter_id, event_id)
-        REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id) DEFERRABLE INITIALLY DEFERRED,
+        REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id),
     FOREIGN KEY (tenant_id, matter_id, contradiction_id)
-        REFERENCES casemesh.contradictions (tenant_id, matter_id, contradiction_id) DEFERRABLE INITIALLY DEFERRED,
+        REFERENCES casemesh.contradictions (tenant_id, matter_id, contradiction_id),
     CHECK (num_nonnulls(document_version_id, source_span_id, assertion_id, event_id, contradiction_id) = 1),
     CHECK ((inclusion_kind = 0) = (document_version_id IS NOT NULL)),
     CHECK ((inclusion_kind = 1) = (source_span_id IS NOT NULL)),
@@ -109,13 +109,20 @@ BEGIN
         JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
         CROSS JOIN LATERAL aclexplode(
             COALESCE(relation.relacl, acldefault('r', relation.relowner))) grant_entry
+        JOIN pg_roles role ON role.oid = grant_entry.grantee
         WHERE namespace.nspname = 'casemesh'
           AND relation.relname = 'matters'
           AND grant_entry.grantee <> 0
+          AND grant_entry.grantee <> relation.relowner
+          AND role.rolcanlogin
+          AND NOT role.rolsuper
+          AND NOT role.rolbypassrls
         GROUP BY grant_entry.grantee
         HAVING bool_or(grant_entry.privilege_type = 'SELECT')
            AND bool_or(grant_entry.privilege_type = 'INSERT')
            AND bool_or(grant_entry.privilege_type = 'UPDATE')
+           AND bool_or(grant_entry.privilege_type = 'DELETE')
+           AND NOT bool_or(grant_entry.privilege_type IN ('TRUNCATE', 'REFERENCES', 'TRIGGER'))
     LOOP
         EXECUTE format(
             'GRANT SELECT, INSERT ON TABLE casemesh.professional_export_runs, casemesh.professional_export_inclusions, casemesh.professional_export_artifacts TO %I',
