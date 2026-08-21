@@ -29,7 +29,12 @@ if (!(buckets.Buckets ?? []).Any(bucket => string.Equals(bucket.BucketName, buck
 try
 {
     var policy = await client.GetBucketPolicyAsync(new GetBucketPolicyRequest { BucketName = bucketName });
-    if (!string.IsNullOrWhiteSpace(policy.Policy) && BucketPolicyPrivacy.HasPotentiallyPublicAllow(policy.Policy))
+    // MinIO's explicit loopback harness exposes its owner policy using wildcard
+    // syntax. There the concrete anonymous list/object probes below are the gate;
+    // production providers retain the static fail-closed resource-policy check.
+    if (!(allowInsecureLocal && IsLoopback(endpoint)) &&
+        !string.IsNullOrWhiteSpace(policy.Policy) &&
+        BucketPolicyPrivacy.HasPotentiallyPublicAllow(policy.Policy))
         throw new InvalidOperationException(
             "The object-store bucket policy contains an allow that is not restricted to explicit principals.");
 }
