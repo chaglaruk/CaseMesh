@@ -22,7 +22,16 @@ internal static class OidcConfiguration
         oidc.Scope.Clear();
         oidc.Scope.Add("openid");
         oidc.Scope.Add("profile");
+        var externalCallbackUri = BuildExternalCallbackUri(options.PublicOrigin);
+        oidc.Events.OnRedirectToIdentityProvider = context =>
+        {
+            context.ProtocolMessage.RedirectUri = externalCallbackUri;
+            return Task.CompletedTask;
+        };
     }
+
+    internal static string BuildExternalCallbackUri(string publicOrigin) =>
+        new Uri(new Uri(publicOrigin, UriKind.Absolute), CallbackPath).AbsoluteUri;
 }
 
 public sealed class CurrentWebUser(PostgresWebWorkspaceRepository repository, TimeProvider timeProvider)

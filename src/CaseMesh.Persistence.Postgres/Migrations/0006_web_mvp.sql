@@ -152,7 +152,8 @@ BEGIN
            AND bool_or(grant_entry.privilege_type = 'UPDATE')
            AND bool_or(grant_entry.privilege_type = 'DELETE')
     LOOP
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE ON TABLE casemesh.web_users, casemesh.web_document_metadata, casemesh.web_processing_jobs TO %I', runtime_role);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE ON TABLE casemesh.web_users TO %I', runtime_role);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE casemesh.web_document_metadata, casemesh.web_processing_jobs TO %I', runtime_role);
         EXECUTE format('GRANT SELECT ON TABLE casemesh.tenant_memberships TO %I', runtime_role);
         EXECUTE format('REVOKE INSERT, UPDATE, DELETE ON TABLE casemesh.tenant_memberships FROM %I', runtime_role);
         EXECUTE format('GRANT EXECUTE ON FUNCTION casemesh.create_owned_workspace(uuid, uuid, text, timestamptz), casemesh.pending_web_job_scopes(timestamptz) TO %I', runtime_role);

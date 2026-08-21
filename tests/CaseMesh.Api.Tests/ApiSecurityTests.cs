@@ -89,9 +89,12 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
         OidcConfiguration.Apply(oidc, ValidOptions());
 
         Assert.Equal("/api/auth/signin-oidc", oidc.CallbackPath.Value);
+        Assert.Equal("https://casemesh.invalid/api/auth/signin-oidc",
+            OidcConfiguration.BuildExternalCallbackUri("https://casemesh.invalid/internal-proxy-path"));
         Assert.Equal("code", oidc.ResponseType);
         Assert.True(oidc.UsePkce);
         Assert.False(oidc.SaveTokens);
+        Assert.NotNull(oidc.Events.OnRedirectToIdentityProvider);
     }
 
     [Fact]

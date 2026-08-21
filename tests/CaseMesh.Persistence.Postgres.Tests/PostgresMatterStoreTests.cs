@@ -114,6 +114,8 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
                        has_table_privilege(current_user, 'casemesh.professional_export_runs', 'INSERT'),
                        has_table_privilege(current_user, 'casemesh.professional_export_runs', 'UPDATE'),
                        has_table_privilege(current_user, 'casemesh.professional_export_runs', 'DELETE'),
+                       has_table_privilege(current_user, 'casemesh.web_document_metadata', 'DELETE'),
+                       has_table_privilege(current_user, 'casemesh.web_processing_jobs', 'DELETE'),
                        has_table_privilege(current_user, 'casemesh.tenant_memberships', 'SELECT'),
                        has_table_privilege(current_user, 'casemesh.tenant_memberships', 'INSERT'),
                        has_function_privilege(current_user,
@@ -139,8 +141,10 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             Assert.False(reader.GetBoolean(15));
             Assert.False(reader.GetBoolean(16));
             Assert.True(reader.GetBoolean(17));
-            Assert.False(reader.GetBoolean(18));
+            Assert.True(reader.GetBoolean(18));
             Assert.True(reader.GetBoolean(19));
+            Assert.False(reader.GetBoolean(20));
+            Assert.True(reader.GetBoolean(21));
         }
         finally
         {
