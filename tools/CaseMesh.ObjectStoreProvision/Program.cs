@@ -1,8 +1,8 @@
 using System.Net;
-using System.Text.Json;
 using Amazon.Runtime;
 using Amazon.S3;
 using Amazon.S3.Model;
+using CaseMesh.ObjectStoreProvision;
 
 var endpoint = new Uri(Required("CaseMesh__S3Endpoint"), UriKind.Absolute);
 var bucketName = Required("CaseMesh__S3BucketName");
@@ -29,7 +29,7 @@ if (!(buckets.Buckets ?? []).Any(bucket => string.Equals(bucket.BucketName, buck
 try
 {
     var policy = await client.GetBucketPolicyAsync(new GetBucketPolicyRequest { BucketName = bucketName });
-    if (!string.IsNullOrWhiteSpace(policy.Policy) && HasPotentiallyPublicAllow(policy.Policy))
+    if (!string.IsNullOrWhiteSpace(policy.Policy) && BucketPolicyPrivacy.HasPotentiallyPublicAllow(policy.Policy))
         throw new InvalidOperationException(
             "The object-store bucket policy contains an allow that is not restricted to explicit principals.");
 }
@@ -44,6 +44,31 @@ using (var response = await anonymous.GetAsync(new Uri(endpoint,
     if (response.StatusCode is not HttpStatusCode.Forbidden and not HttpStatusCode.Unauthorized)
         throw new InvalidOperationException("Anonymous bucket access was not denied by the object store.");
 }
+
+var privacyProbeKey = $".casemesh-private-probe/{Guid.NewGuid():N}";
+try
+{
+    await client.PutObjectAsync(new PutObjectRequest
+    {
+        BucketName = bucketName,
+        Key = privacyProbeKey,
+        InputStream = new MemoryStream([0])
+    });
+
+    using var anonymous = new HttpClient();
+    using var response = await anonymous.GetAsync(new Uri(endpoint,
+        $"/{Uri.EscapeDataString(bucketName)}/{privacyProbeKey}"));
+    if (response.StatusCode is not HttpStatusCode.Forbidden and not HttpStatusCode.Unauthorized)
+        throw new InvalidOperationException("Anonymous object reads were not denied by the object store.");
+}
+finally
+{
+    await client.DeleteObjectAsync(new DeleteObjectRequest
+    {
+        BucketName = bucketName,
+        Key = privacyProbeKey
+    });
+}
 Console.WriteLine("Private object-store bucket is ready.");
 
 static string Required(string name) =>
@@ -54,47 +79,3 @@ static string Required(string name) =>
 static bool IsLoopback(Uri endpoint) =>
     string.Equals(endpoint.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
     (IPAddress.TryParse(endpoint.Host, out var address) && IPAddress.IsLoopback(address));
-
-static bool HasPotentiallyPublicAllow(string policy)
-{
-    try
-    {
-        using var document = JsonDocument.Parse(policy);
-        if (!document.RootElement.TryGetProperty("Statement", out var statements))
-            return false;
-
-        if (statements.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var statement in statements.EnumerateArray())
-                if (IsPotentiallyPublicAllow(statement))
-                    return true;
-
-            return false;
-        }
-
-        return IsPotentiallyPublicAllow(statements);
-    }
-    catch (JsonException)
-    {
-        return true;
-    }
-}
-
-static bool IsPotentiallyPublicAllow(JsonElement statement)
-{
-    if (!statement.TryGetProperty("Effect", out var effect) ||
-        !string.Equals(effect.GetString(), "Allow", StringComparison.OrdinalIgnoreCase))
-        return false;
-
-    return statement.TryGetProperty("NotPrincipal", out _) ||
-           !statement.TryGetProperty("Principal", out var principal) ||
-           ContainsWildcard(principal);
-}
-
-static bool ContainsWildcard(JsonElement value) => value.ValueKind switch
-{
-    JsonValueKind.String => value.GetString()!.Contains('*', StringComparison.Ordinal),
-    JsonValueKind.Array => value.EnumerateArray().Any(ContainsWildcard),
-    JsonValueKind.Object => value.EnumerateObject().Any(property => ContainsWildcard(property.Value)),
-    _ => true
-};

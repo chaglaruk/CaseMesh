@@ -4,6 +4,7 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\tools\CaseMesh.ObjectStoreProvision\CaseMesh.ObjectStoreProvision.csproj" />
     <ProjectReference Include="..\..\src\CaseMesh.Core\CaseMesh.Core.csproj" />
     <ProjectReference Include="..\..\src\CaseMesh.Persistence.Postgres\CaseMesh.Persistence.Postgres.csproj" />
     <ProjectReference Include="..\..\src\CaseMesh.Storage\CaseMesh.Storage.csproj" />
