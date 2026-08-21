@@ -285,6 +285,11 @@ jobs:
           GRANT CONNECT ON DATABASE casemesh_admin TO casemesh_web;
           GRANT USAGE ON SCHEMA casemesh TO casemesh_web;
           GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA casemesh TO casemesh_web;
+          REVOKE INSERT, UPDATE, DELETE ON TABLE casemesh.tenant_memberships FROM casemesh_web;
+          GRANT EXECUTE ON FUNCTION
+            casemesh.create_owned_workspace(uuid, uuid, text, timestamptz),
+            casemesh.pending_web_job_scopes(timestamptz)
+            TO casemesh_web;
           SQL
       - name: Build and start real S3-compatible MinIO service
         run: |
