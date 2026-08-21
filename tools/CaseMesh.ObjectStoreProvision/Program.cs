@@ -27,17 +27,10 @@ if (!(buckets.Buckets ?? []).Any(bucket => string.Equals(bucket.BucketName, buck
 
 try
 {
-    await client.DeleteBucketPolicyAsync(new DeleteBucketPolicyRequest { BucketName = bucketName });
-}
-catch (AmazonS3Exception exception) when (exception.ErrorCode is "NoSuchBucketPolicy" or "NoSuchPolicy")
-{
-}
-
-try
-{
     var policy = await client.GetBucketPolicyAsync(new GetBucketPolicyRequest { BucketName = bucketName });
     if (!string.IsNullOrWhiteSpace(policy.Policy))
-        throw new InvalidOperationException("The object-store bucket still has an effective bucket policy.");
+        throw new InvalidOperationException(
+            "The provisioning helper cannot prove a bucket with an existing policy is private.");
 }
 catch (AmazonS3Exception exception) when (exception.ErrorCode is "NoSuchBucketPolicy" or "NoSuchPolicy")
 {
