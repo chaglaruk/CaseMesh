@@ -173,7 +173,7 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
     }
 
     [StorageFact]
-    public async Task Attempted_store_cleanup_deletes_physical_bytes_without_storage_metadata()
+    public async Task Attempted_store_cleanup_deletes_physical_bytes_without_claiming_metadata_was_deleted()
     {
         var scope = await fixture.CreateScopeAsync(Bytes("synthetic-ambiguous-store"));
         await fixture.S3.PutObjectAsync(new PutObjectRequest
@@ -184,7 +184,7 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
         });
         await using var store = fixture.CreateStore();
 
-        Assert.True(await store.DeleteOriginalAsync(
+        Assert.False(await store.DeleteOriginalAsync(
             scope.TenantId, scope.MatterId, scope.OriginalObjectId));
         Assert.False(await fixture.PhysicalExistsAsync(scope));
     }

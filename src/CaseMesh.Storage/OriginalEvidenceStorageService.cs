@@ -152,7 +152,7 @@ public sealed class OriginalEvidenceStorageService : IOriginalEvidenceStore
         await _backend.DeleteIfExistsAsync(
             state.Storage?.Address ?? _backend.AddressFor(identity),
             cancellationToken);
-        return state.Storage is null ||
+        return state.Storage is not null &&
                await _metadata.DeleteOriginalMetadataAsync(identity, cancellationToken);
     }
 
