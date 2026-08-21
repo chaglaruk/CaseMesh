@@ -1,0 +1,12 @@
+"use client";
+import { FormEvent, useEffect, useState } from "react";
+import { Matter, Membership, request, tenantValue } from "../../lib/api";
+
+export default function MattersPage() {
+  const [membership,setMembership]=useState<Membership>(); const [matters,setMatters]=useState<Matter[]>([]);
+  const [error,setError]=useState(""); const [loading,setLoading]=useState(true);
+  async function load(){try{const session=await request<{memberships:Membership[]}>("/auth/session");let member=session.memberships[0];if(!member){const created=await request<{tenantId:string}>("/workspaces",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:"My CaseMesh workspace"})});member={tenantId:created.tenantId,workspaceName:"My CaseMesh workspace",role:1};}setMembership(member);setMatters(await request<Matter[]>(`/workspaces/${tenantValue(member)}/matters`));}catch(e){setError((e as Error).message);}finally{setLoading(false);}}
+  useEffect(()=>{void load();},[]);
+  async function create(event:FormEvent<HTMLFormElement>){event.preventDefault();if(!membership)return;const data=new FormData(event.currentTarget);try{const matter=await request<Matter>(`/workspaces/${tenantValue(membership)}/matters`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:data.get("title"),jurisdiction:data.get("jurisdiction")})});window.location.assign(`/matters/${matter.id}?workspace=${tenantValue(membership)}`);}catch(e){setError((e as Error).message);}}
+  return <main><h1>Your Matters</h1><p className="lede">One evidence workspace for chronology, attributed statements, contradictions and professional handover.</p>{error&&<p role="alert" className="error">{error}</p>}<section className="grid" aria-label="Matter list">{loading?<p>Loading private workspace…</p>:matters.map(m=><article className="card" key={m.id}><p className="muted">{m.status}</p><h2>{m.title}</h2><p>{m.jurisdiction??"Jurisdiction not recorded"}</p><a className="button" href={`/matters/${m.id}?workspace=${membership&&tenantValue(membership)}`}>Open Matter</a></article>)}</section><section className="card" style={{marginTop:24}}><h2>Create a Matter</h2><form onSubmit={create}><label>Neutral Matter title<input name="title" required maxLength={160} placeholder="Workplace dispute evidence review"/></label><label>Jurisdiction (optional)<input name="jurisdiction" maxLength={80} placeholder="England and Wales"/></label><button type="submit" disabled={!membership}>Create Matter</button></form></section></main>;
+}

@@ -144,13 +144,16 @@ public sealed class OriginalEvidenceStorageService : IOriginalEvidenceStore
     {
         var identity = RequireIdentity(tenantId, matterId, originalObjectId);
         var state = await _metadata.ResolveAsync(identity, cancellationToken);
-        if (state?.Storage is null)
+        if (state is null)
         {
             return false;
         }
 
-        await _backend.DeleteIfExistsAsync(state.Storage.Address, cancellationToken);
-        return await _metadata.DeleteOriginalMetadataAsync(identity, cancellationToken);
+        await _backend.DeleteIfExistsAsync(
+            state.Storage?.Address ?? _backend.AddressFor(identity),
+            cancellationToken);
+        return state.Storage is not null &&
+               await _metadata.DeleteOriginalMetadataAsync(identity, cancellationToken);
     }
 
     public async Task<bool> DeleteMatterAsync(

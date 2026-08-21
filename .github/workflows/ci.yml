@@ -205,3 +205,130 @@ jobs:
           if [ -f "$RUNNER_TEMP/casemesh-minio.pid" ]; then
             kill "$(cat "$RUNNER_TEMP/casemesh-minio.pid")" || true
           fi
+
+  web-build-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install locked Web dependencies
+        run: npm ci --ignore-scripts
+      - name: Type-check Web
+        run: npm run lint
+      - name: Test Web
+        run: npm test
+      - name: Build Web
+        run: npm run build
+
+  web-e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: casemesh_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d casemesh_admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CASEMESH_POSTGRES_MIGRATION_CONNECTION: Host=localhost;Port=5432;Database=casemesh_admin;Username=postgres;Password=postgres;Pooling=false
+      CASEMESH_OBJECT_STORAGE_ACCESS_KEY: 'GK00000000000000000000000000000000'
+      CASEMESH_OBJECT_STORAGE_SECRET_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+      CASEMESH_API_INTERNAL_ORIGIN: http://127.0.0.1:5050
+      CASEMESH_WEB_ORIGIN: http://localhost:3000
+      NEXT_PUBLIC_CASEMESH_TEST_AUTH: 'true'
+      ASPNETCORE_ENVIRONMENT: Testing
+      CaseMesh__PostgresConnectionString: Host=localhost;Port=5432;Database=casemesh_admin;Username=casemesh_web;Password=synthetic-web-password;Pooling=true;Maximum Pool Size=8
+      CaseMesh__EnableTestAuthentication: 'true'
+      CaseMesh__S3Endpoint: http://127.0.0.1:9000
+      CaseMesh__S3Region: us-east-1
+      CaseMesh__S3BucketName: casemesh-web-e2e
+      CaseMesh__S3AccessKey: 'GK00000000000000000000000000000000'
+      CaseMesh__S3SecretKey: '0000000000000000000000000000000000000000000000000000000000000000'
+      CaseMesh__AllowInsecureLocalObjectStorage: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.8'
+          cache: false
+      - name: Migrate real PostgreSQL and provision restricted runtime role
+        run: |
+          dotnet run --project ./tools/CaseMesh.DbMigrate/CaseMesh.DbMigrate.csproj -c Release
+          PGPASSWORD=postgres psql -h localhost -U postgres -d casemesh_admin -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE casemesh_web LOGIN PASSWORD 'synthetic-web-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          GRANT CONNECT ON DATABASE casemesh_admin TO casemesh_web;
+          GRANT USAGE ON SCHEMA casemesh TO casemesh_web;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA casemesh TO casemesh_web;
+          REVOKE INSERT, UPDATE, DELETE ON TABLE casemesh.tenant_memberships FROM casemesh_web;
+          GRANT EXECUTE ON FUNCTION
+            casemesh.create_owned_workspace(uuid, uuid, text, timestamptz),
+            casemesh.pending_web_job_scopes(timestamptz)
+            TO casemesh_web;
+          SQL
+      - name: Build and start real S3-compatible MinIO service
+        run: |
+          minio_source="$RUNNER_TEMP/casemesh-minio-source"
+          git clone --quiet --filter=blob:none https://github.com/minio/minio.git "$minio_source"
+          git -C "$minio_source" checkout --quiet --detach 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
+          (cd "$minio_source" && CGO_ENABLED=0 go build -tags kqueue -trimpath -o "$RUNNER_TEMP/casemesh-minio" .)
+          install -d -m 700 "$RUNNER_TEMP/casemesh-minio-data"
+          MINIO_ROOT_USER="$CASEMESH_OBJECT_STORAGE_ACCESS_KEY" MINIO_ROOT_PASSWORD="$CASEMESH_OBJECT_STORAGE_SECRET_KEY" \
+            nohup "$RUNNER_TEMP/casemesh-minio" server "$RUNNER_TEMP/casemesh-minio-data" --address ':9000' >"$RUNNER_TEMP/casemesh-minio.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/casemesh-minio.pid"
+          for _ in {1..60}; do curl --silent --fail http://localhost:9000/minio/health/ready >/dev/null && exit 0; sleep 2; done
+          cat "$RUNNER_TEMP/casemesh-minio.log"; exit 1
+      - name: Build API and Web
+        run: |
+          dotnet run --project ./tools/CaseMesh.ObjectStoreProvision/CaseMesh.ObjectStoreProvision.csproj -c Release
+          dotnet build ./src/CaseMesh.Api/CaseMesh.Api.csproj -c Release
+          cd web
+          npm ci --ignore-scripts
+          npm run build
+          npx playwright install --with-deps chromium
+      - name: Start API and Web
+        run: |
+          ASPNETCORE_URLS=http://127.0.0.1:5050 nohup dotnet ./src/CaseMesh.Api/bin/Release/net10.0/CaseMesh.Api.dll >"$RUNNER_TEMP/casemesh-api.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/casemesh-api.pid"
+          (cd web && nohup npm start >"$RUNNER_TEMP/casemesh-web.log" 2>&1 & echo "$!" > "$RUNNER_TEMP/casemesh-web.pid")
+          for _ in {1..60}; do curl --silent --fail http://127.0.0.1:5050/health/live >/dev/null && curl --silent --fail http://127.0.0.1:3000/sign-in >/dev/null && exit 0; sleep 2; done
+          cat "$RUNNER_TEMP/casemesh-api.log"; cat "$RUNNER_TEMP/casemesh-web.log"; exit 1
+      - name: Run real browser Matter journey
+        working-directory: web
+        run: npm run test:e2e
+      - name: Report service diagnostics
+        if: failure()
+        run: |
+          tail -n 100 "$RUNNER_TEMP/casemesh-api.log" || true
+          tail -n 100 "$RUNNER_TEMP/casemesh-web.log" || true
+      - name: Stop Web services
+        if: always()
+        run: |
+          for pid_file in "$RUNNER_TEMP/casemesh-web.pid" "$RUNNER_TEMP/casemesh-api.pid" "$RUNNER_TEMP/casemesh-minio.pid"; do
+            if [ -f "$pid_file" ]; then kill "$(cat "$pid_file")" || true; fi
+          done

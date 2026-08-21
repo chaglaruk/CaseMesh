@@ -17,7 +17,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
         var before = await migrator.GetAppliedMigrationsAsync(database.AdminConnectionString);
         var after = await migrator.MigrateAsync(database.AdminConnectionString);
 
-        Assert.Equal(["0001", "0002", "0003", "0004", "0005"], after.Select(migration => migration.Version));
+        Assert.Equal(["0001", "0002", "0003", "0004", "0005", "0006"], after.Select(migration => migration.Version));
         Assert.Equal(before, after);
     }
 
@@ -39,7 +39,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             var migrator = new PostgresMigrator();
             Assert.Empty(await migrator.GetAppliedMigrationsAsync(emptyBuilder.ConnectionString));
             var applied = await migrator.MigrateAsync(emptyBuilder.ConnectionString);
-            Assert.Equal(["0001", "0002", "0003", "0004", "0005"], applied.Select(migration => migration.Version));
+            Assert.Equal(["0001", "0002", "0003", "0004", "0005", "0006"], applied.Select(migration => migration.Version));
         }
         finally
         {
@@ -113,7 +113,13 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
                        has_table_privilege(current_user, 'casemesh.professional_export_runs', 'SELECT'),
                        has_table_privilege(current_user, 'casemesh.professional_export_runs', 'INSERT'),
                        has_table_privilege(current_user, 'casemesh.professional_export_runs', 'UPDATE'),
-                       has_table_privilege(current_user, 'casemesh.professional_export_runs', 'DELETE');
+                       has_table_privilege(current_user, 'casemesh.professional_export_runs', 'DELETE'),
+                       has_table_privilege(current_user, 'casemesh.web_document_metadata', 'DELETE'),
+                       has_table_privilege(current_user, 'casemesh.web_processing_jobs', 'DELETE'),
+                       has_table_privilege(current_user, 'casemesh.tenant_memberships', 'SELECT'),
+                       has_table_privilege(current_user, 'casemesh.tenant_memberships', 'INSERT'),
+                       has_function_privilege(current_user,
+                           'casemesh.create_owned_workspace(uuid,uuid,text,timestamptz)', 'EXECUTE');
                 """, app);
             await using var reader = await privileges.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
@@ -134,6 +140,11 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             Assert.True(reader.GetBoolean(14));
             Assert.False(reader.GetBoolean(15));
             Assert.False(reader.GetBoolean(16));
+            Assert.True(reader.GetBoolean(17));
+            Assert.True(reader.GetBoolean(18));
+            Assert.True(reader.GetBoolean(19));
+            Assert.False(reader.GetBoolean(20));
+            Assert.True(reader.GetBoolean(21));
         }
         finally
         {

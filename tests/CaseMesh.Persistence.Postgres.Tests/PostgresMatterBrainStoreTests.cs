@@ -194,7 +194,7 @@ public sealed class PostgresMatterBrainStoreTests(PostgresFixture database)
             update.Parameters.AddWithValue(persisted.Evidence.Matter.Id);
             update.Parameters.AddWithValue(runId);
             var exception = await Assert.ThrowsAsync<PostgresException>(() => update.ExecuteNonQueryAsync());
-            Assert.Contains("append-only", exception.MessageText, StringComparison.OrdinalIgnoreCase);
+            AssertAppendOnlyMutationRejected(exception);
         }
         await transaction.RollbackAsync();
 
@@ -208,7 +208,7 @@ public sealed class PostgresMatterBrainStoreTests(PostgresFixture database)
             delete.Parameters.AddWithValue(persisted.Evidence.Matter.Id);
             delete.Parameters.AddWithValue(runId);
             var exception = await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync());
-            Assert.Contains("append-only", exception.MessageText, StringComparison.OrdinalIgnoreCase);
+            AssertAppendOnlyMutationRejected(exception);
         }
         await deleteTransaction.RollbackAsync();
 
@@ -220,6 +220,14 @@ public sealed class PostgresMatterBrainStoreTests(PostgresFixture database)
 
         Assert.True(await matterStore.DeleteMatterAsync(tenant, persisted.Evidence.Matter.Id));
         Assert.Null(await store.LoadAsync(tenant, persisted.Evidence.Matter.Id));
+    }
+
+    private static void AssertAppendOnlyMutationRejected(PostgresException exception)
+    {
+        Assert.True(
+            exception.SqlState == PostgresErrorCodes.InsufficientPrivilege ||
+            exception.MessageText.Contains("append-only", StringComparison.OrdinalIgnoreCase),
+            $"Expected the append-only privilege boundary or trigger to reject the mutation, but PostgreSQL returned {exception.SqlState}: {exception.MessageText}");
     }
 
     [PostgresFact]

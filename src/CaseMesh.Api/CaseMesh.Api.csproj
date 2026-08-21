@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>CaseMesh.Api</RootNamespace>
+    <AssemblyName>CaseMesh.Api</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CaseMesh.Core\CaseMesh.Core.csproj" />
+    <ProjectReference Include="..\CaseMesh.Ingestion\CaseMesh.Ingestion.csproj" />
+    <ProjectReference Include="..\CaseMesh.MatterBrain\CaseMesh.MatterBrain.csproj" />
+    <ProjectReference Include="..\CaseMesh.Persistence.Postgres\CaseMesh.Persistence.Postgres.csproj" />
+    <ProjectReference Include="..\CaseMesh.ProfessionalExport\CaseMesh.ProfessionalExport.csproj" />
+    <ProjectReference Include="..\CaseMesh.Storage\CaseMesh.Storage.csproj" />
+    <ProjectReference Include="..\CaseMesh.Storage.S3\CaseMesh.Storage.S3.csproj" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
+  </ItemGroup>
+</Project>

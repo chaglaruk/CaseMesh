@@ -173,6 +173,23 @@ public sealed class OriginalEvidenceStorageTests(StorageIntegrationFixture fixtu
     }
 
     [StorageFact]
+    public async Task Attempted_store_cleanup_deletes_physical_bytes_without_claiming_metadata_was_deleted()
+    {
+        var scope = await fixture.CreateScopeAsync(Bytes("synthetic-ambiguous-store"));
+        await fixture.S3.PutObjectAsync(new PutObjectRequest
+        {
+            BucketName = fixture.BucketName,
+            Key = fixture.KeyFor(scope),
+            InputStream = Stream(scope.Bytes)
+        });
+        await using var store = fixture.CreateStore();
+
+        Assert.False(await store.DeleteOriginalAsync(
+            scope.TenantId, scope.MatterId, scope.OriginalObjectId));
+        Assert.False(await fixture.PhysicalExistsAsync(scope));
+    }
+
+    [StorageFact]
     public async Task Equal_hashes_in_different_tenants_are_physically_independent()
     {
         var bytes = Bytes("synthetic-cross-tenant-same-hash");
