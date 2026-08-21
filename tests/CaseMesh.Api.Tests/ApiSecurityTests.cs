@@ -41,7 +41,27 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
         var cookie = response.Headers.GetValues("Set-Cookie").Single();
         Assert.Contains("__Host-casemesh-session", cookie);
         Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("secure", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("localStorage", cookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Explicit_http_test_harness_can_issue_antiforgery_token_without_weakening_session_cookie()
+    {
+        using var client = _factory.CreateClient();
+        using var signIn = await client.PostAsJsonAsync("/api/auth/test-sign-in",
+            new TestSignInRequest("synthetic-csrf-user", "Synthetic CSRF User"));
+        Assert.Equal(HttpStatusCode.NoContent, signIn.StatusCode);
+        var sessionCookie = signIn.Headers.GetValues("Set-Cookie").Single().Split(';', 2)[0];
+        client.DefaultRequestHeaders.Add("Cookie", sessionCookie);
+
+        using var response = await client.GetAsync("/api/auth/csrf");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var cookie = response.Headers.GetValues("Set-Cookie").Single();
+        Assert.Contains("casemesh-xsrf-test", cookie);
+        Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("__Host-", cookie, StringComparison.Ordinal);
     }
 
     [Theory]

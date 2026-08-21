@@ -12,6 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 var options = builder.Configuration.GetSection(CaseMeshApiOptions.SectionName).Get<CaseMeshApiOptions>()
               ?? new CaseMeshApiOptions();
 options.Validate(builder.Environment.EnvironmentName);
+var isExplicitTestHarness = options.EnableTestAuthentication && builder.Environment.IsEnvironment("Testing");
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(_ => new PostgresWebWorkspaceRepository(options.PostgresConnectionString));
@@ -45,10 +46,12 @@ builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddAntiforgery(configuration =>
 {
     configuration.HeaderName = "X-CSRF-TOKEN";
-    configuration.Cookie.Name = "__Host-casemesh-xsrf";
+    configuration.Cookie.Name = isExplicitTestHarness ? "casemesh-xsrf-test" : "__Host-casemesh-xsrf";
     configuration.Cookie.HttpOnly = true;
     configuration.Cookie.SameSite = SameSiteMode.Lax;
-    configuration.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    configuration.Cookie.SecurePolicy = isExplicitTestHarness
+        ? CookieSecurePolicy.SameAsRequest
+        : CookieSecurePolicy.Always;
 });
 builder.Services.Configure<FormOptions>(form =>
 {
