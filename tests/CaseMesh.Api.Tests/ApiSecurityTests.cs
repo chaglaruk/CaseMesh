@@ -101,6 +101,22 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
     }
 
     [Theory]
+    [InlineData("Development")]
+    [InlineData("Staging")]
+    public void Non_testing_environments_reject_test_authentication(string environment)
+    {
+        var options = ValidOptions().WithTestAuth();
+        Assert.Throws<InvalidOperationException>(() => options.Validate(environment));
+    }
+
+    [Fact]
+    public void Explicit_testing_environment_accepts_test_authentication()
+    {
+        var options = ValidOptions().WithTestAuth();
+        options.Validate("Testing");
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(104857601)]
     public void Invalid_upload_limits_fail_startup(long limit)

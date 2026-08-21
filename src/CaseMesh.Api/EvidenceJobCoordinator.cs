@@ -18,6 +18,7 @@ public sealed class EvidenceJobCoordinator(
     IPdfPageRasterizer rasterizer,
     IngestionPipeline pipeline,
     CaseMeshApiOptions options,
+    IHostEnvironment environment,
     TimeProvider timeProvider,
     ILogger<EvidenceJobCoordinator> logger) : BackgroundService
 {
@@ -65,7 +66,7 @@ public sealed class EvidenceJobCoordinator(
             var spans = loaded.Evidence.SourceSpans
                 .Where(span => span.DocumentVersion.DocumentVersionId == job.DocumentVersionId)
                 .Select(span => span.Id).ToArray();
-            if (options.EnableTestAuthentication && spans.Length > 0)
+            if (options.EnableTestAuthentication && environment.IsEnvironment("Testing") && spans.Length > 0)
                 await new MatterBrainMergeService(timeProvider).ExtractAndMergeAsync(
                     loaded.Brain, spans, new SyntheticWorkplaceExtractionProvider(timeProvider), cancellationToken);
             await brains.SaveAsync(loaded.Brain, loaded.Workplace, cancellationToken);

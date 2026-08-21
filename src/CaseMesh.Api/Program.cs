@@ -19,7 +19,7 @@ builder.Services.AddSingleton(_ => new PostgresWebWorkspaceRepository(options.Po
 builder.Services.AddSingleton(_ => new PostgresMatterBrainStore(options.PostgresConnectionString));
 builder.Services.AddSingleton(_ => new PostgresMatterStore(options.PostgresConnectionString));
 builder.Services.AddSingleton(_ => new PostgresProfessionalExportService(options.PostgresConnectionString, TimeProvider.System));
-builder.Services.AddSingleton<IOriginalEvidenceStore>(_ => options.EnableTestAuthentication && string.IsNullOrWhiteSpace(options.S3Endpoint)
+builder.Services.AddSingleton<IOriginalEvidenceStore>(_ => isExplicitTestHarness && string.IsNullOrWhiteSpace(options.S3Endpoint)
     ? new DisabledEvidenceStore()
     : new S3OriginalEvidenceStore(options.PostgresConnectionString, new S3ObjectStorageOptions
     {
@@ -29,14 +29,14 @@ builder.Services.AddSingleton<IOriginalEvidenceStore>(_ => options.EnableTestAut
     }));
 builder.Services.AddSingleton<IIngestionRepository>(provider =>
     new PostgresIngestionRepository(provider.GetRequiredService<PostgresMatterStore>()));
-builder.Services.AddSingleton<IMalwareScanner>(_ => options.EnableTestAuthentication
+builder.Services.AddSingleton<IMalwareScanner>(_ => isExplicitTestHarness
     ? new SyntheticCleanScanner() : new ClamAvCliScanner("runtime-configured", TimeSpan.FromSeconds(30)));
-builder.Services.AddSingleton<IOcrEngine>(_ => options.EnableTestAuthentication
+builder.Services.AddSingleton<IOcrEngine>(_ => isExplicitTestHarness
     ? new SyntheticOcrEngine() : new TesseractCliOcrEngine("runtime-configured", TimeSpan.FromSeconds(30)));
 builder.Services.AddSingleton<IPdfPageRasterizer>(_ =>
     new PopplerPdfPageRasterizer("runtime-configured", TimeSpan.FromSeconds(30)));
-builder.Services.AddSingleton(new IngestionPipeline("web-v1", options.EnableTestAuthentication ? "synthetic-clean" : "clamav-cli",
-    "runtime-configured", "casemesh-parsers-v1", options.EnableTestAuthentication ? "synthetic-ocr" : "tesseract-cli",
+builder.Services.AddSingleton(new IngestionPipeline("web-v1", isExplicitTestHarness ? "synthetic-clean" : "clamav-cli",
+    "runtime-configured", "casemesh-parsers-v1", isExplicitTestHarness ? "synthetic-ocr" : "tesseract-cli",
     "runtime-configured"));
 builder.Services.AddSingleton<EvidenceJobCoordinator>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<EvidenceJobCoordinator>());
@@ -62,7 +62,7 @@ builder.Services.Configure<FormOptions>(form =>
 builder.Services.AddAuthentication(authentication =>
 {
     authentication.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-    authentication.DefaultChallengeScheme = options.EnableTestAuthentication
+    authentication.DefaultChallengeScheme = isExplicitTestHarness
         ? CookieAuthenticationDefaults.AuthenticationScheme : OpenIdConnectDefaults.AuthenticationScheme;
 }).AddCookie(cookie =>
 {
@@ -83,7 +83,7 @@ builder.Services.AddAuthentication(authentication =>
         return Task.CompletedTask;
     };
 });
-if (!options.EnableTestAuthentication)
+if (!isExplicitTestHarness)
 {
     builder.Services.AddAuthentication().AddOpenIdConnect(OpenIdConnectDefaults.AuthenticationScheme, oidc =>
     {

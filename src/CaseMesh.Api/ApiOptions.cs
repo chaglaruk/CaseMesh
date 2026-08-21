@@ -25,10 +25,11 @@ public sealed class CaseMeshApiOptions
             throw new InvalidOperationException("The upload limit must be between 1 byte and 100 MiB.");
         if (MaximumUploadFileNameLength is < 1 or > 255)
             throw new InvalidOperationException("The filename metadata limit must be between 1 and 255 characters.");
+        if (EnableTestAuthentication &&
+            !string.Equals(environment, "Testing", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Test authentication can run only in the Testing environment.");
         if (string.Equals(environment, "Production", StringComparison.OrdinalIgnoreCase))
         {
-            if (EnableTestAuthentication)
-                throw new InvalidOperationException("Test authentication cannot run in Production.");
             if (!Uri.TryCreate(PublicOrigin, UriKind.Absolute, out var origin) || origin.Scheme != Uri.UriSchemeHttps)
                 throw new InvalidOperationException("Production requires an HTTPS public origin.");
             ArgumentException.ThrowIfNullOrWhiteSpace(OidcAuthority);
