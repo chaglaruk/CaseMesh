@@ -127,18 +127,25 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
         string safeFileName, DateTimeOffset createdAt, CancellationToken cancellationToken = default) =>
         InAuthorizedTenantTransactionAsync(userId, tenantId, async (connection, transaction) =>
         {
-            await using var command = new NpgsqlCommand("""
+            await using (var metadata = new NpgsqlCommand("""
                 INSERT INTO casemesh.web_document_metadata
                     (tenant_id,matter_id,document_id,original_file_name,uploaded_by_user_id,uploaded_at)
                 VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING;
+                """, connection, transaction))
+            {
+                PostgresMatterStore.AddParameters(metadata, tenantId.Value, matterId, documentId, safeFileName,
+                    userId, createdAt);
+                await metadata.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await using var job = new NpgsqlCommand("""
                 INSERT INTO casemesh.web_processing_jobs
                     (tenant_id,matter_id,job_id,document_id,document_version_id,original_object_id,
                      status,available_at,created_at)
-                VALUES ($1,$2,$7,$3,$8,$9,1,$6,$6) ON CONFLICT DO NOTHING;
+                VALUES ($1,$2,$3,$4,$5,$6,1,$7,$7) ON CONFLICT DO NOTHING;
                 """, connection, transaction);
-            PostgresMatterStore.AddParameters(command, tenantId.Value, matterId, documentId, safeFileName,
-                userId, createdAt, jobId, documentVersionId, originalObjectId);
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            PostgresMatterStore.AddParameters(job, tenantId.Value, matterId, jobId, documentId,
+                documentVersionId, originalObjectId, createdAt);
+            await job.ExecuteNonQueryAsync(cancellationToken);
             return true;
         }, cancellationToken);
 
