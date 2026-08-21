@@ -7,7 +7,15 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   await expect(page).toHaveURL(/\/matters/);
   await page.getByLabel("Neutral Matter title").fill("Synthetic workplace evidence review");
   await page.getByLabel("Jurisdiction").fill("England and Wales");
-  await page.getByRole("button",{name:"Create Matter"}).click();
+  const createMatter=page.getByRole("button",{name:"Create Matter"});
+  try {
+    await expect(createMatter).toBeEnabled({timeout:15_000});
+  } catch (error) {
+    console.log("Matter page alerts:",await page.getByRole("alert").allTextContents());
+    console.log("Browser cookie names:",(await page.context().cookies()).map(cookie=>cookie.name));
+    throw error;
+  }
+  await createMatter.click();
   await expect(page.getByRole("heading",{name:"Matter workspace"})).toBeVisible();
   await page.getByLabel("Evidence file").setInputFiles({name:"synthetic-note.txt",mimeType:"text/plain",buffer:Buffer.from("On 14 April, the employer stated that twelve absence days were recorded.")});
   await page.getByRole("button",{name:"Upload and process"}).click();

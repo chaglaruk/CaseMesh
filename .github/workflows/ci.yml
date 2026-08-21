@@ -314,6 +314,11 @@ jobs:
       - name: Run real browser Matter journey
         working-directory: web
         run: npm run test:e2e
+      - name: Report service diagnostics
+        if: failure()
+        run: |
+          tail -n 100 "$RUNNER_TEMP/casemesh-api.log" || true
+          tail -n 100 "$RUNNER_TEMP/casemesh-web.log" || true
       - name: Stop Web services
         if: always()
         run: |

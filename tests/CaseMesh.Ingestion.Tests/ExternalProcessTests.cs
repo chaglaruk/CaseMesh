@@ -13,8 +13,11 @@ public sealed class ExternalProcessTests
         {
             var (executable, arguments) = Command(started, completed);
             using var cancellation = new CancellationTokenSource();
-            var run = ExternalProcess.RunAsync(executable, arguments, TimeSpan.FromSeconds(10), cancellation.Token);
-            await WaitForFileAsync(started, TimeSpan.FromSeconds(5));
+            // Hosted Windows runners can take several seconds to start Windows PowerShell while
+            // the solution's test assemblies execute in parallel. Keep the assertion strict, but
+            // give the synthetic child enough startup headroom before exercising cancellation.
+            var run = ExternalProcess.RunAsync(executable, arguments, TimeSpan.FromSeconds(30), cancellation.Token);
+            await WaitForFileAsync(started, TimeSpan.FromSeconds(20));
             var processId = int.Parse(await File.ReadAllTextAsync(started),
                 System.Globalization.CultureInfo.InvariantCulture);
 
