@@ -25,7 +25,8 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   page.on("dialog",dialog=>dialog.accept("ten absence days were recorded"));
   await page.getByRole("button",{name:"Correct with audit trail"}).click();
   await expect(page.getByText(/ten absence days were recorded/)).toBeVisible();
-  for(const tab of ["Timeline","People","Disputed","Questions"]){await page.getByRole("button",{name:tab}).click();await expect(page.getByRole("heading",{name:tab==="Questions"?"Open factual questions":tab})).toBeVisible();}
+  const tabHeadings={Timeline:"Chronology",People:"People",Disputed:"Disputed statements",Questions:"Open factual questions"};
+  for(const [tab,heading] of Object.entries(tabHeadings)){await page.getByRole("button",{name:tab}).click();await expect(page.getByRole("heading",{name:heading})).toBeVisible();}
   await page.getByRole("button",{name:"Overview"}).click();
   const accessibility=await new AxeBuilder({page}).analyze();
   expect(accessibility.violations).toEqual([]);
