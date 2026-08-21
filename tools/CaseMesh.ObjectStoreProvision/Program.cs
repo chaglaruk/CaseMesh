@@ -24,6 +24,32 @@ using var client = new AmazonS3Client(new BasicAWSCredentials(accessKey, secretK
 var buckets = await client.ListBucketsAsync();
 if (!(buckets.Buckets ?? []).Any(bucket => string.Equals(bucket.BucketName, bucketName, StringComparison.Ordinal)))
     await client.PutBucketAsync(new PutBucketRequest { BucketName = bucketName });
+
+try
+{
+    await client.DeleteBucketPolicyAsync(new DeleteBucketPolicyRequest { BucketName = bucketName });
+}
+catch (AmazonS3Exception exception) when (exception.ErrorCode is "NoSuchBucketPolicy" or "NoSuchPolicy")
+{
+}
+
+try
+{
+    var policy = await client.GetBucketPolicyAsync(new GetBucketPolicyRequest { BucketName = bucketName });
+    if (!string.IsNullOrWhiteSpace(policy.Policy))
+        throw new InvalidOperationException("The object-store bucket still has an effective bucket policy.");
+}
+catch (AmazonS3Exception exception) when (exception.ErrorCode is "NoSuchBucketPolicy" or "NoSuchPolicy")
+{
+}
+
+using (var anonymous = new HttpClient())
+using (var response = await anonymous.GetAsync(new Uri(endpoint,
+           $"/{Uri.EscapeDataString(bucketName)}")))
+{
+    if (response.StatusCode is not HttpStatusCode.Forbidden and not HttpStatusCode.Unauthorized)
+        throw new InvalidOperationException("Anonymous bucket access was not denied by the object store.");
+}
 Console.WriteLine("Private object-store bucket is ready.");
 
 static string Required(string name) =>

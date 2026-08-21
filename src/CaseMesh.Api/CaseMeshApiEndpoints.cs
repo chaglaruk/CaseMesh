@@ -165,16 +165,25 @@ public static class CaseMeshApiEndpoints
     private static async Task<IResult> UploadEvidenceAsync(Guid tenantId, Guid matterId, HttpContext context,
         CurrentWebUser users, PostgresWebWorkspaceRepository repository, PostgresMatterBrainStore brains,
         IOriginalEvidenceStore originals, EvidenceJobCoordinator coordinator, CaseMeshApiOptions options,
-        TimeProvider clock, CancellationToken token)
+        TimeProvider clock, ILoggerFactory loggerFactory, CancellationToken token)
     {
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
         if (await repository.GetMatterAsync(user.Id, tenant, matterId, token) is null) return Results.NotFound();
+        var maximumRequestBytes = checked(options.MaximumUploadBytes + 64 * 1024);
+        if (context.Request.ContentLength > maximumRequestBytes)
+            throw new BadHttpRequestException("The evidence upload request exceeds the configured limit.");
         var form = await context.Request.ReadFormAsync(token);
         var file = form.Files.Count == 1 ? form.Files[0] : throw new BadHttpRequestException("Exactly one evidence file is required.");
         if (file.Length <= 0 || file.Length > options.MaximumUploadBytes) throw new BadHttpRequestException("The evidence file size is outside the configured limit.");
         var safeName = RequireSafeFileName(file.FileName, options.MaximumUploadFileNameLength);
         var tempPath = Path.Combine(Path.GetTempPath(), $"casemesh-web-{Guid.NewGuid():N}.upload");
+        var documentId = Guid.NewGuid();
+        var documentVersionId = Guid.NewGuid();
+        var proposedOriginalId = Guid.NewGuid();
+        var brainPersisted = false;
+        var originalStored = false;
+        var createdOriginal = false;
         try
         {
             string hash;
@@ -202,20 +211,44 @@ public static class CaseMeshApiEndpoints
                 hash = Convert.ToHexString(incremental.GetHashAndReset());
             }
             var loaded = await brains.LoadAsync(tenant, matterId, token) ?? throw new UnauthorizedAccessException();
-            var documentId = Guid.NewGuid();
-            var documentVersionId = Guid.NewGuid();
-            var proposedOriginalId = Guid.NewGuid();
             var version = loaded.Evidence.RegisterDocumentVersion(documentId, documentVersionId, hash, proposedOriginalId);
+            createdOriginal = version.OriginalObjectId == proposedOriginalId;
             await brains.SaveAsync(loaded.Brain, loaded.Workplace, token);
+            brainPersisted = true;
             await using (var content = new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.Read,
                              64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
                 await originals.StoreAsync(tenant, matterId, version.OriginalObjectId, content, token);
+            originalStored = true;
             var jobId = Guid.NewGuid();
             await repository.AddDocumentJobAsync(user.Id, tenant, matterId, jobId, documentId,
                 documentVersionId, version.OriginalObjectId, safeName, clock.GetUtcNow(), token);
             coordinator.Signal(user.Id, tenant);
             return Results.Accepted($"/api/workspaces/{tenantId:D}/matters/{matterId:D}/jobs/{jobId:D}",
                 new { jobId, documentId, documentVersionId, byteLength = length });
+        }
+        catch (Exception uploadFailure)
+        {
+            if (brainPersisted)
+            {
+                var logger = loggerFactory.CreateLogger("CaseMesh.Api.EvidenceUpload");
+                try
+                {
+                    if (originalStored && createdOriginal)
+                        await originals.DeleteOriginalAsync(tenant, matterId, proposedOriginalId, CancellationToken.None);
+                    await repository.CompensateFailedUploadAsync(user.Id, tenant, matterId, documentId,
+                        documentVersionId, proposedOriginalId, CancellationToken.None);
+                }
+                catch (Exception compensationFailure)
+                {
+                    logger.LogError(
+                        "Evidence upload compensation failed for document {DocumentId} with type {ExceptionType}.",
+                        documentId, compensationFailure.GetType().Name);
+                    throw new InvalidOperationException(
+                        "The upload failed and its durable compensation requires retry.",
+                        new AggregateException(uploadFailure, compensationFailure));
+                }
+            }
+            throw;
         }
         finally
         {

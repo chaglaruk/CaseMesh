@@ -28,16 +28,15 @@ public sealed class CaseMeshApiOptions
         if (EnableTestAuthentication &&
             !string.Equals(environment, "Testing", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Test authentication can run only in the Testing environment.");
-        if (string.Equals(environment, "Production", StringComparison.OrdinalIgnoreCase))
+        var isTestHarness = EnableTestAuthentication &&
+                            string.Equals(environment, "Testing", StringComparison.OrdinalIgnoreCase);
+        if (!isTestHarness)
         {
             if (!Uri.TryCreate(PublicOrigin, UriKind.Absolute, out var origin) || origin.Scheme != Uri.UriSchemeHttps)
-                throw new InvalidOperationException("Production requires an HTTPS public origin.");
+                throw new InvalidOperationException("A deployed environment requires an HTTPS public origin.");
             ArgumentException.ThrowIfNullOrWhiteSpace(OidcAuthority);
             ArgumentException.ThrowIfNullOrWhiteSpace(OidcClientId);
             ArgumentException.ThrowIfNullOrWhiteSpace(OidcClientSecret);
-        }
-        if (!EnableTestAuthentication || !string.Equals(environment, "Testing", StringComparison.OrdinalIgnoreCase))
-        {
             ArgumentException.ThrowIfNullOrWhiteSpace(S3Endpoint);
             ArgumentException.ThrowIfNullOrWhiteSpace(S3BucketName);
             ArgumentException.ThrowIfNullOrWhiteSpace(S3AccessKey);

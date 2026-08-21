@@ -32,31 +32,53 @@ public sealed class EvidenceJobCoordinator(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await foreach (var signal in _signals.Reader.ReadAllAsync(stoppingToken))
+        var sweeper = SweepPersistedJobsAsync(stoppingToken);
+        try
         {
-            while (!stoppingToken.IsCancellationRequested)
+            await foreach (var signal in _signals.Reader.ReadAllAsync(stoppingToken))
             {
-                WebProcessingJob? job;
-                try
+                while (!stoppingToken.IsCancellationRequested)
                 {
-                    job = await jobs.ClaimAsync(signal.UserId, signal.TenantId, _workerId,
-                        timeProvider.GetUtcNow(), TimeSpan.FromMinutes(5), stoppingToken);
+                    WebProcessingJob? job;
+                    try
+                    {
+                        job = await jobs.ClaimAsync(signal.UserId, signal.TenantId, _workerId,
+                            timeProvider.GetUtcNow(), TimeSpan.FromMinutes(5), stoppingToken);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        logger.LogError("Evidence job lease acquisition failed with type {ExceptionType}.",
+                            exception.GetType().Name);
+                        break;
+                    }
+                    if (job is null) break;
+                    try
+                    {
+                        await ProcessAsync(signal.UserId, job, stoppingToken);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        logger.LogError(
+                            "Unexpected evidence worker failure for job {JobId} with type {ExceptionType}; lease recovery remains available.",
+                            job.JobId, exception.GetType().Name);
+                    }
                 }
-                catch (Exception exception)
-                {
-                    logger.LogError(exception, "Evidence job lease acquisition failed.");
-                    break;
-                }
-                if (job is null) break;
-                await ProcessAsync(signal.UserId, job, stoppingToken);
             }
+        }
+        finally
+        {
+            await sweeper;
         }
     }
 
     private async Task ProcessAsync(Guid userId, WebProcessingJob job, CancellationToken cancellationToken)
     {
+        await using var processingLock = await jobs.AcquireProcessingLockAsync(
+            job.TenantId, job.JobId, cancellationToken);
         try
         {
+            await jobs.RenewLeaseAsync(userId, job, _workerId,
+                timeProvider.GetUtcNow().AddMinutes(10), cancellationToken);
             var service = new CommercialEvidenceIngestionService(originals, ingestionRepository, scanner, ocr,
                 pipeline, new IngestionLimits(MaximumBytes: options.MaximumUploadBytes), rasterizer, timeProvider);
             await service.IngestAsync(new IngestionDocument(job.TenantId, job.MatterId, job.DocumentId,
@@ -70,16 +92,48 @@ public sealed class EvidenceJobCoordinator(
                 await new MatterBrainMergeService(timeProvider).ExtractAndMergeAsync(
                     loaded.Brain, spans, new SyntheticWorkplaceExtractionProvider(timeProvider), cancellationToken);
             await brains.SaveAsync(loaded.Brain, loaded.Workplace, cancellationToken);
-            await jobs.CompleteAsync(userId, job.TenantId, job.MatterId, job.JobId, _workerId,
+            await jobs.CompleteAsync(userId, job.TenantId, job.MatterId, job.JobId, _workerId, job.Attempts,
                 timeProvider.GetUtcNow(), cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            logger.LogWarning("Evidence processing failed with code {FailureCode}.", exception.GetType().Name);
-            await jobs.FailAsync(userId, job.TenantId, job.MatterId, job.JobId, _workerId,
-                timeProvider.GetUtcNow(), exception is IngestionException ingestion ? ingestion.Code : "processing-failed",
-                CancellationToken.None);
+            logger.LogWarning(
+                "Evidence processing failed for job {JobId} in tenant {TenantId} with code {FailureCode}.",
+                job.JobId, job.TenantId.Value,
+                exception is IngestionException ingestion ? ingestion.Code : "processing-failed");
+            try
+            {
+                await jobs.FailAsync(userId, job.TenantId, job.MatterId, job.JobId, _workerId, job.Attempts,
+                    timeProvider.GetUtcNow(),
+                    exception is IngestionException failure ? failure.Code : "processing-failed",
+                    CancellationToken.None);
+            }
+            catch (Exception recordingFailure)
+            {
+                logger.LogError(
+                    "Could not record failure for job {JobId}; the lease can be recovered. Failure type: {ExceptionType}.",
+                    job.JobId, recordingFailure.GetType().Name);
+            }
         }
+    }
+
+    private async Task SweepPersistedJobsAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30), timeProvider);
+        do
+        {
+            try
+            {
+                var scopes = await jobs.ListPendingJobScopesAsync(timeProvider.GetUtcNow(), cancellationToken);
+                foreach (var scope in scopes)
+                    await _signals.Writer.WriteAsync(new JobSignal(scope.UserId, scope.TenantId), cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogError("Persisted evidence-job sweep failed with type {ExceptionType}.",
+                    exception.GetType().Name);
+            }
+        } while (await timer.WaitForNextTickAsync(cancellationToken));
     }
 
     private sealed record JobSignal(Guid UserId, TenantId TenantId);

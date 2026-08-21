@@ -59,6 +59,8 @@ builder.Services.Configure<FormOptions>(form =>
     form.ValueLengthLimit = 16 * 1024;
     form.MultipartHeadersLengthLimit = 8 * 1024;
 });
+builder.WebHost.ConfigureKestrel(server =>
+    server.Limits.MaxRequestBodySize = checked(options.MaximumUploadBytes + 64 * 1024));
 builder.Services.AddAuthentication(authentication =>
 {
     authentication.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
@@ -112,9 +114,9 @@ builder.Services.AddRateLimiter(limiter =>
 var app = builder.Build();
 app.UseExceptionHandler();
 app.UseMiddleware<SecurityHeadersMiddleware>();
-app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 app.UseMiddleware<ApiAntiforgeryMiddleware>();
 app.MapCaseMeshApi(options, app.Environment);
 app.Run();

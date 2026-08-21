@@ -113,7 +113,11 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
                        has_table_privilege(current_user, 'casemesh.professional_export_runs', 'SELECT'),
                        has_table_privilege(current_user, 'casemesh.professional_export_runs', 'INSERT'),
                        has_table_privilege(current_user, 'casemesh.professional_export_runs', 'UPDATE'),
-                       has_table_privilege(current_user, 'casemesh.professional_export_runs', 'DELETE');
+                       has_table_privilege(current_user, 'casemesh.professional_export_runs', 'DELETE'),
+                       has_table_privilege(current_user, 'casemesh.tenant_memberships', 'SELECT'),
+                       has_table_privilege(current_user, 'casemesh.tenant_memberships', 'INSERT'),
+                       has_function_privilege(current_user,
+                           'casemesh.create_owned_workspace(uuid,uuid,text,timestamptz)', 'EXECUTE');
                 """, app);
             await using var reader = await privileges.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
@@ -134,6 +138,9 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             Assert.True(reader.GetBoolean(14));
             Assert.False(reader.GetBoolean(15));
             Assert.False(reader.GetBoolean(16));
+            Assert.True(reader.GetBoolean(17));
+            Assert.False(reader.GetBoolean(18));
+            Assert.True(reader.GetBoolean(19));
         }
         finally
         {

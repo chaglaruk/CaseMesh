@@ -53,6 +53,11 @@ public sealed class PostgresFixture : IAsyncLifetime
                 GRANT CONNECT ON DATABASE "{_databaseName}" TO "{_roleName}";
                 GRANT USAGE ON SCHEMA casemesh TO "{_roleName}";
                 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA casemesh TO "{_roleName}";
+                REVOKE INSERT, UPDATE, DELETE ON TABLE casemesh.tenant_memberships FROM "{_roleName}";
+                GRANT EXECUTE ON FUNCTION
+                    casemesh.create_owned_workspace(uuid, uuid, text, timestamptz),
+                    casemesh.pending_web_job_scopes(timestamptz)
+                    TO "{_roleName}";
                 """, admin);
             await createRole.ExecuteNonQueryAsync();
         }

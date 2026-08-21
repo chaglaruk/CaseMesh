@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CaseMesh.Api.Tests;
 
@@ -62,6 +63,21 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
         Assert.Contains("casemesh-xsrf-test", cookie);
         Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("__Host-", cookie, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Unauthorized_exception_is_an_empty_not_found_without_message_disclosure()
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+        var handler = new ApiExceptionHandler(null!, NullLogger<ApiExceptionHandler>.Instance);
+
+        Assert.True(await handler.TryHandleAsync(context,
+            new UnauthorizedAccessException("Synthetic tenant A Matter exists."), CancellationToken.None));
+
+        Assert.Equal(StatusCodes.Status404NotFound, context.Response.StatusCode);
+        Assert.Equal(0, context.Response.Body.Length);
+        Assert.False(context.Response.Headers.ContainsKey("Content-Type"));
     }
 
     [Theory]
@@ -142,6 +158,20 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
             S3SecretKey = "external"
         };
         Assert.Throws<ArgumentNullException>(() => options.Validate("Production"));
+    }
+
+    [Theory]
+    [InlineData("Development")]
+    [InlineData("Staging")]
+    public void Every_deployed_environment_requires_https_and_oidc(string environment)
+    {
+        var options = new CaseMeshApiOptions
+        {
+            PostgresConnectionString = "Host=invalid", PublicOrigin = "http://casemesh.invalid",
+            S3Endpoint = "https://storage.invalid", S3BucketName = "private",
+            S3AccessKey = "external", S3SecretKey = "external"
+        };
+        Assert.Throws<InvalidOperationException>(() => options.Validate(environment));
     }
 
     private static CaseMeshApiOptions ValidOptions(string origin = "https://casemesh.invalid") => new()

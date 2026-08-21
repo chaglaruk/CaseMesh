@@ -15,16 +15,15 @@ public sealed record WebDocumentMetadata(Guid DocumentId, string OriginalFileNam
 public sealed record WebProcessingJob(TenantId TenantId, Guid MatterId, Guid JobId, Guid DocumentId,
     Guid DocumentVersionId, Guid OriginalObjectId, WebProcessingStatus Status, int Attempts,
     string? FailureCode, DateTimeOffset CreatedAt, DateTimeOffset? CompletedAt);
+public sealed record WebJobScope(Guid UserId, TenantId TenantId);
 
 public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
-    private readonly string _connectionString;
 
     public PostgresWebWorkspaceRepository(string connectionString)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
-        _connectionString = connectionString;
         _dataSource = NpgsqlDataSource.Create(connectionString);
     }
 
@@ -51,15 +50,11 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
         DateTimeOffset createdAt, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(user);
-        await using (var matterStore = new PostgresMatterStore(_connectionString))
-            await matterStore.CreateTenantAsync(tenantId, displayName, createdAt, cancellationToken);
-        await InTenantUserTransactionAsync(tenantId, user.Id, async (connection, transaction) =>
+        await InUserTransactionAsync(user.Id, async (connection, transaction) =>
         {
-            await using var command = new NpgsqlCommand("""
-                INSERT INTO casemesh.tenant_memberships (tenant_id,user_id,membership_role,created_at)
-                VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING;
-                """, connection, transaction);
-            PostgresMatterStore.AddParameters(command, tenantId.Value, user.Id, (short)WebMembershipRole.Owner, createdAt);
+            await using var command = new NpgsqlCommand(
+                "SELECT casemesh.create_owned_workspace($1,$2,$3,$4);", connection, transaction);
+            PostgresMatterStore.AddParameters(command, user.Id, tenantId.Value, displayName, createdAt);
             await command.ExecuteNonQueryAsync(cancellationToken);
             return true;
         }, cancellationToken);
@@ -140,12 +135,50 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
             await using var job = new NpgsqlCommand("""
                 INSERT INTO casemesh.web_processing_jobs
                     (tenant_id,matter_id,job_id,document_id,document_version_id,original_object_id,
-                     status,available_at,created_at)
-                VALUES ($1,$2,$3,$4,$5,$6,1,$7,$7) ON CONFLICT DO NOTHING;
+                     requested_by_user_id,status,available_at,created_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$8) ON CONFLICT DO NOTHING;
                 """, connection, transaction);
             PostgresMatterStore.AddParameters(job, tenantId.Value, matterId, jobId, documentId,
-                documentVersionId, originalObjectId, createdAt);
+                documentVersionId, originalObjectId, userId, createdAt);
             await job.ExecuteNonQueryAsync(cancellationToken);
+            return true;
+        }, cancellationToken);
+
+    public Task CompensateFailedUploadAsync(Guid userId, TenantId tenantId, Guid matterId,
+        Guid documentId, Guid documentVersionId, Guid proposedOriginalObjectId,
+        CancellationToken cancellationToken = default) =>
+        InAuthorizedTenantTransactionAsync(userId, tenantId, async (connection, transaction) =>
+        {
+            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+                DELETE FROM casemesh.web_processing_jobs
+                WHERE tenant_id=$1 AND matter_id=$2 AND document_version_id=$3;
+                """, cancellationToken, tenantId.Value, matterId, documentVersionId);
+            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+                DELETE FROM casemesh.web_document_metadata
+                WHERE tenant_id=$1 AND matter_id=$2 AND document_id=$3;
+                """, cancellationToken, tenantId.Value, matterId, documentId);
+            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+                DELETE FROM casemesh.document_versions
+                WHERE tenant_id=$1 AND matter_id=$2 AND document_id=$3 AND document_version_id=$4;
+                """, cancellationToken, tenantId.Value, matterId, documentId, documentVersionId);
+            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+                DELETE FROM casemesh.documents AS document
+                WHERE tenant_id=$1 AND matter_id=$2 AND document_id=$3
+                  AND NOT EXISTS (
+                      SELECT 1 FROM casemesh.document_versions AS version
+                      WHERE version.tenant_id=document.tenant_id
+                        AND version.matter_id=document.matter_id
+                        AND version.document_id=document.document_id);
+                """, cancellationToken, tenantId.Value, matterId, documentId);
+            await PostgresMatterStore.ExecuteAsync(connection, transaction, """
+                DELETE FROM casemesh.original_objects AS original
+                WHERE tenant_id=$1 AND matter_id=$2 AND original_object_id=$3
+                  AND NOT EXISTS (
+                      SELECT 1 FROM casemesh.document_versions AS version
+                      WHERE version.tenant_id=original.tenant_id
+                        AND version.matter_id=original.matter_id
+                        AND version.original_object_id=original.original_object_id);
+                """, cancellationToken, tenantId.Value, matterId, proposedOriginalObjectId);
             return true;
         }, cancellationToken);
 
@@ -170,9 +203,11 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
         {
             await using var command = new NpgsqlCommand("""
                 WITH candidate AS (
-                    SELECT tenant_id,matter_id,job_id FROM casemesh.web_processing_jobs
+                    SELECT tenant_id,matter_id,job_id FROM casemesh.web_processing_jobs AS queued
                     WHERE tenant_id=$1 AND (status=1 OR (status=2 AND lease_expires_at <= $2))
                       AND available_at <= $2
+                      AND pg_try_advisory_xact_lock(hashtextextended(
+                          'casemesh-web-job:' || queued.tenant_id::text || ':' || queued.job_id::text, 0))
                     ORDER BY created_at,job_id FOR UPDATE SKIP LOCKED LIMIT 1
                 )
                 UPDATE casemesh.web_processing_jobs job
@@ -188,27 +223,78 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
             return await reader.ReadAsync(cancellationToken) ? ReadJob(reader) : null;
         }, cancellationToken);
 
-    public Task CompleteAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId,
-        DateTimeOffset completedAt, CancellationToken cancellationToken = default) =>
-        FinishAsync(userId, tenantId, matterId, jobId, workerId, completedAt, true, null, cancellationToken);
+    public async Task<IReadOnlyList<WebJobScope>> ListPendingJobScopesAsync(DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenSafeAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT tenant_id,user_id FROM casemesh.pending_web_job_scopes($1) ORDER BY tenant_id,user_id;",
+            connection);
+        PostgresMatterStore.AddParameters(command, now);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var result = new List<WebJobScope>();
+        while (await reader.ReadAsync(cancellationToken))
+            result.Add(new WebJobScope(reader.GetGuid(1), new TenantId(reader.GetGuid(0))));
+        return result;
+    }
 
-    public Task FailAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId,
+    public async Task<IAsyncDisposable> AcquireProcessingLockAsync(TenantId tenantId, Guid jobId,
+        CancellationToken cancellationToken = default)
+    {
+        var connection = await OpenSafeAsync(cancellationToken);
+        try
+        {
+            await using var command = new NpgsqlCommand(
+                "SELECT pg_advisory_lock(hashtextextended($1,0));", connection);
+            PostgresMatterStore.AddParameters(command, ProcessingLockName(tenantId, jobId));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            return new ProcessingLock(connection, ProcessingLockName(tenantId, jobId));
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
+    }
+
+    public Task RenewLeaseAsync(Guid userId, WebProcessingJob job, Guid workerId,
+        DateTimeOffset leaseExpiresAt, CancellationToken cancellationToken = default) =>
+        InAuthorizedTenantTransactionAsync(userId, job.TenantId, async (connection, transaction) =>
+        {
+            await using var command = new NpgsqlCommand("""
+                UPDATE casemesh.web_processing_jobs SET lease_expires_at=$6
+                WHERE tenant_id=$1 AND matter_id=$2 AND job_id=$3
+                  AND lease_owner=$4 AND attempts=$5 AND status=2;
+                """, connection, transaction);
+            PostgresMatterStore.AddParameters(command, job.TenantId.Value, job.MatterId, job.JobId,
+                workerId, job.Attempts, leaseExpiresAt);
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+                throw new InvalidOperationException("The processing-job lease fencing token is no longer current.");
+            return true;
+        }, cancellationToken);
+
+    public Task CompleteAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId, int attempts,
+        DateTimeOffset completedAt, CancellationToken cancellationToken = default) =>
+        FinishAsync(userId, tenantId, matterId, jobId, workerId, attempts, completedAt, true, null, cancellationToken);
+
+    public Task FailAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId, int attempts,
         DateTimeOffset failedAt, string failureCode, CancellationToken cancellationToken = default) =>
-        FinishAsync(userId, tenantId, matterId, jobId, workerId, failedAt, false, failureCode, cancellationToken);
+        FinishAsync(userId, tenantId, matterId, jobId, workerId, attempts, failedAt, false, failureCode, cancellationToken);
 
     private Task FinishAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId,
-        DateTimeOffset at, bool completed, string? failureCode, CancellationToken cancellationToken) =>
+        int attempts, DateTimeOffset at, bool completed, string? failureCode, CancellationToken cancellationToken) =>
         InAuthorizedTenantTransactionAsync(userId, tenantId, async (connection, transaction) =>
         {
             await using var command = new NpgsqlCommand("""
                 UPDATE casemesh.web_processing_jobs
-                SET status=CASE WHEN $6=4 AND attempts < 3 THEN 1 ELSE $6 END,
-                    lease_owner=NULL,lease_expires_at=NULL,failure_code=$7,
-                    completed_at=CASE WHEN $6=3 THEN $5 ELSE NULL END,
-                    available_at=CASE WHEN $6=4 THEN $5 + interval '5 minutes' ELSE available_at END
-                WHERE tenant_id=$1 AND matter_id=$2 AND job_id=$3 AND lease_owner=$4;
+                SET status=CASE WHEN $7=4 AND attempts < 3 THEN 1 ELSE $7 END,
+                    lease_owner=NULL,lease_expires_at=NULL,failure_code=$8,
+                    completed_at=CASE WHEN $7=3 THEN $6 ELSE NULL END,
+                    available_at=CASE WHEN $7=4 THEN $6 + interval '5 minutes' ELSE available_at END
+                WHERE tenant_id=$1 AND matter_id=$2 AND job_id=$3
+                  AND lease_owner=$4 AND attempts=$5;
                 """, connection, transaction);
-            PostgresMatterStore.AddParameters(command, tenantId.Value, matterId, jobId, workerId, at,
+            PostgresMatterStore.AddParameters(command, tenantId.Value, matterId, jobId, workerId, attempts, at,
                 (short)(completed ? WebProcessingStatus.Completed : WebProcessingStatus.Failed), failureCode);
             if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
                 throw new InvalidOperationException("The processing-job lease is missing or no longer owned by this worker.");
@@ -280,4 +366,25 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
         reader.GetGuid(4), reader.GetGuid(5), (WebProcessingStatus)reader.GetInt16(6), reader.GetInt32(7),
         reader.IsDBNull(8) ? null : reader.GetString(8), reader.GetFieldValue<DateTimeOffset>(9),
         reader.IsDBNull(10) ? null : reader.GetFieldValue<DateTimeOffset>(10));
+
+    private static string ProcessingLockName(TenantId tenantId, Guid jobId) =>
+        $"casemesh-web-job:{tenantId.Value:D}:{jobId:D}";
+
+    private sealed class ProcessingLock(NpgsqlConnection connection, string lockName) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await using var command = new NpgsqlCommand(
+                    "SELECT pg_advisory_unlock(hashtextextended($1,0));", connection);
+                PostgresMatterStore.AddParameters(command, lockName);
+                await command.ExecuteNonQueryAsync();
+            }
+            finally
+            {
+                await connection.DisposeAsync();
+            }
+        }
+    }
 }

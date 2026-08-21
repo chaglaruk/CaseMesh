@@ -295,7 +295,7 @@ jobs:
           MINIO_ROOT_USER="$CASEMESH_OBJECT_STORAGE_ACCESS_KEY" MINIO_ROOT_PASSWORD="$CASEMESH_OBJECT_STORAGE_SECRET_KEY" \
             nohup "$RUNNER_TEMP/casemesh-minio" server "$RUNNER_TEMP/casemesh-minio-data" --address ':9000' >"$RUNNER_TEMP/casemesh-minio.log" 2>&1 &
           echo "$!" > "$RUNNER_TEMP/casemesh-minio.pid"
-          for attempt in {1..60}; do curl --silent --fail http://localhost:9000/minio/health/ready >/dev/null && exit 0; sleep 2; done
+          for _ in {1..60}; do curl --silent --fail http://localhost:9000/minio/health/ready >/dev/null && exit 0; sleep 2; done
           cat "$RUNNER_TEMP/casemesh-minio.log"; exit 1
       - name: Build API and Web
         run: |
@@ -310,7 +310,7 @@ jobs:
           ASPNETCORE_URLS=http://127.0.0.1:5050 nohup dotnet ./src/CaseMesh.Api/bin/Release/net10.0/CaseMesh.Api.dll >"$RUNNER_TEMP/casemesh-api.log" 2>&1 &
           echo "$!" > "$RUNNER_TEMP/casemesh-api.pid"
           (cd web && nohup npm start >"$RUNNER_TEMP/casemesh-web.log" 2>&1 & echo "$!" > "$RUNNER_TEMP/casemesh-web.pid")
-          for attempt in {1..60}; do curl --silent --fail http://127.0.0.1:5050/health/live >/dev/null && curl --silent --fail http://127.0.0.1:3000/sign-in >/dev/null && exit 0; sleep 2; done
+          for _ in {1..60}; do curl --silent --fail http://127.0.0.1:5050/health/live >/dev/null && curl --silent --fail http://127.0.0.1:3000/sign-in >/dev/null && exit 0; sleep 2; done
           cat "$RUNNER_TEMP/casemesh-api.log"; cat "$RUNNER_TEMP/casemesh-web.log"; exit 1
       - name: Run real browser Matter journey
         working-directory: web
