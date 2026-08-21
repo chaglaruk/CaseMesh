@@ -202,7 +202,10 @@ public sealed class PostgresProfessionalExportService : IAsyncDisposable
             WHERE tenant_id=$1 AND matter_id=$2 AND export_id=$3;
             """, connection, transaction);
         PostgresMatterStore.AddParameters(command, tenantId.Value, matterId, exportId);
-        return await command.ExecuteScalarAsync(cancellationToken) is DateTimeOffset value ? value : null;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? reader.GetFieldValue<DateTimeOffset>(0)
+            : null;
     }
 
     private static async Task SaveRunAsync(

@@ -26,16 +26,23 @@ CREATE TABLE casemesh.professional_export_inclusions (
     PRIMARY KEY (tenant_id, matter_id, export_id, inclusion_kind, ordinal),
     FOREIGN KEY (tenant_id, matter_id, export_id)
         REFERENCES casemesh.professional_export_runs (tenant_id, matter_id, export_id) ON DELETE CASCADE,
+    -- Keep individual canonical records protected while allowing the database's
+    -- unordered whole-Matter cascade to remove the export audit rows in one transaction.
     FOREIGN KEY (tenant_id, matter_id, document_version_id)
-        REFERENCES casemesh.document_versions (tenant_id, matter_id, document_version_id),
+        REFERENCES casemesh.document_versions (tenant_id, matter_id, document_version_id)
+        DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY (tenant_id, matter_id, source_span_id)
-        REFERENCES casemesh.source_spans (tenant_id, matter_id, source_span_id),
+        REFERENCES casemesh.source_spans (tenant_id, matter_id, source_span_id)
+        DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY (tenant_id, matter_id, assertion_id)
-        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id),
+        REFERENCES casemesh.assertions (tenant_id, matter_id, assertion_id)
+        DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY (tenant_id, matter_id, event_id)
-        REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id),
+        REFERENCES casemesh.matter_events (tenant_id, matter_id, event_id)
+        DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY (tenant_id, matter_id, contradiction_id)
-        REFERENCES casemesh.contradictions (tenant_id, matter_id, contradiction_id),
+        REFERENCES casemesh.contradictions (tenant_id, matter_id, contradiction_id)
+        DEFERRABLE INITIALLY DEFERRED,
     CHECK (num_nonnulls(document_version_id, source_span_id, assertion_id, event_id, contradiction_id) = 1),
     CHECK ((inclusion_kind = 0) = (document_version_id IS NOT NULL)),
     CHECK ((inclusion_kind = 1) = (source_span_id IS NOT NULL)),
