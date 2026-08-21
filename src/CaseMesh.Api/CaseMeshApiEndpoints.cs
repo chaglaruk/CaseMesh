@@ -182,7 +182,7 @@ public static class CaseMeshApiEndpoints
         var documentVersionId = Guid.NewGuid();
         var proposedOriginalId = Guid.NewGuid();
         var brainPersisted = false;
-        var originalStored = false;
+        var storeAttempted = false;
         var createdOriginal = false;
         try
         {
@@ -217,8 +217,10 @@ public static class CaseMeshApiEndpoints
             brainPersisted = true;
             await using (var content = new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.Read,
                              64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                storeAttempted = true;
                 await originals.StoreAsync(tenant, matterId, version.OriginalObjectId, content, token);
-            originalStored = true;
+            }
             var jobId = Guid.NewGuid();
             await repository.AddDocumentJobAsync(user.Id, tenant, matterId, jobId, documentId,
                 documentVersionId, version.OriginalObjectId, safeName, clock.GetUtcNow(), token);
@@ -233,7 +235,7 @@ public static class CaseMeshApiEndpoints
                 var logger = loggerFactory.CreateLogger("CaseMesh.Api.EvidenceUpload");
                 try
                 {
-                    if (originalStored && createdOriginal)
+                    if (storeAttempted && createdOriginal)
                         await originals.DeleteOriginalAsync(tenant, matterId, proposedOriginalId, CancellationToken.None);
                     await repository.CompensateFailedUploadAsync(user.Id, tenant, matterId, documentId,
                         documentVersionId, proposedOriginalId, CancellationToken.None);

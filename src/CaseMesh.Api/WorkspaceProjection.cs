@@ -25,16 +25,27 @@ internal static class WorkspaceProjection
         warning = "Structured records preserve who asserted each statement; they are not automatically established facts."
     };
 
-    internal static object Timeline(PersistedMatterBrain loaded) => loaded.Evidence.Events
-        .OrderBy(item => item.StartTime).ThenBy(item => item.Id)
-        .Select(item => new
+    internal static object Timeline(PersistedMatterBrain loaded)
+    {
+        var events = loaded.Evidence.Events
+            .OrderBy(item => item.StartTime).ThenBy(item => item.Id)
+            .Select(item => new
+            {
+                item.Id, item.EventType, item.Label, item.StartTime, item.EndTime,
+                status = item.Status.ToString(), verification = item.VerificationState.ToString(),
+                sourceSpanIds = loaded.Evidence.AssertionEventLinks.Where(link => link.EventId == item.Id)
+                    .Join(loaded.Evidence.Assertions, link => link.AssertionId, assertion => assertion.Id,
+                        (_, assertion) => assertion.SourceSpanId).Where(id => id.HasValue)
+                    .Select(id => id!.Value).Distinct().ToArray()
+            }).ToArray();
+        var sourceSpanIds = events.SelectMany(item => item.sourceSpanIds).ToHashSet();
+        return new
         {
-            item.Id, item.EventType, item.Label, item.StartTime, item.EndTime,
-            status = item.Status.ToString(), verification = item.VerificationState.ToString(),
-            sourceSpanIds = loaded.Evidence.AssertionEventLinks.Where(link => link.EventId == item.Id)
-                .Join(loaded.Evidence.Assertions, link => link.AssertionId, assertion => assertion.Id,
-                    (_, assertion) => assertion.SourceSpanId).Where(id => id.HasValue).Select(id => id!.Value).Distinct()
-        }).ToArray();
+            events,
+            sourceSpans = loaded.Evidence.SourceSpans.Where(item => sourceSpanIds.Contains(item.Id))
+                .Select(SourceSpanProjection).ToArray()
+        };
+    }
 
     internal static object Evidence(PersistedMatterBrain loaded) => new
     {
@@ -42,11 +53,7 @@ internal static class WorkspaceProjection
         {
             item.DocumentId, item.DocumentVersionId, item.OriginalObjectId, item.ContentSha256
         }).ToArray(),
-        sourceSpans = loaded.Evidence.SourceSpans.Select(item => new
-        {
-            item.Id, item.DocumentVersion.DocumentVersionId, item.PageNumber, item.TextStart, item.TextEnd,
-            item.ExtractedText, item.ExtractedTextDigest, item.ParserVersion, item.ExtractionConfidence
-        }).ToArray(),
+        sourceSpans = loaded.Evidence.SourceSpans.Select(SourceSpanProjection).ToArray(),
         assertions = loaded.Evidence.Assertions.Select(Assertion).ToArray()
     };
 
@@ -71,11 +78,8 @@ internal static class WorkspaceProjection
                 resolutionState = item.ResolutionState.ToString(), item.ResolutionNote
             }),
             disputedAssertions = assertions.Select(Assertion),
-            sourceSpans = loaded.Evidence.SourceSpans.Where(item => sourceSpanIds.Contains(item.Id)).Select(item => new
-            {
-                item.Id, item.DocumentVersion.DocumentVersionId, item.PageNumber, item.TextStart, item.TextEnd,
-                item.ExtractedText, item.ExtractedTextDigest, item.ParserVersion, item.ExtractionConfidence
-            })
+            sourceSpans = loaded.Evidence.SourceSpans.Where(item => sourceSpanIds.Contains(item.Id))
+                .Select(SourceSpanProjection)
         };
     }
 
@@ -109,5 +113,11 @@ internal static class WorkspaceProjection
         integrity = item.IntegrityState.ToString(), verification = item.VerificationState.ToString(),
         item.ExtractionConfidence, item.SupersededByAssertionId,
         epistemicNotice = "This is an attributed assertion, not an established fact."
+    };
+
+    private static object SourceSpanProjection(SourceSpan item) => new
+    {
+        item.Id, item.DocumentVersion.DocumentVersionId, item.PageNumber, item.TextStart, item.TextEnd,
+        item.ExtractedText, item.ExtractedTextDigest, item.ParserVersion, item.ExtractionConfidence
     };
 }

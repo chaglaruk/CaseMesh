@@ -14,8 +14,8 @@ public sealed class PostgresWebWorkspaceTests(PostgresFixture database)
     {
         await using var repository = new PostgresWebWorkspaceRepository(database.AppConnectionString);
         var now = DateTimeOffset.Parse("2026-08-21T10:00:00Z");
-        var alice = await repository.UpsertUserAsync("https://idp.invalid", "alice", "Alice", now);
-        var bob = await repository.UpsertUserAsync("https://idp.invalid", "bob", "Bob", now);
+        var alice = await repository.UpsertUserAsync("https://idp.invalid", $"alice-{Guid.NewGuid():N}", "Alice", now);
+        var bob = await repository.UpsertUserAsync("https://idp.invalid", $"bob-{Guid.NewGuid():N}", "Bob", now);
         var tenantA = new TenantId(Guid.NewGuid());
         var tenantB = new TenantId(Guid.NewGuid());
         await repository.CreateWorkspaceAsync(alice, tenantA, "Workspace A", now);
@@ -147,6 +147,32 @@ public sealed class PostgresWebWorkspaceTests(PostgresFixture database)
             secondVersion.OriginalObjectId, "synthetic.txt", now));
         Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, failure.SqlState);
         Assert.NotEqual(firstVersion.DocumentVersionId, secondVersion.DocumentVersionId);
+    }
+
+    [PostgresFact]
+    public async Task Processing_job_rejects_an_original_not_owned_by_the_document_version()
+    {
+        await using var repository = new PostgresWebWorkspaceRepository(database.AppConnectionString);
+        var now = DateTimeOffset.Parse("2026-08-21T15:30:00Z");
+        var user = await repository.UpsertUserAsync("https://idp.invalid", $"object-fk-{Guid.NewGuid():N}", "Owner", now);
+        var tenant = new TenantId(Guid.NewGuid());
+        await repository.CreateWorkspaceAsync(user, tenant, "Object FK workspace", now);
+
+        var matter = new Matter(Guid.NewGuid(), tenant, "workplace-dispute", "Synthetic", "active", now, now);
+        var evidence = new MatterEvidenceGraph(matter);
+        var documentId = Guid.NewGuid();
+        var version = evidence.RegisterDocumentVersion(documentId, Guid.NewGuid(),
+            Convert.ToHexString(SHA256.HashData("first"u8.ToArray())), Guid.NewGuid());
+        var otherVersion = evidence.RegisterDocumentVersion(Guid.NewGuid(), Guid.NewGuid(),
+            Convert.ToHexString(SHA256.HashData("second"u8.ToArray())), Guid.NewGuid());
+        await using (var brain = new PostgresMatterBrainStore(database.AppConnectionString))
+            await brain.SaveAsync(new MatterBrain.MatterBrainState(evidence), new WorkplaceMatter(evidence));
+
+        var failure = await Assert.ThrowsAsync<PostgresException>(() => repository.AddDocumentJobAsync(
+            user.Id, tenant, matter.Id, Guid.NewGuid(), documentId, version.DocumentVersionId,
+            otherVersion.OriginalObjectId, "synthetic.txt", now));
+
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, failure.SqlState);
     }
 
     [PostgresFact]

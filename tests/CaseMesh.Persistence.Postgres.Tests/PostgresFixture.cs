@@ -43,7 +43,7 @@ public sealed class PostgresFixture : IAsyncLifetime
         var adminBuilder = new NpgsqlConnectionStringBuilder(rootBuilder.ConnectionString) { Database = _databaseName };
         AdminConnectionString = adminBuilder.ConnectionString;
         var migrator = new PostgresMigrator();
-        await migrator.MigrateAsync(AdminConnectionString);
+        await migrator.MigrateThroughAsync(AdminConnectionString, "0001");
 
         await using (var admin = new NpgsqlConnection(AdminConnectionString))
         {
@@ -53,14 +53,11 @@ public sealed class PostgresFixture : IAsyncLifetime
                 GRANT CONNECT ON DATABASE "{_databaseName}" TO "{_roleName}";
                 GRANT USAGE ON SCHEMA casemesh TO "{_roleName}";
                 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA casemesh TO "{_roleName}";
-                REVOKE INSERT, UPDATE, DELETE ON TABLE casemesh.tenant_memberships FROM "{_roleName}";
-                GRANT EXECUTE ON FUNCTION
-                    casemesh.create_owned_workspace(uuid, uuid, text, timestamptz),
-                    casemesh.pending_web_job_scopes(timestamptz)
-                    TO "{_roleName}";
                 """, admin);
             await createRole.ExecuteNonQueryAsync();
         }
+
+        await migrator.MigrateAsync(AdminConnectionString);
 
         var appBuilder = new NpgsqlConnectionStringBuilder(adminBuilder.ConnectionString)
         {

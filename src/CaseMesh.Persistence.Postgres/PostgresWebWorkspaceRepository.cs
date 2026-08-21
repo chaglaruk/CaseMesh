@@ -248,7 +248,7 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
                 "SELECT pg_advisory_lock(hashtextextended($1,0));", connection);
             PostgresMatterStore.AddParameters(command, ProcessingLockName(tenantId, jobId));
             await command.ExecuteNonQueryAsync(cancellationToken);
-            return new ProcessingLock(connection, ProcessingLockName(tenantId, jobId));
+            return new ProcessingLock(_dataSource, connection, ProcessingLockName(tenantId, jobId));
         }
         catch
         {
@@ -370,21 +370,35 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
     private static string ProcessingLockName(TenantId tenantId, Guid jobId) =>
         $"casemesh-web-job:{tenantId.Value:D}:{jobId:D}";
 
-    private sealed class ProcessingLock(NpgsqlConnection connection, string lockName) : IAsyncDisposable
+    private sealed class ProcessingLock(
+        NpgsqlDataSource dataSource,
+        NpgsqlConnection connection,
+        string lockName) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
+            Exception? unlockFailure = null;
             try
             {
                 await using var command = new NpgsqlCommand(
                     "SELECT pg_advisory_unlock(hashtextextended($1,0));", connection);
                 PostgresMatterStore.AddParameters(command, lockName);
-                await command.ExecuteNonQueryAsync();
+                if (await command.ExecuteScalarAsync() is not true)
+                    throw new InvalidOperationException("The PostgreSQL processing lock was not held.");
+            }
+            catch (Exception exception)
+            {
+                unlockFailure = exception;
+                try { dataSource.Clear(); } catch { }
             }
             finally
             {
-                await connection.DisposeAsync();
+                try { await connection.DisposeAsync(); }
+                catch when (unlockFailure is not null) { }
             }
+
+            if (unlockFailure is not null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(unlockFailure).Throw();
         }
     }
 }

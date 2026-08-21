@@ -10,6 +10,31 @@ namespace CaseMesh.Api.Tests;
 public sealed class WorkspaceProjectionTests
 {
     [Fact]
+    public void Timeline_projection_includes_exact_referenced_source_spans()
+    {
+        var now = new DateTimeOffset(2026, 5, 1, 9, 0, 0, TimeSpan.Zero);
+        var graph = new MatterEvidenceGraph(new Matter(
+            Guid.NewGuid(), new TenantId(Guid.NewGuid()), "workplace-dispute", "Synthetic Matter", "open", now, now));
+        var referencedSpan = AddSource(graph, 'D', "Synthetic timeline statement.");
+        var unrelatedSpan = AddSource(graph, 'E', "Synthetic unrelated statement.");
+        var assertion = AddAssertion(graph, referencedSpan, "synthetic-value", now);
+        var matterEvent = graph.AddEvent(Guid.NewGuid(), "synthetic-event", "Synthetic event",
+            EventStatus.Candidate, VerificationState.NotReviewed, now);
+        graph.AddAssertionEventLink(Guid.NewGuid(), assertion.Id, matterEvent.Id, AssertionEventRelation.Supports);
+        var loaded = new PersistedMatterBrain(graph, new WorkplaceMatter(graph), new MatterBrainState(graph));
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(WorkspaceProjection.Timeline(loaded)));
+        var projectedEvent = Assert.Single(json.RootElement.GetProperty("events").EnumerateArray());
+        Assert.Equal(referencedSpan.Id,
+            Assert.Single(projectedEvent.GetProperty("sourceSpanIds").EnumerateArray()).GetGuid());
+        var projectedSpan = Assert.Single(json.RootElement.GetProperty("sourceSpans").EnumerateArray());
+        Assert.Equal(referencedSpan.Id, projectedSpan.GetProperty("Id").GetGuid());
+        Assert.Equal(referencedSpan.DocumentVersion.DocumentVersionId,
+            projectedSpan.GetProperty("DocumentVersionId").GetGuid());
+        Assert.NotEqual(unrelatedSpan.Id, projectedSpan.GetProperty("Id").GetGuid());
+    }
+
+    [Fact]
     public void Disputed_projection_includes_exact_referenced_source_spans()
     {
         var now = new DateTimeOffset(2026, 5, 1, 9, 0, 0, TimeSpan.Zero);

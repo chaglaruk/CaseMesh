@@ -17,7 +17,7 @@ input { padding:10px 12px; border:1px solid #9da9a7; border-radius:8px; font:inh
 .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .tabs { display:flex; gap:4px; overflow:auto; border-bottom:1px solid var(--line); margin:24px 0; }
 .tabs button { border-radius:7px 7px 0 0; background:transparent; color:var(--muted); white-space:nowrap; }
-.tabs button[aria-selected="true"] { background:var(--brand); color:#fff; }
+.tabs button[aria-pressed="true"] { background:var(--brand); color:#fff; }
 .notice { padding:12px 16px; border-left:4px solid var(--accent); background:#fff3ea; }
 .list { display:grid; gap:12px; list-style:none; padding:0; }
 .citation { background:#e5f0ef; color:var(--brand); padding:3px 7px; border-radius:5px; }

@@ -57,8 +57,9 @@ CREATE TABLE casemesh.web_processing_jobs (
     UNIQUE (tenant_id, matter_id, document_version_id),
     FOREIGN KEY (tenant_id, matter_id, document_id)
         REFERENCES casemesh.documents (tenant_id, matter_id, document_id) ON DELETE CASCADE,
-    FOREIGN KEY (tenant_id, matter_id, document_id, document_version_id)
-        REFERENCES casemesh.document_versions (tenant_id, matter_id, document_id, document_version_id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, matter_id, document_id, document_version_id, original_object_id)
+        REFERENCES casemesh.document_versions
+            (tenant_id, matter_id, document_id, document_version_id, original_object_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, matter_id, original_object_id)
         REFERENCES casemesh.original_objects (tenant_id, matter_id, original_object_id) ON DELETE CASCADE,
     FOREIGN KEY (tenant_id, requested_by_user_id)

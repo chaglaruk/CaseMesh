@@ -3,10 +3,11 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { request } from "../../../lib/api";
 
-const views=["overview","timeline","evidence","people","disputed","questions"] as const;
+const views=["overview","timeline","evidence","people","disputed","questions","workplace"] as const;
 type View=typeof views[number]; type Json=Record<string,unknown>;
 type Span={id:string;documentVersionId:string;pageNumber?:number;textStart?:number;textEnd?:number;extractedText:string;parserVersion:string;extractionConfidence?:number};
 type Assertion={id:string;subjectReference:string;predicate:string;value:string;assertedBy:string;sourceSpanId?:string;dispute:string;verification:string;supersededByAssertionId?:string;epistemicNotice:string};
+type TimelineEvent={id:string;label:string;eventType:string;startTime?:string;endTime?:string;status:string;verification:string;sourceSpanIds:string[]};
 
 export default function MatterWorkspace(){
   const params=useParams<{matterId:string}>(); const search=useSearchParams(); const tenant=search.get("workspace")??"";
@@ -23,7 +24,7 @@ export default function MatterWorkspace(){
 
 function ViewContent({view,data,assertions,spans,select,correct}:{view:View;data:Json;assertions:Assertion[];spans:Span[];select:(s:Span)=>void;correct:(a:Assertion)=>void}){
   if(view==="evidence"||view==="disputed")return <section><h2>{view==="evidence"?"Evidence and attributed statements":"Disputed statements"}</h2><ul className="list">{assertions.map(a=><li className="card" key={a.id}><p><strong>{a.assertedBy}</strong> asserted: {a.subjectReference} {a.predicate} {a.value}</p><p className="muted">{a.epistemicNotice}</p><div className="row">{a.sourceSpanId&&<button className="citation" onClick={()=>{const span=spans.find(s=>s.id===a.sourceSpanId);if(span)select(span);}}>View source</button>}<button className="secondary" onClick={()=>void correct(a)} disabled={!!a.supersededByAssertionId}>Correct with audit trail</button></div></li>)}</ul>{spans.length>0&&<h3>Exact source spans</h3>}{spans.map(s=><button className="citation" key={s.id} onClick={()=>select(s)}>{s.pageNumber?`Page ${s.pageNumber}`:`Characters ${s.textStart}–${s.textEnd}`}</button>)}</section>;
-  if(view==="timeline")return <section><h2>Chronology</h2><JsonCards items={(data as {length?:number}) instanceof Array?data as unknown as Json[]:Object.values(data)[0] as Json[]}/></section>;
+  if(view==="timeline")return <section><h2>Chronology</h2><ul className="list">{((data.events??[]) as TimelineEvent[]).map(event=><li className="card" key={event.id}><h3>{event.label}</h3><p><strong>Type:</strong> {event.eventType}</p><p><strong>Time:</strong> {event.startTime??"not established"}{event.endTime?` – ${event.endTime}`:""}</p><p><strong>Status:</strong> {event.status}; <strong>verification:</strong> {event.verification}</p><div className="row">{event.sourceSpanIds.map(id=><button className="citation" key={id} onClick={()=>{const span=spans.find(item=>item.id===id);if(span)select(span);}}>View exact source</button>)}</div></li>)}</ul></section>;
   if(view==="questions")return <section><h2>Open factual questions</h2><p className="lede">These questions identify missing evidence or unresolved conflicts. They are not legal advice.</p><JsonCards items={(data.questions??[]) as Json[]}/></section>;
   return <section><h2>{view[0].toUpperCase()+view.slice(1)}</h2><pre className="card" style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{JSON.stringify(data,null,2)}</pre></section>;
 }
