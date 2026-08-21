@@ -299,6 +299,7 @@ jobs:
           cat "$RUNNER_TEMP/casemesh-minio.log"; exit 1
       - name: Build API and Web
         run: |
+          dotnet run --project ./tools/CaseMesh.ObjectStoreProvision/CaseMesh.ObjectStoreProvision.csproj -c Release
           dotnet build ./src/CaseMesh.Api/CaseMesh.Api.csproj -c Release
           cd web
           npm ci --ignore-scripts
