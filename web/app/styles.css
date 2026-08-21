@@ -1,0 +1,27 @@
+:root { color-scheme: light; --ink:#16252b; --muted:#5d6b70; --paper:#f7f5ef; --card:#fff; --brand:#155e63; --accent:#d97841; --line:#d8dedc; }
+* { box-sizing:border-box; }
+body { margin:0; color:var(--ink); background:var(--paper); font:16px/1.5 system-ui,-apple-system,sans-serif; }
+a { color:var(--brand); }
+.topbar { height:64px; padding:0 5vw; display:flex; align-items:center; gap:18px; border-bottom:1px solid var(--line); background:#fff; }
+.brand { color:var(--ink); font:700 24px Georgia,serif; text-decoration:none; }
+main { width:min(1180px,90vw); margin:40px auto; }
+h1,h2,h3 { font-family:Georgia,serif; line-height:1.15; }
+.lede,.muted { color:var(--muted); }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:0 6px 20px #17373a0a; }
+.button,button { border:0; border-radius:8px; padding:10px 16px; background:var(--brand); color:#fff; font-weight:650; cursor:pointer; }
+button.secondary,.button.secondary { color:var(--brand); background:#e5f0ef; }
+button:focus-visible,a:focus-visible,input:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+label { display:grid; gap:6px; font-weight:650; margin-bottom:14px; }
+input { padding:10px 12px; border:1px solid #9da9a7; border-radius:8px; font:inherit; }
+.row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.tabs { display:flex; gap:4px; overflow:auto; border-bottom:1px solid var(--line); margin:24px 0; }
+.tabs button { border-radius:7px 7px 0 0; background:transparent; color:var(--muted); white-space:nowrap; }
+.tabs button[aria-selected="true"] { background:var(--brand); color:#fff; }
+.notice { padding:12px 16px; border-left:4px solid var(--accent); background:#fff3ea; }
+.list { display:grid; gap:12px; list-style:none; padding:0; }
+.citation { background:#e5f0ef; color:var(--brand); padding:3px 7px; border-radius:5px; }
+.split { display:grid; grid-template-columns:minmax(0,2fr) minmax(260px,1fr); gap:20px; }
+.source-panel { position:sticky; top:20px; align-self:start; }
+.error { color:#8b1e1e; }
+@media (max-width:760px) { .split { grid-template-columns:1fr; } main { margin-top:24px; } }

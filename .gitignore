@@ -45,3 +45,10 @@ Thumbs.db
 # Packaging
 artifacts/
 publish/
+
+# Web build and browser-test outputs
+node_modules/
+.next/
+playwright-report/
+test-results/
+*.tsbuildinfo

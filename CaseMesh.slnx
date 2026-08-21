@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/CaseMesh.Api/CaseMesh.Api.csproj" />
     <Project Path="src/CaseMesh.Core/CaseMesh.Core.csproj" />
     <Project Path="src/CaseMesh.Infrastructure/CaseMesh.Infrastructure.csproj" />
     <Project Path="src/CaseMesh.Ingestion/CaseMesh.Ingestion.csproj" />
@@ -12,6 +13,7 @@
     <Project Path="src/CaseMesh.App/CaseMesh.App.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/CaseMesh.Api.Tests/CaseMesh.Api.Tests.csproj" />
     <Project Path="tests/CaseMesh.Core.Tests/CaseMesh.Core.Tests.csproj" />
     <Project Path="tests/CaseMesh.Audio.Windows.Tests/CaseMesh.Audio.Windows.Tests.csproj" />
     <Project Path="tests/CaseMesh.Infrastructure.Tests/CaseMesh.Infrastructure.Tests.csproj" />
@@ -22,6 +24,7 @@
     <Project Path="tests/CaseMesh.Storage.S3.Tests/CaseMesh.Storage.S3.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/CaseMesh.DbMigrate/CaseMesh.DbMigrate.csproj" />
     <Project Path="tools/CaseMesh.AudioProbe/CaseMesh.AudioProbe.csproj" />
   </Folder>
 </Solution>

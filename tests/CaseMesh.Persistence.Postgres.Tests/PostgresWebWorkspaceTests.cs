@@ -1,0 +1,107 @@
+using System.Security.Cryptography;
+using CaseMesh.Core.Models;
+using CaseMesh.Core.Services;
+using CaseMesh.Core.Workplace;
+
+namespace CaseMesh.Persistence.Postgres.Tests;
+
+[Collection(PostgresCollection.Name)]
+public sealed class PostgresWebWorkspaceTests(PostgresFixture database)
+{
+    [PostgresFact]
+    public async Task Membership_is_resolved_server_side_and_cross_tenant_access_fails_closed()
+    {
+        await using var repository = new PostgresWebWorkspaceRepository(database.AppConnectionString);
+        var now = DateTimeOffset.Parse("2026-08-21T10:00:00Z");
+        var alice = await repository.UpsertUserAsync("https://idp.invalid", "alice", "Alice", now);
+        var bob = await repository.UpsertUserAsync("https://idp.invalid", "bob", "Bob", now);
+        var tenantA = new TenantId(Guid.NewGuid());
+        var tenantB = new TenantId(Guid.NewGuid());
+        await repository.CreateWorkspaceAsync(alice, tenantA, "Workspace A", now);
+        await repository.CreateWorkspaceAsync(bob, tenantB, "Workspace B", now);
+
+        Assert.True(await repository.HasMembershipAsync(alice.Id, tenantA));
+        Assert.False(await repository.HasMembershipAsync(alice.Id, tenantB));
+        Assert.Single(await repository.ListMembershipsAsync(alice.Id));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => repository.ListMattersAsync(alice.Id, tenantB));
+    }
+
+    [PostgresFact]
+    public async Task Matter_list_is_tenant_scoped_and_does_not_leak_another_members_title()
+    {
+        await using var repository = new PostgresWebWorkspaceRepository(database.AppConnectionString);
+        var now = DateTimeOffset.Parse("2026-08-21T11:00:00Z");
+        var userA = await repository.UpsertUserAsync("https://idp.invalid", $"a-{Guid.NewGuid():N}", "A", now);
+        var userB = await repository.UpsertUserAsync("https://idp.invalid", $"b-{Guid.NewGuid():N}", "B", now);
+        var tenantA = new TenantId(Guid.NewGuid()); var tenantB = new TenantId(Guid.NewGuid());
+        await repository.CreateWorkspaceAsync(userA, tenantA, "A", now);
+        await repository.CreateWorkspaceAsync(userB, tenantB, "B", now);
+        await SaveEmptyMatterAsync(tenantA, "Synthetic A", now);
+        await SaveEmptyMatterAsync(tenantB, "Synthetic B", now);
+
+        var matters = await repository.ListMattersAsync(userA.Id, tenantA);
+        Assert.Single(matters);
+        Assert.Equal("Synthetic A", matters[0].Title);
+        Assert.DoesNotContain(matters, matter => matter.Title == "Synthetic B");
+    }
+
+    [PostgresFact]
+    public async Task Durable_job_leases_are_exclusive_and_stale_leases_are_recovered()
+    {
+        await using var repository = new PostgresWebWorkspaceRepository(database.AppConnectionString);
+        var now = DateTimeOffset.Parse("2026-08-21T12:00:00Z");
+        var user = await repository.UpsertUserAsync("https://idp.invalid", $"jobs-{Guid.NewGuid():N}", "Worker", now);
+        var tenant = new TenantId(Guid.NewGuid()); await repository.CreateWorkspaceAsync(user, tenant, "Jobs", now);
+        var ids = await SaveMatterWithDocumentAsync(tenant, now);
+        var jobId = Guid.NewGuid();
+        await repository.AddDocumentJobAsync(user.Id, tenant, ids.MatterId, jobId, ids.DocumentId,
+            ids.VersionId, ids.OriginalId, "synthetic.txt", now);
+        var firstWorker = Guid.NewGuid();
+        var first = await repository.ClaimAsync(user.Id, tenant, firstWorker, now, TimeSpan.FromMinutes(5));
+        Assert.NotNull(first); Assert.Equal(1, first.Attempts);
+        Assert.Null(await repository.ClaimAsync(user.Id, tenant, Guid.NewGuid(), now.AddMinutes(1), TimeSpan.FromMinutes(5)));
+        var recovered = await repository.ClaimAsync(user.Id, tenant, Guid.NewGuid(), now.AddMinutes(6), TimeSpan.FromMinutes(5));
+        Assert.NotNull(recovered); Assert.Equal(2, recovered.Attempts);
+    }
+
+    [PostgresFact]
+    public async Task Job_completion_requires_the_active_lease_owner_and_is_visible_to_member_only()
+    {
+        await using var repository = new PostgresWebWorkspaceRepository(database.AppConnectionString);
+        var now = DateTimeOffset.Parse("2026-08-21T13:00:00Z");
+        var owner = await repository.UpsertUserAsync("https://idp.invalid", $"owner-{Guid.NewGuid():N}", "Owner", now);
+        var stranger = await repository.UpsertUserAsync("https://idp.invalid", $"stranger-{Guid.NewGuid():N}", "Stranger", now);
+        var tenant = new TenantId(Guid.NewGuid()); await repository.CreateWorkspaceAsync(owner, tenant, "Private", now);
+        var ids = await SaveMatterWithDocumentAsync(tenant, now);
+        var jobId = Guid.NewGuid(); await repository.AddDocumentJobAsync(owner.Id, tenant, ids.MatterId, jobId,
+            ids.DocumentId, ids.VersionId, ids.OriginalId, "synthetic.txt", now);
+        var worker = Guid.NewGuid(); await repository.ClaimAsync(owner.Id, tenant, worker, now, TimeSpan.FromMinutes(5));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.CompleteAsync(owner.Id, tenant,
+            ids.MatterId, jobId, Guid.NewGuid(), now.AddMinutes(1)));
+        await repository.CompleteAsync(owner.Id, tenant, ids.MatterId, jobId, worker, now.AddMinutes(1));
+        Assert.Equal(WebProcessingStatus.Completed,
+            (await repository.GetJobAsync(owner.Id, tenant, ids.MatterId, jobId))!.Status);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => repository.GetJobAsync(stranger.Id, tenant, ids.MatterId, jobId));
+    }
+
+    private async Task SaveEmptyMatterAsync(TenantId tenantId, string title, DateTimeOffset now)
+    {
+        var matter = new Matter(Guid.NewGuid(), tenantId, "workplace-dispute", title, "active", now, now);
+        var evidence = new MatterEvidenceGraph(matter);
+        await using var store = new PostgresMatterBrainStore(database.AppConnectionString);
+        await store.SaveAsync(new MatterBrain.MatterBrainState(evidence), new WorkplaceMatter(evidence));
+    }
+
+    private async Task<(Guid MatterId, Guid DocumentId, Guid VersionId, Guid OriginalId)> SaveMatterWithDocumentAsync(
+        TenantId tenantId, DateTimeOffset now)
+    {
+        var matter = new Matter(Guid.NewGuid(), tenantId, "workplace-dispute", "Synthetic", "active", now, now);
+        var evidence = new MatterEvidenceGraph(matter);
+        var documentId = Guid.NewGuid(); var versionId = Guid.NewGuid(); var originalId = Guid.NewGuid();
+        var hash = Convert.ToHexString(SHA256.HashData("synthetic"u8.ToArray()));
+        var version = evidence.RegisterDocumentVersion(documentId, versionId, hash, originalId);
+        await using var store = new PostgresMatterBrainStore(database.AppConnectionString);
+        await store.SaveAsync(new MatterBrain.MatterBrainState(evidence), new WorkplaceMatter(evidence));
+        return (matter.Id, documentId, versionId, version.OriginalObjectId);
+    }
+}
