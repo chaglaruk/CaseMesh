@@ -250,7 +250,7 @@ jobs:
       CASEMESH_OBJECT_STORAGE_ACCESS_KEY: 'GK00000000000000000000000000000000'
       CASEMESH_OBJECT_STORAGE_SECRET_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
       CASEMESH_API_INTERNAL_ORIGIN: http://127.0.0.1:5050
-      CASEMESH_WEB_ORIGIN: http://127.0.0.1:3000
+      CASEMESH_WEB_ORIGIN: http://localhost:3000
       ASPNETCORE_ENVIRONMENT: Testing
       CaseMesh__PostgresConnectionString: Host=localhost;Port=5432;Database=casemesh_admin;Username=casemesh_web;Password=synthetic-web-password;Pooling=true;Maximum Pool Size=8
       CaseMesh__EnableTestAuthentication: 'true'
