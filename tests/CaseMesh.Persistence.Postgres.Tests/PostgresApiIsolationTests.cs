@@ -31,9 +31,21 @@ public sealed class PostgresApiIsolationTests(PostgresFixture database)
 
         foreach (var projection in new[] { "overview", "timeline", "evidence", "people", "disputed", "workplace", "questions" })
         {
+            using var ownResponse = await alice.GetAsync($"/api/workspaces/{tenantA}/matters/{matterA}/{projection}");
+            Assert.Equal(HttpStatusCode.OK, ownResponse.StatusCode);
             using var response = await bob.GetAsync($"/api/workspaces/{tenantA}/matters/{matterA}/{projection}");
             await AssertEmptyNotFoundAsync(response);
         }
+
+        using (var ownQuestion = await SendJsonAsync(alice, aliceCsrf, HttpMethod.Post,
+                   $"/api/workspaces/{tenantA}/matters/{matterA}/questions/ask",
+                   new { question = "What evidence is present?" }))
+            Assert.Equal(HttpStatusCode.OK, ownQuestion.StatusCode);
+
+        using (var crossQuestion = await SendJsonAsync(bob, bobCsrf, HttpMethod.Post,
+                   $"/api/workspaces/{tenantA}/matters/{matterA}/questions/ask",
+                   new { question = "What evidence is present?" }))
+            await AssertEmptyNotFoundAsync(crossQuestion);
 
         using (var response = await bob.GetAsync(
                    $"/api/workspaces/{tenantA}/matters/{matterA}/jobs/{Guid.NewGuid():D}"))

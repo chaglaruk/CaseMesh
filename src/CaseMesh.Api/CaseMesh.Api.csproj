@@ -10,6 +10,7 @@
     <ProjectReference Include="..\CaseMesh.MatterBrain\CaseMesh.MatterBrain.csproj" />
     <ProjectReference Include="..\CaseMesh.Persistence.Postgres\CaseMesh.Persistence.Postgres.csproj" />
     <ProjectReference Include="..\CaseMesh.ProfessionalExport\CaseMesh.ProfessionalExport.csproj" />
+    <ProjectReference Include="..\CaseMesh.Qa\CaseMesh.Qa.csproj" />
     <ProjectReference Include="..\CaseMesh.Storage\CaseMesh.Storage.csproj" />
     <ProjectReference Include="..\CaseMesh.Storage.S3\CaseMesh.Storage.S3.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />

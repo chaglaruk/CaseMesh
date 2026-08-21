@@ -197,6 +197,19 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
             return await reader.ReadAsync(cancellationToken) ? ReadJob(reader) : null;
         }, cancellationToken);
 
+    public Task<bool> HasActiveJobsAsync(Guid userId, TenantId tenantId, Guid matterId,
+        CancellationToken cancellationToken = default) =>
+        InAuthorizedTenantTransactionAsync(userId, tenantId, async (connection, transaction) =>
+        {
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1 FROM casemesh.web_processing_jobs
+                    WHERE tenant_id=$1 AND matter_id=$2 AND status IN (1,2));
+                """, connection, transaction);
+            PostgresMatterStore.AddParameters(command, tenantId.Value, matterId);
+            return await command.ExecuteScalarAsync(cancellationToken) is true;
+        }, cancellationToken);
+
     public Task<WebProcessingJob?> ClaimAsync(Guid userId, TenantId tenantId, Guid workerId,
         DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken = default) =>
         InAuthorizedTenantTransactionAsync(userId, tenantId, async (connection, transaction) =>

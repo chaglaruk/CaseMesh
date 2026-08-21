@@ -25,8 +25,17 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   page.on("dialog",dialog=>dialog.accept("ten absence days were recorded"));
   await page.getByRole("button",{name:"Correct with audit trail"}).click();
   await expect(page.getByText(/ten absence days were recorded/)).toBeVisible();
-  const tabHeadings={Timeline:"Chronology",People:"People",Disputed:"Disputed statements",Questions:"Open factual questions"};
+  const tabHeadings={Timeline:"Chronology",People:"People",Disputed:"Disputed statements"};
   for(const [tab,heading] of Object.entries(tabHeadings)){await page.getByRole("button",{name:tab}).click();await expect(page.getByRole("heading",{name:heading})).toBeVisible();}
+  await page.getByRole("button",{name:"Questions"}).click();
+  await expect(page.getByRole("heading",{name:"Questions about your evidence"})).toBeVisible();
+  await page.getByLabel("One Matter-scoped factual question").fill("What does the evidence say about absence days?");
+  await page.getByRole("button",{name:"Ask your evidence"}).click();
+  await expect(page.getByLabel("What your evidence shows")).toContainText(/absence days/i);
+  await page.getByRole("button",{name:/View exact source/}).first().click();
+  await expect(page.getByLabel("Source citation detail")).toContainText("absence days");
+  await page.getByRole("button",{name:"New thread"}).click();
+  await expect(page.getByLabel("One Matter-scoped factual question")).toHaveValue("");
   await page.getByRole("button",{name:"Overview"}).click();
   const accessibility=await new AxeBuilder({page}).analyze();
   expect(accessibility.violations).toEqual([]);

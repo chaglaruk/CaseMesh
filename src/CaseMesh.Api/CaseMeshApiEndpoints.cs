@@ -6,6 +6,7 @@ using CaseMesh.Core.Workplace;
 using CaseMesh.MatterBrain;
 using CaseMesh.Persistence.Postgres;
 using CaseMesh.ProfessionalExport;
+using CaseMesh.Qa;
 using CaseMesh.Storage;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
@@ -105,10 +106,9 @@ public static class CaseMeshApiEndpoints
             CurrentWebUser users, PostgresWebWorkspaceRepository repository, PostgresMatterBrainStore brains,
             CancellationToken token) => ProjectAsync(tenantId, matterId, context, users, repository, brains,
                 loaded => WorkspaceProjection.Workplace(loaded), token));
-        workspace.MapGet("/matters/{matterId:guid}/questions", (Guid tenantId, Guid matterId, HttpContext context,
-            CurrentWebUser users, PostgresWebWorkspaceRepository repository, PostgresMatterBrainStore brains,
-            CancellationToken token) => ProjectAsync(tenantId, matterId, context, users, repository, brains,
-                loaded => WorkspaceProjection.OpenQuestions(loaded), token));
+        workspace.MapGet("/matters/{matterId:guid}/questions", GetQuestionsAsync);
+        workspace.MapPost("/matters/{matterId:guid}/questions/ask", AskQuestionAsync)
+            .RequireRateLimiting("matter-qa");
         workspace.MapPost("/matters/{matterId:guid}/assertions/{assertionId:guid}/corrections", CorrectAssertionAsync);
         workspace.MapPost("/matters/{matterId:guid}/exports", ExportAsync);
     }
@@ -290,6 +290,37 @@ public static class CaseMeshApiEndpoints
             correctedAssertionId = result.CorrectedAssertion.Id, auditEventId = result.AuditEvent.Id });
     }
 
+    private static async Task<IResult> GetQuestionsAsync(Guid tenantId, Guid matterId, HttpContext context,
+        CurrentWebUser users, PostgresWebWorkspaceRepository repository, PostgresMatterBrainStore brains,
+        CancellationToken token)
+    {
+        var user = await users.RequireAsync(context.User, token);
+        var tenant = new TenantId(tenantId);
+        if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
+        var loaded = await brains.LoadAsync(tenant, matterId, token);
+        if (loaded is null) return Results.NotFound();
+        var processing = await repository.HasActiveJobsAsync(user.Id, tenant, matterId, token);
+        return Results.Ok(WorkspaceProjection.Questions(loaded, processing));
+    }
+
+    private static async Task<IResult> AskQuestionAsync(Guid tenantId, Guid matterId, HttpContext context,
+        QuestionRequest request, CurrentWebUser users, PostgresWebWorkspaceRepository repository,
+        PostgresMatterBrainStore brains, MatterQaService qa, CancellationToken token)
+    {
+        var user = await users.RequireAsync(context.User, token);
+        var tenant = new TenantId(tenantId);
+        if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
+        if (await repository.HasActiveJobsAsync(user.Id, tenant, matterId, token))
+            return Results.Conflict(new { title = "Evidence processing is still in progress.", code = "evidence-processing" });
+        var loaded = await brains.LoadAsync(tenant, matterId, token);
+        if (loaded is null) return Results.NotFound();
+        var answer = await qa.AskAsync(new MatterRetrievalRequest(
+            tenant, matterId, RequireText(request.Question, MatterQaService.MaximumQuestionCharacters)), token);
+        var refreshed = await brains.LoadAsync(tenant, matterId, token);
+        if (refreshed is null) return Results.NotFound();
+        return Results.Ok(WorkspaceProjection.QuestionAnswer(refreshed, answer));
+    }
+
     private static async Task<IResult> ExportAsync(Guid tenantId, Guid matterId, HttpContext context,
         CurrentWebUser users, PostgresWebWorkspaceRepository repository, PostgresProfessionalExportService exports,
         CancellationToken token)
@@ -342,3 +373,4 @@ public sealed record CreateWorkspaceRequest(string Name);
 public sealed record CreateMatterRequest(string Title, string? Jurisdiction);
 public sealed record UpdateMatterRequest(string Title, string Status);
 public sealed record CorrectionRequest(string CorrectedValue, DateTimeOffset? CorrectedEventTime);
+public sealed record QuestionRequest(string Question);
