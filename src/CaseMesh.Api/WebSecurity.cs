@@ -1,8 +1,29 @@
 using System.Security.Claims;
 using CaseMesh.Persistence.Postgres;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Antiforgery;
 
 namespace CaseMesh.Api;
+
+internal static class OidcConfiguration
+{
+    internal const string CallbackPath = "/api/auth/signin-oidc";
+
+    internal static void Apply(OpenIdConnectOptions oidc, CaseMeshApiOptions options)
+    {
+        oidc.Authority = options.OidcAuthority;
+        oidc.ClientId = options.OidcClientId;
+        oidc.ClientSecret = options.OidcClientSecret;
+        oidc.CallbackPath = CallbackPath;
+        oidc.ResponseType = "code";
+        oidc.UsePkce = true;
+        oidc.SaveTokens = false;
+        oidc.MapInboundClaims = false;
+        oidc.Scope.Clear();
+        oidc.Scope.Add("openid");
+        oidc.Scope.Add("profile");
+    }
+}
 
 public sealed class CurrentWebUser(PostgresWebWorkspaceRepository repository, TimeProvider timeProvider)
 {

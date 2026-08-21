@@ -88,18 +88,7 @@ builder.Services.AddAuthentication(authentication =>
 if (!isExplicitTestHarness)
 {
     builder.Services.AddAuthentication().AddOpenIdConnect(OpenIdConnectDefaults.AuthenticationScheme, oidc =>
-    {
-        oidc.Authority = options.OidcAuthority;
-        oidc.ClientId = options.OidcClientId;
-        oidc.ClientSecret = options.OidcClientSecret;
-        oidc.ResponseType = "code";
-        oidc.UsePkce = true;
-        oidc.SaveTokens = false;
-        oidc.MapInboundClaims = false;
-        oidc.Scope.Clear();
-        oidc.Scope.Add("openid");
-        oidc.Scope.Add("profile");
-    });
+        OidcConfiguration.Apply(oidc, options));
 }
 builder.Services.AddAuthorization();
 builder.Services.AddRateLimiter(limiter =>

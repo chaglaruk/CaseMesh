@@ -4,6 +4,7 @@ using CaseMesh.Api;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -63,6 +64,44 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
         Assert.Contains("casemesh-xsrf-test", cookie);
         Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("__Host-", cookie, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Invalid_antiforgery_token_is_a_client_error()
+    {
+        using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
+            { AllowAutoRedirect = false, HandleCookies = false });
+        using var signIn = await client.PostAsJsonAsync("/api/auth/test-sign-in",
+            new TestSignInRequest("synthetic-invalid-csrf", "Synthetic CSRF User"));
+        client.DefaultRequestHeaders.Add("Cookie", signIn.Headers.GetValues("Set-Cookie").Single().Split(';', 2)[0]);
+
+        using var response = await client.PostAsJsonAsync("/api/workspaces", new { name = "Synthetic workspace" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.DoesNotContain("Antiforgery", await response.Content.ReadAsStringAsync(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Oidc_callback_is_routed_through_the_same_origin_api_proxy()
+    {
+        var oidc = new OpenIdConnectOptions();
+        OidcConfiguration.Apply(oidc, ValidOptions());
+
+        Assert.Equal("/api/auth/signin-oidc", oidc.CallbackPath.Value);
+        Assert.Equal("code", oidc.ResponseType);
+        Assert.True(oidc.UsePkce);
+        Assert.False(oidc.SaveTokens);
+    }
+
+    [Fact]
+    public void Value_only_correction_preserves_existing_event_time()
+    {
+        var existing = new DateTimeOffset(2026, 3, 12, 10, 0, 0, TimeSpan.Zero);
+        Assert.Equal(existing, CaseMeshApiEndpoints.ResolveCorrectedEventTime(null, existing));
+
+        var replacement = existing.AddDays(1);
+        Assert.Equal(replacement, CaseMeshApiEndpoints.ResolveCorrectedEventTime(replacement, existing));
     }
 
     [Fact]

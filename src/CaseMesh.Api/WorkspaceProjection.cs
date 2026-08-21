@@ -56,16 +56,28 @@ internal static class WorkspaceProjection
         organisations = loaded.Brain.Organisations.Select(item => new { item.Id, item.Name, item.TypeLabel })
     };
 
-    internal static object Disputed(PersistedMatterBrain loaded) => new
+    internal static object Disputed(PersistedMatterBrain loaded)
     {
-        contradictions = loaded.Evidence.Contradictions.Select(item => new
+        var assertions = loaded.Evidence.Assertions
+            .Where(item => item.DisputeState is DisputeState.Disputed or DisputeState.Contradicted)
+            .ToArray();
+        var sourceSpanIds = assertions.Where(item => item.SourceSpanId.HasValue)
+            .Select(item => item.SourceSpanId!.Value).ToHashSet();
+        return new
         {
-            item.Id, item.AssertionAId, item.AssertionBId, type = item.Type.ToString(),
-            resolutionState = item.ResolutionState.ToString(), item.ResolutionNote
-        }),
-        disputedAssertions = loaded.Evidence.Assertions.Where(item => item.DisputeState is DisputeState.Disputed or DisputeState.Contradicted)
-            .Select(Assertion)
-    };
+            contradictions = loaded.Evidence.Contradictions.Select(item => new
+            {
+                item.Id, item.AssertionAId, item.AssertionBId, type = item.Type.ToString(),
+                resolutionState = item.ResolutionState.ToString(), item.ResolutionNote
+            }),
+            disputedAssertions = assertions.Select(Assertion),
+            sourceSpans = loaded.Evidence.SourceSpans.Where(item => sourceSpanIds.Contains(item.Id)).Select(item => new
+            {
+                item.Id, item.DocumentVersion.DocumentVersionId, item.PageNumber, item.TextStart, item.TextEnd,
+                item.ExtractedText, item.ExtractedTextDigest, item.ParserVersion, item.ExtractionConfidence
+            })
+        };
+    }
 
     internal static object Workplace(PersistedMatterBrain loaded) => new
     {

@@ -278,8 +278,11 @@ public static class CaseMeshApiEndpoints
         if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
         var loaded = await brains.LoadAsync(tenant, matterId, token);
         if (loaded is null) return Results.NotFound();
+        var original = loaded.Evidence.Assertions.SingleOrDefault(item => item.Id == assertionId);
+        if (original is null) return Results.NotFound();
         var result = loaded.Brain.CorrectAssertion(assertionId, Guid.NewGuid(), RequireText(request.CorrectedValue, 2_000),
-            request.CorrectedEventTime, Guid.NewGuid(), $"web-user:{user.Id:D}", clock.GetUtcNow());
+            ResolveCorrectedEventTime(request.CorrectedEventTime, original.EventTime), Guid.NewGuid(),
+            $"web-user:{user.Id:D}", clock.GetUtcNow());
         await brains.SaveAsync(loaded.Brain, loaded.Workplace, token);
         return Results.Ok(new { supersededAssertionId = result.SupersededAssertion.Id,
             correctedAssertionId = result.CorrectedAssertion.Id, auditEventId = result.AuditEvent.Id });
@@ -326,6 +329,10 @@ public static class CaseMeshApiEndpoints
             throw new BadHttpRequestException($"A non-empty value of at most {maximumLength} characters is required.");
         return trimmed;
     }
+
+    internal static DateTimeOffset? ResolveCorrectedEventTime(
+        DateTimeOffset? requestedEventTime,
+        DateTimeOffset? existingEventTime) => requestedEventTime ?? existingEventTime;
 }
 
 public sealed record TestSignInRequest(string Subject, string DisplayName);
