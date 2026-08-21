@@ -8,6 +8,7 @@
     <ProjectReference Include="..\CaseMesh.Core\CaseMesh.Core.csproj" />
     <ProjectReference Include="..\CaseMesh.Ingestion\CaseMesh.Ingestion.csproj" />
     <ProjectReference Include="..\CaseMesh.MatterBrain\CaseMesh.MatterBrain.csproj" />
+    <ProjectReference Include="..\CaseMesh.ProfessionalExport\CaseMesh.ProfessionalExport.csproj" />
     <ProjectReference Include="..\CaseMesh.Storage\CaseMesh.Storage.csproj" />
   </ItemGroup>
   <ItemGroup>

@@ -54,18 +54,8 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         }
 
         return _matterStore.InTenantTransactionAsync(tenantId, async (connection, transaction) =>
-        {
-            var persisted = await PostgresMatterReader.ReadAsync(
-                connection, transaction, tenantId, matterId, cancellationToken);
-            if (persisted is null)
-            {
-                return null;
-            }
-
-            var snapshot = await ReadAsync(connection, transaction, tenantId.Value, matterId, cancellationToken);
-            var brain = MatterBrainState.Rehydrate(persisted.Evidence, snapshot);
-            return new PersistedMatterBrain(persisted.Evidence, persisted.Workplace, brain);
-        }, cancellationToken);
+            await ReadPersistedAsync(connection, transaction, tenantId, matterId, cancellationToken),
+            cancellationToken);
     }
 
     public async ValueTask DisposeAsync() => await _matterStore.DisposeAsync();
@@ -320,6 +310,26 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
             await WriteOrderedSourcesAsync(connection, transaction, "entity_resolution_sources", "action_id",
                 tenantId, matterId, action.Id, action.EvidenceSourceSpanIds, cancellationToken);
         }
+    }
+
+    internal static async Task<PersistedMatterBrain?> ReadPersistedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        TenantId tenantId,
+        Guid matterId,
+        CancellationToken cancellationToken)
+    {
+        var persisted = await PostgresMatterReader.ReadAsync(
+            connection, transaction, tenantId, matterId, cancellationToken);
+        if (persisted is null)
+        {
+            return null;
+        }
+
+        var snapshot = await ReadAsync(
+            connection, transaction, tenantId.Value, matterId, cancellationToken);
+        var brain = MatterBrainState.Rehydrate(persisted.Evidence, snapshot);
+        return new PersistedMatterBrain(persisted.Evidence, persisted.Workplace, brain);
     }
 
     private static async Task<MatterBrainSnapshot> ReadAsync(

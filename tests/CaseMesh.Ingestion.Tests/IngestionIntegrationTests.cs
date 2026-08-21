@@ -2,6 +2,7 @@ using System.Text;
 using CaseMesh.Core.Models;
 using CaseMesh.Ingestion;
 using CaseMesh.Persistence.Postgres;
+using CaseMesh.ProfessionalExport;
 using Npgsql;
 
 namespace CaseMesh.Ingestion.Tests;
@@ -154,6 +155,20 @@ public sealed class IngestionIntegrationTests(IngestionIntegrationFixture fixtur
         Assert.Equal(first.SpanSetId, retry.SpanSetId);
         Assert.NotEqual(first.SpanSetId, changed.SpanSetId);
         Assert.Equal(2, (await repository.ListAttemptsAsync(scope.Document, default)).Count);
+
+        await using (var exportService = new PostgresProfessionalExportService(
+                         fixture.AppConnection, new FixedTimeProvider(Now.AddHours(1))))
+        {
+            var package = Assert.IsType<ProfessionalExportPackage>(await exportService.GenerateAsync(
+                new ProfessionalExportRequest(scope.Document.TenantId, scope.Document.MatterId, Guid.NewGuid())));
+            var document = Assert.Single(package.Manifest.Documents);
+            Assert.Equal(["native-2"], document.ParserVersions);
+            Assert.DoesNotContain("native-1", document.ParserVersions);
+            Assert.Contains(package.Manifest.Sources, source =>
+                source.ExtractionProviderVersion == "native-1" && !string.IsNullOrWhiteSpace(source.StableLocator));
+            Assert.Contains(package.Manifest.Sources, source =>
+                source.ExtractionProviderVersion == "native-2" && !string.IsNullOrWhiteSpace(source.StableLocator));
+        }
 
         await using var connection = new NpgsqlConnection(fixture.AppConnection);
         await connection.OpenAsync();

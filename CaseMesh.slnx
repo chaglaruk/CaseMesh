@@ -5,6 +5,7 @@
     <Project Path="src/CaseMesh.Ingestion/CaseMesh.Ingestion.csproj" />
     <Project Path="src/CaseMesh.MatterBrain/CaseMesh.MatterBrain.csproj" />
     <Project Path="src/CaseMesh.Persistence.Postgres/CaseMesh.Persistence.Postgres.csproj" />
+    <Project Path="src/CaseMesh.ProfessionalExport/CaseMesh.ProfessionalExport.csproj" />
     <Project Path="src/CaseMesh.Storage/CaseMesh.Storage.csproj" />
     <Project Path="src/CaseMesh.Storage.S3/CaseMesh.Storage.S3.csproj" />
     <Project Path="src/CaseMesh.Audio.Windows/CaseMesh.Audio.Windows.csproj" />
@@ -17,6 +18,7 @@
     <Project Path="tests/CaseMesh.Ingestion.Tests/CaseMesh.Ingestion.Tests.csproj" />
     <Project Path="tests/CaseMesh.MatterBrain.Tests/CaseMesh.MatterBrain.Tests.csproj" />
     <Project Path="tests/CaseMesh.Persistence.Postgres.Tests/CaseMesh.Persistence.Postgres.Tests.csproj" />
+    <Project Path="tests/CaseMesh.ProfessionalExport.Tests/CaseMesh.ProfessionalExport.Tests.csproj" />
     <Project Path="tests/CaseMesh.Storage.S3.Tests/CaseMesh.Storage.S3.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
