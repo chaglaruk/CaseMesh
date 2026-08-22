@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Text.Json;
 using System.Threading.Channels;
 using CaseMesh.Core.Models;
@@ -17,6 +19,8 @@ public sealed class EvidenceJobCoordinator(
     IOcrEngine ocr,
     IPdfPageRasterizer rasterizer,
     IngestionPipeline pipeline,
+    PostgresPilotOperationsRepository operations,
+    PilotRuntimeHealth runtimeHealth,
     CaseMeshApiOptions options,
     IHostEnvironment environment,
     TimeProvider timeProvider,
@@ -24,7 +28,9 @@ public sealed class EvidenceJobCoordinator(
 {
     private readonly Channel<JobSignal> _signals = Channel.CreateBounded<JobSignal>(new BoundedChannelOptions(256)
     {
-        FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true, SingleWriter = false
+        FullMode = BoundedChannelFullMode.DropWrite,
+        SingleReader = true,
+        SingleWriter = false
     });
     private readonly Guid _workerId = Guid.NewGuid();
 
@@ -32,11 +38,13 @@ public sealed class EvidenceJobCoordinator(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        runtimeHealth.MarkEvidenceWorker();
         var sweeper = SweepPersistedJobsAsync(stoppingToken);
         try
         {
             await foreach (var signal in _signals.Reader.ReadAllAsync(stoppingToken))
             {
+                runtimeHealth.MarkEvidenceWorker();
                 while (!stoppingToken.IsCancellationRequested)
                 {
                     WebProcessingJob? job;
@@ -73,12 +81,14 @@ public sealed class EvidenceJobCoordinator(
 
     private async Task ProcessAsync(Guid userId, WebProcessingJob job, CancellationToken cancellationToken)
     {
+        var started = Stopwatch.GetTimestamp();
         await using var processingLock = await jobs.AcquireProcessingLockAsync(
             job.TenantId, job.JobId, cancellationToken);
         await using var matterStateLock = await jobs.AcquireMatterStateLockAsync(
             job.TenantId, job.MatterId, cancellationToken);
         try
         {
+            await operations.EnsureIngestionAttemptAllowedAsync(job.TenantId, job.Attempts, cancellationToken);
             await jobs.RenewLeaseAsync(userId, job, _workerId,
                 timeProvider.GetUtcNow().AddMinutes(10), cancellationToken);
             var service = new CommercialEvidenceIngestionService(originals, ingestionRepository, scanner, ocr,
@@ -96,6 +106,10 @@ public sealed class EvidenceJobCoordinator(
             await brains.SaveAsync(loaded.Brain, loaded.Workplace, cancellationToken);
             await jobs.CompleteAsync(userId, job.TenantId, job.MatterId, job.JobId, _workerId, job.Attempts,
                 timeProvider.GetUtcNow(), cancellationToken);
+            await RecordUsageSafelyAsync(() => operations.RecordUsageEventAsync(
+                job.TenantId, job.MatterId, PilotUsageEventKind.Ingestion, "completed", 1,
+                cancellationToken: cancellationToken));
+            PilotOperationsTelemetry.IngestionOutcomes.Add(1, new TagList { { "outcome", "completed" } });
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -103,11 +117,15 @@ public sealed class EvidenceJobCoordinator(
                 "Evidence processing failed for job {JobId} in tenant {TenantId} with code {FailureCode}.",
                 job.JobId, job.TenantId.Value,
                 exception is IngestionException ingestion ? ingestion.Code : "processing-failed");
+            PilotOperationsTelemetry.IngestionOutcomes.Add(1, new TagList { { "outcome", "failed" } });
             try
             {
+                var maximumAttempts = (await operations.GetEntitlementsAsync(job.TenantId, CancellationToken.None))
+                    .IngestionAttemptLimit;
                 await jobs.FailAsync(userId, job.TenantId, job.MatterId, job.JobId, _workerId, job.Attempts,
                     timeProvider.GetUtcNow(),
                     exception is IngestionException failure ? failure.Code : "processing-failed",
+                    maximumAttempts,
                     CancellationToken.None);
             }
             catch (Exception recordingFailure)
@@ -117,6 +135,11 @@ public sealed class EvidenceJobCoordinator(
                     job.JobId, recordingFailure.GetType().Name);
             }
         }
+        finally
+        {
+            PilotOperationsTelemetry.IngestionDuration.Record(
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        }
     }
 
     private async Task SweepPersistedJobsAsync(CancellationToken cancellationToken)
@@ -124,6 +147,7 @@ public sealed class EvidenceJobCoordinator(
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30), timeProvider);
         do
         {
+            runtimeHealth.MarkEvidenceWorker();
             try
             {
                 var scopes = await jobs.ListPendingJobScopesAsync(timeProvider.GetUtcNow(), cancellationToken);
@@ -136,6 +160,16 @@ public sealed class EvidenceJobCoordinator(
                     exception.GetType().Name);
             }
         } while (await timer.WaitForNextTickAsync(cancellationToken));
+    }
+
+    private async Task RecordUsageSafelyAsync(Func<Task> record)
+    {
+        try { await record(); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning("Ingestion usage metadata could not be recorded: {ExceptionType}.",
+                exception.GetType().Name);
+        }
     }
 
     private sealed record JobSignal(Guid UserId, TenantId TenantId);

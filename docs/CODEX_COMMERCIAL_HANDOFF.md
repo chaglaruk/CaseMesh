@@ -1,6 +1,6 @@
 # Codex Commercial Handoff
 
-Date: 2026-08-21
+Date: 2026-08-22
 
 ## Current state
 
@@ -15,6 +15,9 @@ Completed commercial milestones:
 5. secure ingestion with type detection, malware scanning boundary, native parsing, OCR fallback and exact SourceSpan persistence;
 6. structured extraction candidates, conservative entity resolution, incremental Matter Brain merge, contradictions and correction/audit propagation;
 7. deterministic professional handover/export in DOCX, CSV, JSON and ZIP with tenant-scoped export audit metadata.
+8. authenticated employee Web MVP with citation-gated Matter Q&A.
+
+Milestone 10 commercial-pilot hardening is being completed on Issue #23: persisted quotas and retention, private verified export delivery, durable privacy deletion, readiness/telemetry, operator diagnostics, accessibility and deployment controls.
 
 Current `main` after Milestone 7 is expected to contain PR #20 / merge commit `389f78ee724fe4968d1b596b9e44fd3244292af8` or a later documented main commit.
 

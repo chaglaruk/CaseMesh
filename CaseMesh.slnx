@@ -28,6 +28,7 @@
   <Folder Name="/tools/">
     <Project Path="tools/CaseMesh.DbMigrate/CaseMesh.DbMigrate.csproj" />
     <Project Path="tools/CaseMesh.ObjectStoreProvision/CaseMesh.ObjectStoreProvision.csproj" />
+    <Project Path="tools/CaseMesh.PilotAdmin/CaseMesh.PilotAdmin.csproj" />
     <Project Path="tools/CaseMesh.AudioProbe/CaseMesh.AudioProbe.csproj" />
   </Folder>
 </Solution>

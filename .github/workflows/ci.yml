@@ -311,7 +311,9 @@ jobs:
           REVOKE INSERT, UPDATE, DELETE ON TABLE casemesh.tenant_memberships FROM casemesh_web;
           GRANT EXECUTE ON FUNCTION
             casemesh.create_owned_workspace(uuid, uuid, text, timestamptz),
-            casemesh.pending_web_job_scopes(timestamptz)
+            casemesh.pending_web_job_scopes(timestamptz),
+            casemesh.pending_privacy_deletion_scopes(timestamptz),
+            casemesh.pilot_maintenance_tenants()
             TO casemesh_web;
           SQL
       - name: Build and start real S3-compatible MinIO service

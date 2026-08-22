@@ -16,6 +16,7 @@ options.Validate(builder.Environment.EnvironmentName);
 var isExplicitTestHarness = options.EnableTestAuthentication && builder.Environment.IsEnvironment("Testing");
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<PilotRuntimeHealth>();
 builder.Services.AddSingleton(_ => new PostgresWebWorkspaceRepository(options.PostgresConnectionString));
 builder.Services.AddSingleton(_ => new PostgresMatterBrainStore(options.PostgresConnectionString));
 builder.Services.AddSingleton(_ => new PostgresMatterStore(options.PostgresConnectionString));
@@ -26,27 +27,44 @@ builder.Services.AddSingleton<IMatterEvidenceRetriever>(provider =>
 builder.Services.AddSingleton<IMatterReasoningProvider, DeterministicMatterReasoningProvider>();
 builder.Services.AddSingleton<MatterQaService>();
 builder.Services.AddSingleton(_ => new PostgresProfessionalExportService(options.PostgresConnectionString, TimeProvider.System));
+builder.Services.AddSingleton(_ => new PostgresPilotOperationsRepository(options.PostgresConnectionString, TimeProvider.System));
 builder.Services.AddSingleton<IOriginalEvidenceStore>(_ => isExplicitTestHarness && string.IsNullOrWhiteSpace(options.S3Endpoint)
     ? new DisabledEvidenceStore()
     : new S3OriginalEvidenceStore(options.PostgresConnectionString, new S3ObjectStorageOptions
     {
-        Endpoint = new Uri(options.S3Endpoint), Region = options.S3Region, BucketName = options.S3BucketName,
-        AccessKey = options.S3AccessKey, SecretKey = options.S3SecretKey,
+        Endpoint = new Uri(options.S3Endpoint),
+        Region = options.S3Region,
+        BucketName = options.S3BucketName,
+        AccessKey = options.S3AccessKey,
+        SecretKey = options.S3SecretKey,
+        AllowInsecureLocalEndpoint = options.AllowInsecureLocalObjectStorage
+    }));
+builder.Services.AddSingleton<IGeneratedArtifactStore>(_ => isExplicitTestHarness && string.IsNullOrWhiteSpace(options.S3Endpoint)
+    ? new DisabledGeneratedArtifactStore()
+    : new S3GeneratedArtifactStore(options.PostgresConnectionString, new S3ObjectStorageOptions
+    {
+        Endpoint = new Uri(options.S3Endpoint),
+        Region = options.S3Region,
+        BucketName = options.S3BucketName,
+        AccessKey = options.S3AccessKey,
+        SecretKey = options.S3SecretKey,
         AllowInsecureLocalEndpoint = options.AllowInsecureLocalObjectStorage
     }));
 builder.Services.AddSingleton<IIngestionRepository>(provider =>
     new PostgresIngestionRepository(provider.GetRequiredService<PostgresMatterStore>()));
 builder.Services.AddSingleton<IMalwareScanner>(_ => isExplicitTestHarness
-    ? new SyntheticCleanScanner() : new ClamAvCliScanner("runtime-configured", TimeSpan.FromSeconds(30)));
+    ? new SyntheticCleanScanner() : new ClamAvCliScanner(options.ClamAvExecutablePath, TimeSpan.FromSeconds(30)));
 builder.Services.AddSingleton<IOcrEngine>(_ => isExplicitTestHarness
-    ? new SyntheticOcrEngine() : new TesseractCliOcrEngine("runtime-configured", TimeSpan.FromSeconds(30)));
+    ? new SyntheticOcrEngine() : new TesseractCliOcrEngine(options.TesseractExecutablePath, TimeSpan.FromSeconds(30)));
 builder.Services.AddSingleton<IPdfPageRasterizer>(_ =>
-    new PopplerPdfPageRasterizer("runtime-configured", TimeSpan.FromSeconds(30)));
+    new PopplerPdfPageRasterizer(isExplicitTestHarness ? "runtime-configured" : options.PopplerExecutablePath, TimeSpan.FromSeconds(30)));
 builder.Services.AddSingleton(new IngestionPipeline("web-v1", isExplicitTestHarness ? "synthetic-clean" : "clamav-cli",
     "runtime-configured", "casemesh-parsers-v1", isExplicitTestHarness ? "synthetic-ocr" : "tesseract-cli",
     "runtime-configured"));
 builder.Services.AddSingleton<EvidenceJobCoordinator>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<EvidenceJobCoordinator>());
+builder.Services.AddSingleton<PrivacyDeletionCoordinator>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<PrivacyDeletionCoordinator>());
 builder.Services.AddScoped<CurrentWebUser>();
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
@@ -106,12 +124,15 @@ builder.Services.AddRateLimiter(limiter =>
             context.User.FindFirst("sub")?.Value ?? context.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
             _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     limiter.AddPolicy("matter-qa", context => RateLimitPartition.GetFixedWindowLimiter(
-        context.User.FindFirst("sub")?.Value ?? "unauthenticated",
+        context.Request.RouteValues.TryGetValue("tenantId", out var tenantId) &&
+        Guid.TryParse(tenantId?.ToString(), out var parsedTenantId)
+            ? $"tenant:{parsedTenantId:D}" : "tenant:unresolved",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 12, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
 var app = builder.Build();
 app.UseExceptionHandler();
+app.UseMiddleware<PilotTelemetryMiddleware>();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseAuthentication();
 app.UseRateLimiter();

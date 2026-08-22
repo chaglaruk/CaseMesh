@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using CaseMesh.Core.Models;
@@ -19,6 +21,33 @@ public static class CaseMeshApiEndpoints
     public static void MapCaseMeshApi(this WebApplication app, CaseMeshApiOptions options, IHostEnvironment environment)
     {
         app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
+        app.MapGet("/health/ready", async (PostgresPilotOperationsRepository operations,
+            IGeneratedArtifactStore generated, IMatterReasoningProvider reasoning,
+            PilotRuntimeHealth workers, CancellationToken token) =>
+        {
+            var postgres = await ReadinessAsync(() => operations.CheckReadinessAsync(token));
+            var objectStorage = await ReadinessAsync(() => generated.CheckReadinessAsync(token));
+            var testHarness = options.EnableTestAuthentication && environment.IsEnvironment("Testing");
+            var ingestionDependencies = testHarness ||
+                (File.Exists(options.ClamAvExecutablePath) && File.Exists(options.TesseractExecutablePath) &&
+                 File.Exists(options.PopplerExecutablePath));
+            var qaProvider = !string.IsNullOrWhiteSpace(reasoning.Descriptor.Provider) &&
+                             !string.IsNullOrWhiteSpace(reasoning.Descriptor.Model);
+            var components = new
+            {
+                postgres,
+                objectStorage,
+                ingestionDependencies,
+                evidenceWorker = workers.EvidenceWorkerReady(TimeSpan.FromMinutes(2)),
+                deletionWorker = workers.DeletionWorkerReady(TimeSpan.FromMinutes(2)),
+                qaProvider,
+                build = testHarness || !string.IsNullOrWhiteSpace(options.BuildIdentity)
+            };
+            var ready = components.postgres && components.objectStorage && components.ingestionDependencies &&
+                        components.evidenceWorker && components.deletionWorker && components.qaProvider && components.build;
+            return Results.Json(new { status = ready ? "ready" : "not-ready", components },
+                statusCode: ready ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);
+        });
         app.MapGet("/api/auth/sign-in", (HttpContext context) =>
             Results.Challenge(new AuthenticationProperties { RedirectUri = "/matters" }));
         if (options.EnableTestAuthentication && environment.IsEnvironment("Testing"))
@@ -79,6 +108,8 @@ public static class CaseMeshApiEndpoints
         workspace.MapGet("/matters/{matterId:guid}", GetMatterAsync);
         workspace.MapPut("/matters/{matterId:guid}", UpdateMatterAsync);
         workspace.MapDelete("/matters/{matterId:guid}", DeleteMatterAsync);
+        workspace.MapGet("/matters/{matterId:guid}/deletions/{deletionId:guid}", GetDeletionAsync);
+        workspace.MapGet("/matters/{matterId:guid}/usage", GetUsageAsync);
         workspace.MapPost("/matters/{matterId:guid}/evidence", UploadEvidenceAsync)
             .DisableAntiforgery(); // The explicit API middleware still validates the header before form parsing.
         workspace.MapGet("/matters/{matterId:guid}/jobs/{jobId:guid}", GetJobAsync);
@@ -111,22 +142,35 @@ public static class CaseMeshApiEndpoints
             .RequireRateLimiting("matter-qa");
         workspace.MapPost("/matters/{matterId:guid}/assertions/{assertionId:guid}/corrections", CorrectAssertionAsync);
         workspace.MapPost("/matters/{matterId:guid}/exports", ExportAsync);
+        workspace.MapGet("/matters/{matterId:guid}/exports/{exportId:guid}", DownloadExportAsync);
     }
 
     private static async Task<IResult> CreateMatterAsync(Guid tenantId, HttpContext context,
         CreateMatterRequest request, CurrentWebUser users, PostgresWebWorkspaceRepository repository,
-        PostgresMatterBrainStore brains, TimeProvider clock, CancellationToken token)
+        PostgresMatterBrainStore brains, PostgresPilotOperationsRepository operations,
+        TimeProvider clock, CancellationToken token)
     {
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
         if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
         var now = clock.GetUtcNow();
-        var matter = new Matter(Guid.NewGuid(), tenant, "workplace-dispute",
+        var matterId = Guid.NewGuid();
+        var reservation = await operations.ReserveActiveMatterAsync(tenant, matterId, token);
+        var matter = new Matter(matterId, tenant, "workplace-dispute",
             RequireText(request.Title, 160), "active", now, now,
             string.IsNullOrWhiteSpace(request.Jurisdiction) ? null : RequireText(request.Jurisdiction, 80));
         var evidence = new MatterEvidenceGraph(matter);
-        await brains.SaveAsync(new MatterBrainState(evidence), new WorkplaceMatter(evidence), token);
-        return Results.Created($"/api/workspaces/{tenantId:D}/matters/{matter.Id:D}", WorkspaceProjection.Matter(matter));
+        try
+        {
+            await brains.SaveAsync(new MatterBrainState(evidence), new WorkplaceMatter(evidence), token);
+            await RecordUsageSafelyAsync(context, () => operations.RecordUsageEventAsync(
+                tenant, matterId, PilotUsageEventKind.MatterCreated, "accepted", 1, cancellationToken: token));
+            return Results.Created($"/api/workspaces/{tenantId:D}/matters/{matter.Id:D}", WorkspaceProjection.Matter(matter));
+        }
+        finally
+        {
+            await ReleaseReservationsSafelyAsync(context, operations, tenant, [reservation.ReservationId]);
+        }
     }
 
     private static async Task<IResult> GetMatterAsync(Guid tenantId, Guid matterId, HttpContext context,
@@ -139,33 +183,74 @@ public static class CaseMeshApiEndpoints
 
     private static async Task<IResult> UpdateMatterAsync(Guid tenantId, Guid matterId, HttpContext context,
         UpdateMatterRequest request, CurrentWebUser users, PostgresWebWorkspaceRepository repository,
-        PostgresMatterStore store, TimeProvider clock, CancellationToken token)
+        PostgresMatterStore store, PostgresPilotOperationsRepository operations,
+        TimeProvider clock, CancellationToken token)
     {
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
         var current = await repository.GetMatterAsync(user.Id, tenant, matterId, token);
         if (current is null) return Results.NotFound();
+        var status = RequireText(request.Status, 40).ToLowerInvariant();
+        if (status is not ("active" or "closed" or "archived"))
+            throw new BadHttpRequestException("The Matter status is not supported.");
+        PilotQuotaReservation? reservation = null;
+        if (current.Status != "active" && status == "active")
+            reservation = await operations.ReserveActiveMatterAsync(tenant, matterId, token);
         var updatedAt = clock.GetUtcNow();
         if (updatedAt <= current.UpdatedAt) updatedAt = current.UpdatedAt.AddTicks(1);
-        var updated = await store.UpdateMatterAsync(tenant, matterId, RequireText(request.Title, 160),
-            RequireText(request.Status, 40), current.UpdatedAt, updatedAt, token);
-        return updated ? Results.NoContent() : Results.Conflict();
+        try
+        {
+            var updated = await store.UpdateMatterAsync(tenant, matterId, RequireText(request.Title, 160),
+                status, current.UpdatedAt, updatedAt, token);
+            return updated ? Results.NoContent() : Results.Conflict();
+        }
+        finally
+        {
+            if (reservation is not null)
+                await ReleaseReservationsSafelyAsync(context, operations, tenant, [reservation.ReservationId]);
+        }
     }
 
     private static async Task<IResult> DeleteMatterAsync(Guid tenantId, Guid matterId, HttpContext context,
-        CurrentWebUser users, PostgresWebWorkspaceRepository repository, IOriginalEvidenceStore originals,
+        CurrentWebUser users, PostgresWebWorkspaceRepository repository,
+        PostgresPilotOperationsRepository operations, PrivacyDeletionCoordinator coordinator,
         CancellationToken token)
     {
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
         if (await repository.GetMatterAsync(user.Id, tenant, matterId, token) is null) return Results.NotFound();
-        return await originals.DeleteMatterAsync(tenant, matterId, token) ? Results.NoContent() : Results.NotFound();
+        var deletion = await operations.EnqueueDeletionAsync(user.Id, tenant, matterId, token);
+        coordinator.Signal(user.Id, tenant);
+        return Results.Accepted($"/api/workspaces/{tenantId:D}/matters/{matterId:D}/deletions/{deletion.DeletionId:D}",
+            deletion);
+    }
+
+    private static async Task<IResult> GetDeletionAsync(Guid tenantId, Guid matterId, Guid deletionId,
+        HttpContext context, CurrentWebUser users, PostgresWebWorkspaceRepository repository,
+        PostgresPilotOperationsRepository operations, CancellationToken token)
+    {
+        var user = await users.RequireAsync(context.User, token);
+        var tenant = new TenantId(tenantId);
+        if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
+        var deletion = await operations.GetDeletionAsync(tenant, matterId, deletionId, token);
+        return deletion is null ? Results.NotFound() : Results.Ok(deletion);
+    }
+
+    private static async Task<IResult> GetUsageAsync(Guid tenantId, Guid matterId, HttpContext context,
+        CurrentWebUser users, PostgresWebWorkspaceRepository repository,
+        PostgresPilotOperationsRepository operations, CancellationToken token)
+    {
+        var user = await users.RequireAsync(context.User, token);
+        var tenant = new TenantId(tenantId);
+        if (await repository.GetMatterAsync(user.Id, tenant, matterId, token) is null) return Results.NotFound();
+        return Results.Ok(await operations.GetUsageAsync(tenant, matterId, token));
     }
 
     private static async Task<IResult> UploadEvidenceAsync(Guid tenantId, Guid matterId, HttpContext context,
         CurrentWebUser users, PostgresWebWorkspaceRepository repository, PostgresMatterBrainStore brains,
         IOriginalEvidenceStore originals, EvidenceJobCoordinator coordinator, CaseMeshApiOptions options,
-        TimeProvider clock, ILoggerFactory loggerFactory, CancellationToken token)
+        PostgresPilotOperationsRepository operations, TimeProvider clock,
+        ILoggerFactory loggerFactory, CancellationToken token)
     {
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
@@ -184,6 +269,7 @@ public static class CaseMeshApiEndpoints
         var brainPersisted = false;
         var storeAttempted = false;
         var createdOriginal = false;
+        PilotEvidenceReservation? quotaReservation = null;
         IAsyncDisposable? matterStateLock = null;
         try
         {
@@ -191,8 +277,11 @@ public static class CaseMeshApiEndpoints
             long length;
             var fileOptions = new FileStreamOptions
             {
-                Mode = FileMode.CreateNew, Access = FileAccess.ReadWrite, Share = FileShare.None,
-                BufferSize = 64 * 1024, Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.ReadWrite,
+                Share = FileShare.None,
+                BufferSize = 64 * 1024,
+                Options = FileOptions.Asynchronous | FileOptions.SequentialScan
             };
             if (!OperatingSystem.IsWindows()) fileOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             await using (var input = file.OpenReadStream())
@@ -211,6 +300,7 @@ public static class CaseMeshApiEndpoints
                 }
                 hash = Convert.ToHexString(incremental.GetHashAndReset());
             }
+            quotaReservation = await operations.ReserveEvidenceAsync(tenant, matterId, hash, length, token);
             matterStateLock = await repository.AcquireMatterStateLockAsync(tenant, matterId, token);
             var loaded = await brains.LoadAsync(tenant, matterId, token) ?? throw new UnauthorizedAccessException();
             var version = loaded.Evidence.RegisterDocumentVersion(documentId, documentVersionId, hash, proposedOriginalId);
@@ -226,6 +316,9 @@ public static class CaseMeshApiEndpoints
             var jobId = Guid.NewGuid();
             await repository.AddDocumentJobAsync(user.Id, tenant, matterId, jobId, documentId,
                 documentVersionId, version.OriginalObjectId, safeName, clock.GetUtcNow(), token);
+            await RecordUsageSafelyAsync(context, () => operations.RecordUsageEventAsync(
+                tenant, matterId, PilotUsageEventKind.UploadAccepted, "accepted", length,
+                cancellationToken: token));
             coordinator.Signal(user.Id, tenant);
             return Results.Accepted($"/api/workspaces/{tenantId:D}/matters/{matterId:D}/jobs/{jobId:D}",
                 new { jobId, documentId, documentVersionId, byteLength = length });
@@ -262,7 +355,16 @@ public static class CaseMeshApiEndpoints
             }
             finally
             {
-                try { File.Delete(tempPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                try
+                {
+                    if (quotaReservation is not null)
+                        await ReleaseReservationsSafelyAsync(context, operations, tenant,
+                            quotaReservation.Reservations.Select(item => item.ReservationId));
+                }
+                finally
+                {
+                    try { File.Delete(tempPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                }
             }
         }
     }
@@ -296,8 +398,12 @@ public static class CaseMeshApiEndpoints
             ResolveCorrectedEventTime(request.CorrectedEventTime, original.EventTime), Guid.NewGuid(),
             $"web-user:{user.Id:D}", clock.GetUtcNow());
         await brains.SaveAsync(loaded.Brain, loaded.Workplace, token);
-        return Results.Ok(new { supersededAssertionId = result.SupersededAssertion.Id,
-            correctedAssertionId = result.CorrectedAssertion.Id, auditEventId = result.AuditEvent.Id });
+        return Results.Ok(new
+        {
+            supersededAssertionId = result.SupersededAssertion.Id,
+            correctedAssertionId = result.CorrectedAssertion.Id,
+            auditEventId = result.AuditEvent.Id
+        });
     }
 
     private static async Task<IResult> GetQuestionsAsync(Guid tenantId, Guid matterId, HttpContext context,
@@ -316,7 +422,8 @@ public static class CaseMeshApiEndpoints
 
     private static async Task<IResult> AskQuestionAsync(Guid tenantId, Guid matterId, HttpContext context,
         QuestionRequest request, CurrentWebUser users, PostgresWebWorkspaceRepository repository,
-        PostgresMatterBrainStore brains, MatterQaService qa, CancellationToken token)
+        PostgresMatterBrainStore brains, MatterQaService qa,
+        PostgresPilotOperationsRepository operations, CancellationToken token)
     {
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
@@ -326,8 +433,18 @@ public static class CaseMeshApiEndpoints
             return Results.Conflict(new { title = "Evidence processing is still in progress.", code = "evidence-processing" });
         var loaded = await brains.LoadAsync(tenant, matterId, token);
         if (loaded is null) return Results.NotFound();
+        var entitlements = await operations.GetEntitlementsAsync(tenant, token);
+        await operations.ConsumeDailyAsync(tenant, PilotDailyUsageKind.QaRequest, cancellationToken: token);
+        var qaStarted = Stopwatch.GetTimestamp();
         var answer = await qa.AskAsync(new MatterRetrievalRequest(
-            tenant, matterId, RequireText(request.Question, MatterQaService.MaximumQuestionCharacters)), token);
+            tenant, matterId, RequireText(request.Question, MatterQaService.MaximumQuestionCharacters),
+            MaximumContextBytes: entitlements.QaContextByteLimit), token);
+        await RecordUsageSafelyAsync(context, () => operations.RecordUsageEventAsync(
+            tenant, matterId, PilotUsageEventKind.Qa, answer.Status.ToString().ToLowerInvariant(), 1,
+            cancellationToken: token));
+        PilotOperationsTelemetry.QaDuration.Record(Stopwatch.GetElapsedTime(qaStarted).TotalMilliseconds);
+        PilotOperationsTelemetry.QaOutcomes.Add(1,
+            new TagList { { "outcome", answer.Status == MatterAnswerStatus.Answered ? "answered" : "gated" } });
         var refreshed = await brains.LoadAsync(tenant, matterId, token);
         if (refreshed is null) return Results.NotFound();
         if (await repository.HasActiveJobsAsync(user.Id, tenant, matterId, token))
@@ -337,15 +454,58 @@ public static class CaseMeshApiEndpoints
 
     private static async Task<IResult> ExportAsync(Guid tenantId, Guid matterId, HttpContext context,
         CurrentWebUser users, PostgresWebWorkspaceRepository repository, PostgresProfessionalExportService exports,
-        CancellationToken token)
+        PostgresPilotOperationsRepository operations, IGeneratedArtifactStore generated,
+        TimeProvider clock, CancellationToken token)
     {
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
         if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
-        var package = await exports.GenerateAsync(new ProfessionalExportRequest(tenant, matterId, Guid.NewGuid()), token);
+        await using var matterLock = await repository.AcquireMatterStateLockAsync(tenant, matterId, token);
+        var entitlements = await operations.GetEntitlementsAsync(tenant, token);
+        await operations.ConsumeDailyAsync(tenant, PilotDailyUsageKind.ExportGeneration, cancellationToken: token);
+        var exportStarted = Stopwatch.GetTimestamp();
+        var exportId = Guid.NewGuid();
+        var package = await exports.GenerateAsync(new ProfessionalExportRequest(tenant, matterId, exportId), token);
         if (package is null) return Results.NotFound();
         var bundle = package.Artifacts.Single(item => item.Kind == ProfessionalExportArtifactKind.BundleZip);
-        return Results.File(bundle.Content, "application/zip", bundle.FileName, enableRangeProcessing: false);
+        await using var content = new MemoryStream(bundle.Content, writable: false);
+        var stored = await generated.StoreAsync(new GeneratedArtifactIdentity(tenant, matterId, exportId,
+            (short)ProfessionalExportArtifactKind.BundleZip), content,
+            clock.GetUtcNow().AddHours(entitlements.ExportArtifactRetentionHours), token);
+        await RecordUsageSafelyAsync(context, () => operations.RecordUsageEventAsync(
+            tenant, matterId, PilotUsageEventKind.ExportGenerated, "stored", stored.ByteLength,
+            cancellationToken: token));
+        PilotOperationsTelemetry.ExportDuration.Record(Stopwatch.GetElapsedTime(exportStarted).TotalMilliseconds);
+        PilotOperationsTelemetry.ExportOutcomes.Add(1, new TagList { { "outcome", "stored" } });
+        return Results.Accepted($"/api/workspaces/{tenantId:D}/matters/{matterId:D}/exports/{exportId:D}", new
+        {
+            exportId,
+            fileName = bundle.FileName,
+            expiresAt = stored.ExpiresAt,
+            downloadUrl = $"/api/workspaces/{tenantId:D}/matters/{matterId:D}/exports/{exportId:D}"
+        });
+    }
+
+    private static async Task<IResult> DownloadExportAsync(Guid tenantId, Guid matterId, Guid exportId,
+        HttpContext context, CurrentWebUser users, PostgresWebWorkspaceRepository repository,
+        PostgresProfessionalExportService exports, PostgresPilotOperationsRepository operations,
+        IGeneratedArtifactStore generated, TimeProvider clock, CancellationToken token)
+    {
+        var user = await users.RequireAsync(context.User, token);
+        var tenant = new TenantId(tenantId);
+        if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
+        var run = await exports.GetRunAsync(tenant, matterId, exportId, token);
+        if (run is null) return Results.NotFound();
+        var bundle = run.Run.Artifacts.Single(item => item.Kind == ProfessionalExportArtifactKind.BundleZip);
+        await using var destination = new MemoryStream(checked((int)bundle.ByteLength));
+        await generated.ReadVerifiedAsync(new GeneratedArtifactIdentity(tenant, matterId, exportId,
+            (short)ProfessionalExportArtifactKind.BundleZip), destination, clock.GetUtcNow(), token);
+        await operations.ConsumeDailyAsync(tenant, PilotDailyUsageKind.ExportDownload, cancellationToken: token);
+        await RecordUsageSafelyAsync(context, () => operations.RecordUsageEventAsync(
+            tenant, matterId, PilotUsageEventKind.ExportDownloaded, "verified", bundle.ByteLength,
+            cancellationToken: token));
+        PilotOperationsTelemetry.ExportOutcomes.Add(1, new TagList { { "outcome", "downloaded" } });
+        return Results.File(destination.ToArray(), "application/zip", bundle.FileName, enableRangeProcessing: false);
     }
 
     private static async Task<IResult> ProjectAsync(Guid tenantId, Guid matterId, HttpContext context,
@@ -380,6 +540,41 @@ public static class CaseMeshApiEndpoints
     internal static DateTimeOffset? ResolveCorrectedEventTime(
         DateTimeOffset? requestedEventTime,
         DateTimeOffset? existingEventTime) => requestedEventTime ?? existingEventTime;
+
+    private static async Task<bool> ReadinessAsync(Func<Task<bool>> check)
+    {
+        try { return await check(); }
+        catch { return false; }
+    }
+
+    private static async Task RecordUsageSafelyAsync(HttpContext context, Func<Task> record)
+    {
+        try { await record(); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            context.RequestServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("CaseMesh.Api.PilotUsage")
+                .LogWarning("Typed pilot usage metadata could not be recorded: {ExceptionType}.",
+                    exception.GetType().Name);
+            PilotOperationsTelemetry.ReconciliationOutcomes.Add(1,
+                new TagList { { "outcome", "usage-record-failed" } });
+        }
+    }
+
+    private static async Task ReleaseReservationsSafelyAsync(HttpContext context,
+        PostgresPilotOperationsRepository operations, TenantId tenantId, IEnumerable<Guid> reservationIds)
+    {
+        try { await operations.ReleaseReservationsAsync(tenantId, reservationIds, CancellationToken.None); }
+        catch (Exception exception)
+        {
+            context.RequestServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("CaseMesh.Api.PilotQuota")
+                .LogWarning("Pilot reservation cleanup will be recovered by expiry: {ExceptionType}.",
+                    exception.GetType().Name);
+            PilotOperationsTelemetry.ReconciliationOutcomes.Add(1,
+                new TagList { { "outcome", "reservation-cleanup-failed" } });
+        }
+    }
 }
 
 public sealed record TestSignInRequest(string Subject, string DisplayName);
