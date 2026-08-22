@@ -130,8 +130,8 @@ public sealed class MeetingPreparationProjectionTests
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
         var chronology = json.RootElement.GetProperty("chronology").EnumerateArray().ToArray();
         Assert.Equal(12, chronology.Length);
-        var dated = Assert.Single(chronology.Where(item =>
-            item.GetProperty("Label").GetString() == "Dated extracted meeting"));
+        var dated = Assert.Single(chronology, item =>
+            item.GetProperty("Label").GetString() == "Dated extracted meeting");
         Assert.Contains(firstSpan.Id,
             dated.GetProperty("sourceSpanIds").EnumerateArray().Select(item => item.GetGuid()));
         Assert.All(chronology, item => Assert.True(item.GetProperty("sourceSpanIds").GetArrayLength() > 0));
