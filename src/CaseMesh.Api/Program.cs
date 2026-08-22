@@ -19,7 +19,8 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(_ => new PostgresWebWorkspaceRepository(options.PostgresConnectionString));
 builder.Services.AddSingleton(_ => new PostgresMatterBrainStore(options.PostgresConnectionString));
 builder.Services.AddSingleton(_ => new PostgresMatterStore(options.PostgresConnectionString));
-builder.Services.AddSingleton(_ => new PostgresMatterEvidenceRetriever(options.PostgresConnectionString));
+builder.Services.AddSingleton(provider => new PostgresMatterEvidenceRetriever(
+    provider.GetRequiredService<PostgresMatterStore>()));
 builder.Services.AddSingleton<IMatterEvidenceRetriever>(provider =>
     provider.GetRequiredService<PostgresMatterEvidenceRetriever>());
 builder.Services.AddSingleton<IMatterReasoningProvider, DeterministicMatterReasoningProvider>();

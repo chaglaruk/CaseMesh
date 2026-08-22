@@ -11,6 +11,7 @@ permissions:
 jobs:
   qa-evals:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,6 +25,12 @@ jobs:
         run: dotnet build ./tests/CaseMesh.Qa.Tests/CaseMesh.Qa.Tests.csproj -c Release --no-restore
       - name: Run citation, safety, and synthetic workplace evals
         run: dotnet test ./tests/CaseMesh.Qa.Tests/CaseMesh.Qa.Tests.csproj -c Release --no-build --logger "trx;LogFileName=qa-eval-results.trx"
+      - name: Upload deterministic Q&A eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-eval-results
+          path: '**/qa-eval-results.trx'
 
   windows-build-test:
     runs-on: windows-latest

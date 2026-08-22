@@ -6,7 +6,7 @@ using Npgsql;
 
 namespace CaseMesh.Persistence.Postgres;
 
-public sealed partial class PostgresMatterEvidenceRetriever : IMatterEvidenceRetriever, IAsyncDisposable
+public sealed partial class PostgresMatterEvidenceRetriever : IMatterEvidenceRetriever
 {
     private static readonly HashSet<string> StopWords = new(StringComparer.Ordinal)
     {
@@ -17,7 +17,8 @@ public sealed partial class PostgresMatterEvidenceRetriever : IMatterEvidenceRet
 
     private readonly PostgresMatterStore _store;
 
-    public PostgresMatterEvidenceRetriever(string connectionString) => _store = new PostgresMatterStore(connectionString);
+    public PostgresMatterEvidenceRetriever(PostgresMatterStore store) =>
+        _store = store ?? throw new ArgumentNullException(nameof(store));
 
     public Task<IReadOnlyList<MatterRetrievalResult>> RetrieveAsync(
         MatterRetrievalRequest request,
@@ -46,6 +47,8 @@ public sealed partial class PostgresMatterEvidenceRetriever : IMatterEvidenceRet
         ArgumentNullException.ThrowIfNull(results);
         if (tenantId.Value == Guid.Empty || matterId == Guid.Empty)
             throw new ArgumentException("A non-empty tenant and Matter identity is required.");
+        if (results.Count == 0)
+            return Task.FromResult(false);
         return _store.InTenantTransactionAsync(tenantId, async (connection, transaction) =>
         {
             foreach (var result in results)
@@ -76,6 +79,8 @@ public sealed partial class PostgresMatterEvidenceRetriever : IMatterEvidenceRet
                                 WHERE l.tenant_id=s.tenant_id AND l.matter_id=s.matter_id
                                   AND l.event_id=$8 AND a.source_span_id=s.source_span_id
                                   AND $10 = (e.superseded_by_event_id IS NOT NULL OR e.event_status IN (3,4) OR
+                                    a.superseded_by_assertion_id IS NOT NULL OR a.verification_state=2 OR
+                                    a.dispute_state=4 OR
                                     (s.span_set_id IS NOT NULL AND
                                      s.span_set_id IS DISTINCT FROM istate.current_span_set_id)))
                             WHEN 6 THEN EXISTS (SELECT 1 FROM casemesh.employment_term_assertions link
@@ -113,8 +118,6 @@ public sealed partial class PostgresMatterEvidenceRetriever : IMatterEvidenceRet
             return true;
         }, cancellationToken);
     }
-
-    public async ValueTask DisposeAsync() => await _store.DisposeAsync();
 
     private static async Task<IReadOnlyList<MatterRetrievalResult>> ReadAsync(
         NpgsqlConnection connection,
@@ -187,9 +190,12 @@ public sealed partial class PostgresMatterEvidenceRetriever : IMatterEvidenceRet
             UNION ALL
             SELECT 2::smallint, e.event_id, s.source_span_id, dv.document_version_id,
                    dv.original_object_id, dv.content_sha256, e.label, s.extracted_text, a.asserted_by,
-                   CASE WHEN e.event_status = 2 THEN 'Disputed' WHEN a.dispute_state = 3 THEN 'Contradicted' ELSE NULL END,
+                   CASE WHEN e.event_status = 2 THEN 'Disputed' ELSE CASE a.dispute_state
+                     WHEN 2 THEN 'Disputed' WHEN 3 THEN 'Contradicted' WHEN 4 THEN 'Superseded'
+                     WHEN 5 THEN 'Incomplete' WHEN 6 THEN 'Unverified' ELSE NULL END END,
                    (e.superseded_by_event_id IS NOT NULL OR e.event_status IN (3, 4) OR
-                    (s.span_set_id IS NOT NULL AND s.span_set_id IS DISTINCT FROM istate.current_span_set_id)),
+                     a.superseded_by_assertion_id IS NOT NULL OR a.verification_state = 2 OR a.dispute_state = 4 OR
+                     (s.span_set_id IS NOT NULL AND s.span_set_id IS DISTINCT FROM istate.current_span_set_id)),
                    GREATEST(ts_rank_cd(to_tsvector('simple', e.event_type || ' ' || e.label), q.value),
                             ts_rank_cd(to_tsvector('simple', s.extracted_text), q.value)) + 0.05
             FROM casemesh.matter_events e

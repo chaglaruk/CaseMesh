@@ -38,6 +38,21 @@ public sealed class MatterQaTests
     }
 
     [Fact]
+    public async Task Analysis_only_output_cannot_be_reported_as_an_evidence_answer()
+    {
+        var service = new MatterQaService(new FixedRetriever([Result(1, "Source-backed record", "Employer")]),
+            new FixedReasoner(new MatterReasoningOutput("Synthetic",
+                [new("Inference without a documentary claim", MatterClaimKind.Analysis, [])], [])));
+
+        var answer = await service.AskAsync(Request("source record"));
+
+        Assert.Equal(MatterAnswerStatus.InsufficientEvidence, answer.Status);
+        Assert.Equal("no-verified-evidence-claims", answer.FailureCode);
+        Assert.Empty(answer.Claims);
+        Assert.Empty(answer.Citations);
+    }
+
+    [Fact]
     public async Task Analysis_is_separate_and_cannot_receive_a_documentary_citation()
     {
         var result = Result(1, "Source-backed record", "Third party");
@@ -162,6 +177,31 @@ public sealed class MatterQaTests
     }
 
     [Fact]
+    public async Task Reasoning_provider_timeout_returns_bounded_insufficient_evidence()
+    {
+        var answer = await new MatterQaService(
+                new FixedRetriever([Result(1, "Private source text", "Employer")]),
+                new CancellationAwareReasoner(), TimeSpan.FromMilliseconds(20))
+            .AskAsync(Request("source record"));
+
+        Assert.Equal(MatterAnswerStatus.InsufficientEvidence, answer.Status);
+        Assert.Equal("reasoning-provider-failure", answer.FailureCode);
+    }
+
+    [Fact]
+    public void Evidence_bearing_records_do_not_stringify_evidence_text()
+    {
+        var result = Result(1, "Private label", "Employer").WithContext("private evidence body");
+        var context = new MatterReasoningContext(result.Id, result.Kind, result.Label, result.ContextText,
+            result.Attribution, result.DisputeState, result.IsHistorical);
+
+        Assert.DoesNotContain(result.ContextText, result.ToString(), StringComparison.Ordinal);
+        Assert.Contains(result.SourceSpanId.ToString(), result.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(context.EvidenceText, context.ToString(), StringComparison.Ordinal);
+        Assert.Contains(context.RetrievalResultId.ToString(), context.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Stable_result_identity_is_tenant_scoped()
     {
         var canonical = Id(20);
@@ -173,6 +213,45 @@ public sealed class MatterQaTests
 
         Assert.Equal(first, retry);
         Assert.NotEqual(first, otherTenant);
+        Assert.Equal('8', first.ToString("D")[14]);
+    }
+
+    [Fact]
+    public async Task Deterministic_provider_prioritizes_disputed_context_and_warns_when_truncated()
+    {
+        var results = Enumerable.Range(1, 7)
+            .Select(index => Result(index, $"Current record {index}", "Record"))
+            .ToArray();
+        results[^1] = Result(7, "Disputed record must remain visible", "Employer", "Disputed");
+
+        var answer = await new MatterQaService(new FixedRetriever(results),
+            new DeterministicMatterReasoningProvider()).AskAsync(Request("records"));
+
+        Assert.Equal(MatterAnswerStatus.Answered, answer.Status);
+        Assert.Equal(6, answer.Claims.Count);
+        Assert.Contains(answer.Claims, claim => claim.Text.Contains("Disputed record", StringComparison.Ordinal));
+        Assert.Contains(answer.Warnings, warning => warning.Contains("6 of 7", StringComparison.Ordinal));
+        Assert.Contains(answer.Warnings, warning => warning.Contains("disputed", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Evaluation_scopes_each_claim_to_its_originating_case_citations()
+    {
+        var firstId = Id(800);
+        var secondId = Id(801);
+        var first = EvaluationAnswer(firstId, citedIds: []);
+        var second = EvaluationAnswer(secondId, citedIds: [firstId, secondId]);
+
+        var report = MatterQaEvaluation.Evaluate(
+        [
+            new MatterQaEvaluationCase("first", first, false, []),
+            new MatterQaEvaluationCase("second", second, false, [])
+        ], tenantIsolationPassed: true);
+
+        Assert.Equal(2, report.SourceBackedClaims);
+        Assert.Equal(1, report.ValidSourceBackedClaims);
+        Assert.Equal(50m, report.CitationValidityPercent);
+        Assert.False(report.Passed);
     }
 
     [Fact]
@@ -244,14 +323,35 @@ public sealed class MatterQaTests
             reports.Add(new MatterQaEvaluationCase(scenario.Name, answer, scenario.Insufficient, scenario.RequiredTerms));
         }
 
-        var report = MatterQaEvaluation.Evaluate(reports, tenantIsolationPassed: true);
+        var foreignTenant = new TenantId(Id(999));
+        var tenantIsolationPassed = false;
+        try
+        {
+            await new MatterQaService(new FixedRetriever([Result(90, "Tenant A record", "Employer")]),
+                    new DeterministicMatterReasoningProvider())
+                .AskAsync(Request("tenant record") with { TenantId = foreignTenant });
+        }
+        catch (InvalidOperationException)
+        {
+            tenantIsolationPassed = true;
+        }
+        var report = MatterQaEvaluation.Evaluate(reports, tenantIsolationPassed);
 
         Assert.True(report.Passed, report.ToDeterministicJson());
         Assert.Equal(10, report.Cases);
         Assert.Equal(100m, report.CitationValidityPercent);
         Assert.Equal(0, report.ProhibitedOutputCount);
-        Assert.Equal(report.ToDeterministicJson(), MatterQaEvaluation.Evaluate(reports, true).ToDeterministicJson());
+        Assert.True(report.TenantIsolationPassed);
+        Assert.Equal(report.ToDeterministicJson(), MatterQaEvaluation.Evaluate(reports, tenantIsolationPassed).ToDeterministicJson());
     }
+
+    private static MatterQaAnswer EvaluationAnswer(Guid claimCitationId, IReadOnlyList<Guid> citedIds) => new(
+        MatterAnswerStatus.Answered,
+        "Synthetic source-backed answer.",
+        [new VerifiedMatterClaim("Synthetic claim", MatterClaimKind.Evidence, [claimCitationId])],
+        citedIds.Select(id => new VerifiedMatterCitation(id, RetrievalMaterialKind.Assertion, Id(810), Id(811),
+            Id(812), Id(813), new string('A', 64), "Synthetic", "Employer", null, false)).ToArray(),
+        [], null, new MatterReasoningProviderDescriptor("synthetic", "evaluation", "v1"));
 
     private static EvalScenario Scenario(string name, IReadOnlyList<MatterRetrievalResult> results,
         bool insufficient, params string[] required) => new(name, results, insufficient, required);
@@ -312,6 +412,17 @@ public sealed class MatterQaTests
         public MatterReasoningProviderDescriptor Descriptor { get; } = new("synthetic", "throwing", "v1");
         public Task<MatterReasoningOutput> AnswerAsync(MatterReasoningRequest request,
             CancellationToken cancellationToken = default) => throw new TimeoutException("Synthetic provider timeout");
+    }
+
+    private sealed class CancellationAwareReasoner : IMatterReasoningProvider
+    {
+        public MatterReasoningProviderDescriptor Descriptor { get; } = new("synthetic", "cancellation-aware", "v1");
+        public async Task<MatterReasoningOutput> AnswerAsync(MatterReasoningRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("Unreachable synthetic provider state.");
+        }
     }
 }
 

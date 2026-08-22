@@ -36,6 +36,16 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   await expect(page.getByLabel("Source citation detail")).toContainText("absence days");
   await page.getByRole("button",{name:"New thread"}).click();
   await expect(page.getByLabel("One Matter-scoped factual question")).toHaveValue("");
+  await expect(page.getByLabel("What your evidence shows")).toHaveCount(0);
+  await expect(page.getByLabel("Source citation detail")).toContainText("Select a citation");
+  await page.route("**/questions/ask",async route=>{await new Promise(resolve=>setTimeout(resolve,500));await route.continue().catch(()=>undefined);});
+  await page.getByLabel("One Matter-scoped factual question").fill("What does the evidence say about absence days?");
+  await page.getByRole("button",{name:"Ask your evidence"}).click();
+  await page.getByRole("button",{name:"New thread"}).click();
+  await page.waitForTimeout(750);
+  await expect(page.getByLabel("What your evidence shows")).toHaveCount(0);
+  await expect(page.getByLabel("Source citation detail")).toContainText("Select a citation");
+  await page.unroute("**/questions/ask");
   await page.getByRole("button",{name:"Overview"}).click();
   const accessibility=await new AxeBuilder({page}).analyze();
   expect(accessibility.violations).toEqual([]);

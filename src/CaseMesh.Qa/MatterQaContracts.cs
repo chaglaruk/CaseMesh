@@ -49,7 +49,11 @@ public sealed record MatterRetrievalResult(
     string Attribution,
     string? DisputeState,
     bool IsHistorical,
-    decimal Score);
+    decimal Score)
+{
+    public override string ToString() =>
+        $"{nameof(MatterRetrievalResult)} {{ Id = {Id}, Kind = {Kind}, SourceSpanId = {SourceSpanId} }}";
+}
 
 public interface IMatterEvidenceRetriever
 {
@@ -73,7 +77,11 @@ public sealed record MatterReasoningContext(
     string EvidenceText,
     string Attribution,
     string? DisputeState,
-    bool IsHistorical);
+    bool IsHistorical)
+{
+    public override string ToString() =>
+        $"{nameof(MatterReasoningContext)} {{ RetrievalResultId = {RetrievalResultId}, Kind = {Kind} }}";
+}
 
 public sealed record MatterReasoningRequest(
     string Question,

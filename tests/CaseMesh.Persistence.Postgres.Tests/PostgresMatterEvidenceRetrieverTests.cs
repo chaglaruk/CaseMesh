@@ -15,7 +15,8 @@ public sealed class PostgresMatterEvidenceRetrieverTests(PostgresFixture databas
         var tenant = new TenantId(SyntheticPersistedMatterFactory.Id(901, 1));
         var matterId = SyntheticPersistedMatterFactory.Id(901, 2);
         var persisted = await SaveAsync(tenant, matterId, 901);
-        await using var retriever = new PostgresMatterEvidenceRetriever(database.AppConnectionString);
+        await using var retrievalStore = new PostgresMatterStore(database.AppConnectionString);
+        var retriever = new PostgresMatterEvidenceRetriever(retrievalStore);
 
         var results = await retriever.RetrieveAsync(new MatterRetrievalRequest(
             tenant, matterId, "Who says 12 sickness days and what conflicts with it?"));
@@ -43,7 +44,8 @@ public sealed class PostgresMatterEvidenceRetrieverTests(PostgresFixture databas
         var tenantB = new TenantId(SyntheticPersistedMatterFactory.Id(903, 1));
         var first = await SaveAsync(tenantA, matterId, 902);
         var second = await SaveAsync(tenantB, matterId, 902);
-        await using var retriever = new PostgresMatterEvidenceRetriever(database.AppConnectionString);
+        await using var retrievalStore = new PostgresMatterStore(database.AppConnectionString);
+        var retriever = new PostgresMatterEvidenceRetriever(retrievalStore);
 
         var a = await retriever.RetrieveAsync(new MatterRetrievalRequest(tenantA, matterId, "sickness days"));
         var b = await retriever.RetrieveAsync(new MatterRetrievalRequest(tenantB, matterId, "sickness days"));
@@ -58,6 +60,7 @@ public sealed class PostgresMatterEvidenceRetrieverTests(PostgresFixture databas
         Assert.Empty(a.Select(item => item.Id).Intersect(b.Select(item => item.Id)));
         Assert.True(await retriever.VerifyCanonicalAsync(tenantA, matterId, a));
         Assert.True(await retriever.VerifyCanonicalAsync(tenantB, matterId, b));
+        Assert.False(await retriever.VerifyCanonicalAsync(tenantA, matterId, []));
     }
 
     [PostgresFact]
@@ -82,7 +85,8 @@ public sealed class PostgresMatterEvidenceRetrieverTests(PostgresFixture databas
         var secondId = SyntheticPersistedMatterFactory.Id(905, 3);
         await SaveAsync(tenant, firstId, 905);
         var second = await SaveAsync(tenant, secondId, 906, createTenant: false);
-        await using var retriever = new PostgresMatterEvidenceRetriever(database.AppConnectionString);
+        await using var retrievalStore = new PostgresMatterStore(database.AppConnectionString);
+        var retriever = new PostgresMatterEvidenceRetriever(retrievalStore);
         var request = new MatterRetrievalRequest(tenant, firstId, "adjustment response implementation");
         var before = await retriever.RetrieveAsync(request);
         await using (var store = new PostgresMatterStore(database.AppConnectionString))
@@ -99,7 +103,8 @@ public sealed class PostgresMatterEvidenceRetrieverTests(PostgresFixture databas
         var tenant = new TenantId(SyntheticPersistedMatterFactory.Id(907, 1));
         var matterId = SyntheticPersistedMatterFactory.Id(907, 2);
         await SaveAsync(tenant, matterId, 907);
-        await using var retriever = new PostgresMatterEvidenceRetriever(database.AppConnectionString);
+        await using var retrievalStore = new PostgresMatterStore(database.AppConnectionString);
+        var retriever = new PostgresMatterEvidenceRetriever(retrievalStore);
 
         var results = await retriever.RetrieveAsync(new MatterRetrievalRequest(
             tenant, matterId, "synthetic employer adjustment record", MaximumResults: 3, MaximumContextBytes: 2_048));
@@ -122,7 +127,8 @@ public sealed class PostgresMatterEvidenceRetrieverTests(PostgresFixture databas
         var tenant = new TenantId(SyntheticPersistedMatterFactory.Id(908, 1));
         var matterId = SyntheticPersistedMatterFactory.Id(908, 2);
         await SaveAsync(tenant, matterId, 908);
-        await using var retriever = new PostgresMatterEvidenceRetriever(database.AppConnectionString);
+        await using var retrievalStore = new PostgresMatterStore(database.AppConnectionString);
+        var retriever = new PostgresMatterEvidenceRetriever(retrievalStore);
         var questions = new[]
         {
             "sickness day count", "employment working hours", "adjustment request response implementation",
@@ -143,7 +149,8 @@ public sealed class PostgresMatterEvidenceRetrieverTests(PostgresFixture databas
         var unrelatedMatterId = SyntheticPersistedMatterFactory.Id(909, 3);
         var changed = await SaveAsync(tenant, changedMatterId, 909);
         await SaveAsync(tenant, unrelatedMatterId, 910, createTenant: false);
-        await using var retriever = new PostgresMatterEvidenceRetriever(database.AppConnectionString);
+        await using var retrievalStore = new PostgresMatterStore(database.AppConnectionString);
+        var retriever = new PostgresMatterEvidenceRetriever(retrievalStore);
         var changedRequest = new MatterRetrievalRequest(tenant, changedMatterId, "zebracorn marker");
         var unrelatedRequest = new MatterRetrievalRequest(tenant, unrelatedMatterId, "zebracorn marker");
         Assert.Empty(await retriever.RetrieveAsync(changedRequest));
@@ -167,6 +174,38 @@ public sealed class PostgresMatterEvidenceRetrieverTests(PostgresFixture databas
     }
 
     [PostgresFact]
+    public async Task Current_event_backed_by_a_superseded_assertion_remains_historical_and_labelled()
+    {
+        var tenant = new TenantId(SyntheticPersistedMatterFactory.Id(913, 1));
+        var matterId = SyntheticPersistedMatterFactory.Id(913, 2);
+        var persisted = SyntheticPersistedMatterFactory.Create(tenant, matterId, 913);
+        var backingAssertion = persisted.Evidence.Assertions.Single(item =>
+            item.Predicate == "grievance-meeting-date" && item.Value == "12 March");
+        persisted.Evidence.CorrectAssertion(backingAssertion.Id,
+            SyntheticPersistedMatterFactory.Id(913, 500), "13 March",
+            new DateTimeOffset(2026, 3, 13, 10, 0, 0, TimeSpan.Zero),
+            SyntheticPersistedMatterFactory.Id(913, 501), "synthetic-reviewer",
+            SyntheticPersistedMatterFactory.RecordedAt.AddHours(2));
+        await using (var persistenceStore = new PostgresMatterStore(database.AppConnectionString))
+        {
+            await persistenceStore.CreateTenantAsync(tenant, "Synthetic QA tenant 913",
+                SyntheticPersistedMatterFactory.RecordedAt);
+            await persistenceStore.SaveAsync(persisted.Evidence, persisted.Workplace);
+        }
+        await using var retrievalStore = new PostgresMatterStore(database.AppConnectionString);
+        var retriever = new PostgresMatterEvidenceRetriever(retrievalStore);
+
+        var results = await retriever.RetrieveAsync(new MatterRetrievalRequest(
+            tenant, matterId, "grievance meeting March"));
+        var currentEvent = Assert.Single(results, item => item.Kind == RetrievalMaterialKind.Event &&
+            item.Label.Contains("13 March", StringComparison.Ordinal));
+
+        Assert.True(currentEvent.IsHistorical);
+        Assert.Equal("Superseded", currentEvent.DisputeState);
+        Assert.True(await retriever.VerifyCanonicalAsync(tenant, matterId, [currentEvent]));
+    }
+
+    [PostgresFact]
     public async Task Reprocessing_marks_old_span_results_historical_and_invalidates_an_in_flight_current_result()
     {
         var tenant = new TenantId(SyntheticPersistedMatterFactory.Id(911, 1));
@@ -182,7 +221,8 @@ public sealed class PostgresMatterEvidenceRetrieverTests(PostgresFixture databas
         await ingestion.SaveCompletedAsync(first, EvidenceMediaType.PlainText,
             new SpanSetProvenance("synthetic-parser", "1", null, null),
             [Region(SyntheticPersistedMatterFactory.Id(911, 20), firstText)], CancellationToken.None);
-        await using var retriever = new PostgresMatterEvidenceRetriever(database.AppConnectionString);
+        await using var retrievalStore = new PostgresMatterStore(database.AppConnectionString);
+        var retriever = new PostgresMatterEvidenceRetriever(retrievalStore);
         var original = Assert.Single(await retriever.RetrieveAsync(
             new MatterRetrievalRequest(tenant, matterId, "staleparser")), item => item.Kind == RetrievalMaterialKind.SourceSpan);
         Assert.False(original.IsHistorical);

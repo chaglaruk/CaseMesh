@@ -35,11 +35,14 @@ public static class MatterQaEvaluation
         bool tenantIsolationPassed)
     {
         ArgumentNullException.ThrowIfNull(cases);
-        var sourceClaims = cases.SelectMany(item => item.Answer.Claims)
-            .Where(item => item.Kind == MatterClaimKind.Evidence).ToArray();
-        var validClaims = sourceClaims.Count(item => item.CitationResultIds.Count > 0 &&
-            item.CitationResultIds.All(id => cases.SelectMany(entry => entry.Answer.Citations)
-                .Any(citation => citation.RetrievalResultId == id)));
+        var sourceClaims = cases.SelectMany(entry =>
+        {
+            var citedIds = entry.Answer.Citations.Select(citation => citation.RetrievalResultId).ToHashSet();
+            return entry.Answer.Claims.Where(claim => claim.Kind == MatterClaimKind.Evidence)
+                .Select(claim => (Claim: claim, CitedIds: citedIds));
+        }).ToArray();
+        var validClaims = sourceClaims.Count(item => item.Claim.CitationResultIds.Count > 0 &&
+            item.Claim.CitationResultIds.All(item.CitedIds.Contains));
         var prohibited = cases.Sum(item => ProhibitedTerms.Count(term =>
             (item.Answer.Summary + " " + string.Join(' ', item.Answer.Claims.Select(claim => claim.Text)))
             .Contains(term, StringComparison.OrdinalIgnoreCase)));
