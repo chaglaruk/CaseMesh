@@ -302,12 +302,15 @@ jobs:
           cache: false
       - name: Migrate real PostgreSQL and provision restricted runtime role
         run: |
-          dotnet run --project ./tools/CaseMesh.DbMigrate/CaseMesh.DbMigrate.csproj -c Release
+          dotnet run --project ./tools/CaseMesh.DbMigrate/CaseMesh.DbMigrate.csproj -c Release -- --through 0001
           PGPASSWORD=postgres psql -h localhost -U postgres -d casemesh_admin -v ON_ERROR_STOP=1 <<'SQL'
           CREATE ROLE casemesh_web LOGIN PASSWORD 'synthetic-web-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
           GRANT CONNECT ON DATABASE casemesh_admin TO casemesh_web;
           GRANT USAGE ON SCHEMA casemesh TO casemesh_web;
           GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA casemesh TO casemesh_web;
+          SQL
+          dotnet run --project ./tools/CaseMesh.DbMigrate/CaseMesh.DbMigrate.csproj -c Release
+          PGPASSWORD=postgres psql -h localhost -U postgres -d casemesh_admin -v ON_ERROR_STOP=1 <<'SQL'
           REVOKE INSERT, UPDATE, DELETE ON TABLE casemesh.tenant_memberships FROM casemesh_web;
           GRANT EXECUTE ON FUNCTION
             casemesh.create_owned_workspace(uuid, uuid, text, timestamptz),

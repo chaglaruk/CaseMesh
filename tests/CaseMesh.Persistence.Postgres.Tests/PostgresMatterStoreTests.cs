@@ -24,12 +24,18 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
     [PostgresFact]
     public async Task Migration_ledger_is_empty_before_zero_to_current_migration()
     {
-        var databaseName = $"casemesh_unmigrated_{Guid.NewGuid():N}";
+        var suffix = Guid.NewGuid().ToString("N");
+        var databaseName = $"casemesh_unmigrated_{suffix}";
+        var roleName = $"casemesh_unmigrated_app_{suffix}";
         var rootBuilder = new NpgsqlConnectionStringBuilder(database.AdminRootConnectionString);
         await using (var root = new NpgsqlConnection(rootBuilder.ConnectionString))
         {
             await root.OpenAsync();
-            await using var create = new NpgsqlCommand($"CREATE DATABASE \"{databaseName}\";", root);
+            await using var create = new NpgsqlCommand($"""
+                CREATE DATABASE "{databaseName}";
+                CREATE ROLE "{roleName}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+                GRANT CONNECT ON DATABASE "{databaseName}" TO "{roleName}";
+                """, root);
             await create.ExecuteNonQueryAsync();
         }
 
@@ -38,6 +44,15 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             var emptyBuilder = new NpgsqlConnectionStringBuilder(rootBuilder.ConnectionString) { Database = databaseName };
             var migrator = new PostgresMigrator();
             Assert.Empty(await migrator.GetAppliedMigrationsAsync(emptyBuilder.ConnectionString));
+            await migrator.MigrateThroughAsync(emptyBuilder.ConnectionString, "0001");
+            await using (var admin = new NpgsqlConnection(emptyBuilder.ConnectionString))
+            {
+                await admin.OpenAsync();
+                await new NpgsqlCommand($"""
+                    GRANT USAGE ON SCHEMA casemesh TO "{roleName}";
+                    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA casemesh TO "{roleName}";
+                    """, admin).ExecuteNonQueryAsync();
+            }
             var applied = await migrator.MigrateAsync(emptyBuilder.ConnectionString);
             Assert.Equal(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"], applied.Select(migration => migration.Version));
         }
@@ -47,7 +62,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
             await using var root = new NpgsqlConnection(rootBuilder.ConnectionString);
             await root.OpenAsync();
             await using var drop = new NpgsqlCommand(
-                $"DROP DATABASE IF EXISTS \"{databaseName}\" WITH (FORCE);",
+                $"DROP DATABASE IF EXISTS \"{databaseName}\" WITH (FORCE); DROP ROLE IF EXISTS \"{roleName}\";",
                 root);
             await drop.ExecuteNonQueryAsync();
         }

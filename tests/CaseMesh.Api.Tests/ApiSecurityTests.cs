@@ -30,12 +30,14 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
     }
 
     [Fact]
-    public async Task Readiness_failure_exposes_only_bounded_component_statuses()
+    public async Task Readiness_failure_exposes_only_the_aggregate_status()
     {
         using var response = await _factory.CreateClient().GetAsync("/health/ready");
         var body = await response.Content.ReadAsStringAsync();
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Contains("not-ready", body);
+        Assert.DoesNotContain("components", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("objectStorage", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Password", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("unavailable", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("127.0.0.1", body, StringComparison.Ordinal);
@@ -61,7 +63,7 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
         });
         listener.Start();
         var context = new DefaultHttpContext();
-        context.Request.Method = "POST";
+        context.Request.Method = sensitive;
         context.Request.Path = $"/api/workspaces/{sensitive}/questions/ask";
         context.Response.Body = new MemoryStream();
         context.SetEndpoint(new RouteEndpoint(_ => Task.CompletedTask,
@@ -71,7 +73,44 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
         await new PilotTelemetryMiddleware(_ => Task.CompletedTask).InvokeAsync(context);
 
         Assert.Contains(observed, value => value.Contains("http.route=/api/workspaces/{tenantId}", StringComparison.Ordinal));
+        Assert.Contains(observed, value => value == "http.request.method=_OTHER");
         Assert.DoesNotContain(observed, value => value.Contains(sensitive, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Telemetry_observes_the_exception_handlers_final_status_class()
+    {
+        var observed = new List<string>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meter) =>
+        {
+            if (instrument.Meter.Name == PilotOperationsTelemetry.MeterName) meter.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, _, tags, _) =>
+        {
+            if (instrument.Name != "casemesh.api.requests") return;
+            foreach (var tag in tags) observed.Add($"{tag.Key}={tag.Value}");
+        });
+        listener.Start();
+
+        using var response = await _factory.CreateClient().PostAsJsonAsync("/api/auth/test-sign-in",
+            new TestSignInRequest("", "Synthetic User"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("http.response.status_class=4xx", observed);
+    }
+
+    [Fact]
+    public async Task Unauthenticated_requests_do_not_consume_a_tenants_QA_rate_limiter()
+    {
+        using var client = _factory.CreateClient();
+        var path = $"/api/workspaces/{Guid.NewGuid():D}/matters/{Guid.NewGuid():D}/questions/ask";
+
+        for (var attempt = 0; attempt < 13; attempt++)
+        {
+            using var response = await client.PostAsJsonAsync(path, new { question = "Synthetic question" });
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        }
     }
 
     [Fact]

@@ -33,6 +33,41 @@ public sealed class GeneratedArtifactStorageServiceTests
         Assert.Null(fixture.Metadata.Storage);
     }
 
+    [Fact]
+    public async Task Readiness_proves_create_and_delete_permissions_without_leaving_probe_bytes()
+    {
+        var fixture = new ServiceFixture();
+
+        Assert.True(await fixture.Service.CheckReadinessAsync());
+
+        Assert.Equal(1, fixture.Backend.CreateAttempts);
+        Assert.False(fixture.Backend.Exists);
+    }
+
+    [Fact]
+    public async Task Readiness_fails_closed_when_create_or_delete_permission_is_missing()
+    {
+        var createDenied = new ServiceFixture();
+        createDenied.Backend.AllowCreate = false;
+        Assert.False(await createDenied.Service.CheckReadinessAsync());
+
+        var deleteDenied = new ServiceFixture();
+        deleteDenied.Backend.AllowDelete = false;
+        Assert.False(await deleteDenied.Service.CheckReadinessAsync());
+        Assert.Equal(0, deleteDenied.Backend.CreateAttempts);
+    }
+
+    [Fact]
+    public async Task Readiness_preserves_cancellation()
+    {
+        var fixture = new ServiceFixture();
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            fixture.Service.CheckReadinessAsync(cancelled.Token));
+    }
+
     private sealed class ServiceFixture
     {
         internal DateTimeOffset Now { get; } = new(2026, 8, 22, 10, 0, 0, TimeSpan.Zero);
@@ -61,12 +96,15 @@ public sealed class GeneratedArtifactStorageServiceTests
         internal int CreateAttempts { get; private set; }
         internal bool Exists => _content is not null;
         internal bool FailCreateAfterWrite { get; set; }
+        internal bool AllowCreate { get; set; } = true;
+        internal bool AllowDelete { get; set; } = true;
 
         public StorageAddress AddressFor(OriginalObjectIdentity identity) => throw new NotSupportedException();
         public async Task<ObjectCreateResult> CreateIfAbsentAsync(StorageAddress address, Stream content,
             long byteLength, CancellationToken cancellationToken)
         {
             CreateAttempts++;
+            if (!AllowCreate) throw new UnauthorizedAccessException("Synthetic create permission denied.");
             if (_content is not null) return new ObjectCreateResult(false);
             await using var copy = new MemoryStream();
             await content.CopyToAsync(copy, cancellationToken);
@@ -80,6 +118,7 @@ public sealed class GeneratedArtifactStorageServiceTests
                 : Task.FromResult<Stream>(new MemoryStream(_content, writable: false));
         public Task DeleteIfExistsAsync(StorageAddress address, CancellationToken cancellationToken)
         {
+            if (!AllowDelete) throw new UnauthorizedAccessException("Synthetic delete permission denied.");
             _content = null;
             return Task.CompletedTask;
         }

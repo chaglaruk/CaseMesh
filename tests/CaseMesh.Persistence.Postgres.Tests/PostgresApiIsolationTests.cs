@@ -10,6 +10,32 @@ namespace CaseMesh.Persistence.Postgres.Tests;
 public sealed class PostgresApiIsolationTests(PostgresFixture database)
 {
     [PostgresFact]
+    public async Task Invalid_or_missing_resources_do_not_consume_daily_QA_or_export_allowances()
+    {
+        using var factory = new PostgresApiFactory(database.AppConnectionString);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        { AllowAutoRedirect = false, HandleCookies = false });
+        await SignInAsync(client, $"quota-{Guid.NewGuid():N}");
+        var csrf = await AttachAntiforgeryAsync(client);
+        var tenant = await CreateWorkspaceAsync(client, csrf, "Synthetic quota workspace");
+        var matter = await CreateMatterAsync(client, csrf, tenant, "Synthetic quota Matter");
+
+        using (var invalidQuestion = await SendJsonAsync(client, csrf, HttpMethod.Post,
+                   $"/api/workspaces/{tenant:D}/matters/{matter:D}/questions/ask", new { question = " " }))
+            Assert.Equal(HttpStatusCode.BadRequest, invalidQuestion.StatusCode);
+        using (var missingExport = await SendJsonAsync(client, csrf, HttpMethod.Post,
+                   $"/api/workspaces/{tenant:D}/matters/{Guid.NewGuid():D}/exports", new { }))
+            Assert.Equal(HttpStatusCode.NotFound, missingExport.StatusCode);
+
+        using var usageResponse = await client.GetAsync($"/api/workspaces/{tenant:D}/matters/{matter:D}/usage");
+        Assert.Equal(HttpStatusCode.OK, usageResponse.StatusCode);
+        var usage = await usageResponse.Content.ReadFromJsonAsync<UsageResponse>();
+        Assert.NotNull(usage);
+        Assert.Equal(0, usage.QaRequestsToday);
+        Assert.Equal(0, usage.ExportsToday);
+    }
+
+    [PostgresFact]
     public async Task Tenant_B_receives_indistinguishable_not_found_responses_for_all_Tenant_A_routes()
     {
         using var factory = new PostgresApiFactory(database.AppConnectionString);
@@ -147,6 +173,7 @@ public sealed class PostgresApiIsolationTests(PostgresFixture database)
     private sealed record CsrfResponse(string Token);
     private sealed record WorkspaceResponse(Guid TenantId);
     private sealed record MatterResponse(Guid Id);
+    private sealed record UsageResponse(long QaRequestsToday, long ExportsToday);
 }
 
 internal sealed class PostgresApiFactory(string connectionString) : WebApplicationFactory<Program>

@@ -11,6 +11,7 @@ internal sealed class GeneratedArtifactStorageService : IGeneratedArtifactStore
     private readonly IGeneratedArtifactMetadataRepository _metadata;
     private readonly string _bucketName;
     private readonly TimeProvider _timeProvider;
+    private readonly SemaphoreSlim _readinessGate = new(1, 1);
 
     internal GeneratedArtifactStorageService(
         IImmutableObjectBackend backend,
@@ -114,23 +115,35 @@ internal sealed class GeneratedArtifactStorageService : IGeneratedArtifactStore
 
     public async Task<bool> CheckReadinessAsync(CancellationToken cancellationToken = default)
     {
+        await _readinessGate.WaitAsync(cancellationToken);
+        var probe = new StorageAddress("s3", _bucketName, "v1/readiness/runtime-capability-probe");
         try
         {
-            var probe = new StorageAddress("s3", _bucketName, "v1/readiness-probe-do-not-create");
-            await using var ignored = await _backend.OpenReadAsync(probe, cancellationToken);
+            await _backend.DeleteIfExistsAsync(probe, cancellationToken);
+            await using var content = new MemoryStream([0x43, 0x4D], writable: false);
+            var created = await _backend.CreateIfAbsentAsync(probe, content, content.Length, cancellationToken);
+            if (!created.Created) return false;
+            await _backend.DeleteIfExistsAsync(probe, cancellationToken);
             return true;
         }
-        catch (OriginalEvidenceNotFoundException)
+        catch (OperationCanceledException)
         {
-            return true;
+            throw;
         }
         catch
         {
+            try { await _backend.DeleteIfExistsAsync(probe, CancellationToken.None); }
+            catch (Exception cleanupException) when (cleanupException is not OperationCanceledException) { }
             return false;
         }
+        finally { _readinessGate.Release(); }
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        _readinessGate.Dispose();
+        return ValueTask.CompletedTask;
+    }
 
     private async Task DeletePhysicalAsync(
         IReadOnlyList<GeneratedArtifactStorageMetadata> records,
@@ -217,10 +230,12 @@ internal sealed class GeneratedArtifactStorageService : IGeneratedArtifactStore
                     Access = FileAccess.ReadWrite,
                     Share = FileShare.None,
                     BufferSize = BufferSize,
-                    Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+                    Options = FileOptions.Asynchronous | FileOptions.SequentialScan |
+                              (OperatingSystem.IsWindows() ? FileOptions.DeleteOnClose : FileOptions.None)
                 };
                 if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
                 stream = new FileStream(path, options);
+                if (!OperatingSystem.IsWindows()) File.Delete(path);
                 using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
                 var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
                 long length = 0;

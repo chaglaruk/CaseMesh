@@ -14,6 +14,8 @@ var options = builder.Configuration.GetSection(CaseMeshApiOptions.SectionName).G
               ?? new CaseMeshApiOptions();
 options.Validate(builder.Environment.EnvironmentName);
 var isExplicitTestHarness = options.EnableTestAuthentication && builder.Environment.IsEnvironment("Testing");
+var scannerVersion = isExplicitTestHarness ? "synthetic-clean" : "runtime-configured";
+var ocrVersion = isExplicitTestHarness ? "synthetic-ocr" : "runtime-configured";
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<PilotRuntimeHealth>();
@@ -53,14 +55,17 @@ builder.Services.AddSingleton<IGeneratedArtifactStore>(_ => isExplicitTestHarnes
 builder.Services.AddSingleton<IIngestionRepository>(provider =>
     new PostgresIngestionRepository(provider.GetRequiredService<PostgresMatterStore>()));
 builder.Services.AddSingleton<IMalwareScanner>(_ => isExplicitTestHarness
-    ? new SyntheticCleanScanner() : new ClamAvCliScanner(options.ClamAvExecutablePath, TimeSpan.FromSeconds(30)));
+    ? new SyntheticCleanScanner()
+    : new ClamAvCliScanner(scannerVersion, TimeSpan.FromSeconds(30), options.ClamAvExecutablePath));
 builder.Services.AddSingleton<IOcrEngine>(_ => isExplicitTestHarness
-    ? new SyntheticOcrEngine() : new TesseractCliOcrEngine(options.TesseractExecutablePath, TimeSpan.FromSeconds(30)));
+    ? new SyntheticOcrEngine()
+    : new TesseractCliOcrEngine(ocrVersion, TimeSpan.FromSeconds(30), options.TesseractExecutablePath));
 builder.Services.AddSingleton<IPdfPageRasterizer>(_ =>
-    new PopplerPdfPageRasterizer(isExplicitTestHarness ? "runtime-configured" : options.PopplerExecutablePath, TimeSpan.FromSeconds(30)));
+    new PopplerPdfPageRasterizer("runtime-configured", TimeSpan.FromSeconds(30),
+        isExplicitTestHarness ? "pdftoppm" : options.PopplerExecutablePath));
 builder.Services.AddSingleton(new IngestionPipeline("web-v1", isExplicitTestHarness ? "synthetic-clean" : "clamav-cli",
-    "runtime-configured", "casemesh-parsers-v1", isExplicitTestHarness ? "synthetic-ocr" : "tesseract-cli",
-    "runtime-configured"));
+    scannerVersion, "casemesh-parsers-v1", isExplicitTestHarness ? "synthetic-ocr" : "tesseract-cli",
+    ocrVersion));
 builder.Services.AddSingleton<EvidenceJobCoordinator>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<EvidenceJobCoordinator>());
 builder.Services.AddSingleton<PrivacyDeletionCoordinator>();
@@ -131,12 +136,12 @@ builder.Services.AddRateLimiter(limiter =>
 });
 
 var app = builder.Build();
-app.UseExceptionHandler();
 app.UseMiddleware<PilotTelemetryMiddleware>();
+app.UseExceptionHandler();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseAuthentication();
-app.UseRateLimiter();
 app.UseAuthorization();
+app.UseRateLimiter();
 app.UseMiddleware<ApiAntiforgeryMiddleware>();
 app.MapCaseMeshApi(options, app.Environment);
 app.Run();

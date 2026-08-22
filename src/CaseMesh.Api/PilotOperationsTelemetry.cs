@@ -46,7 +46,7 @@ public sealed class PilotTelemetryMiddleware(RequestDelegate next)
                 ?.RoutePattern.RawText ?? "unmatched";
             var tags = new TagList
             {
-                { "http.request.method", context.Request.Method },
+                { "http.request.method", NormalizeMethod(context.Request.Method) },
                 { "http.route", route },
                 { "http.response.status_class", $"{context.Response.StatusCode / 100}xx" }
             };
@@ -54,4 +54,18 @@ public sealed class PilotTelemetryMiddleware(RequestDelegate next)
             PilotOperationsTelemetry.ApiDuration.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds, tags);
         }
     }
+
+    internal static string NormalizeMethod(string method) => method.ToUpperInvariant() switch
+    {
+        "CONNECT" => "CONNECT",
+        "DELETE" => "DELETE",
+        "GET" => "GET",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        "PATCH" => "PATCH",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "TRACE" => "TRACE",
+        _ => "_OTHER"
+    };
 }

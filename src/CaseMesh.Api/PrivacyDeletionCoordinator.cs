@@ -74,9 +74,13 @@ public sealed class PrivacyDeletionCoordinator(
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            logger.LogWarning("Privacy deletion {DeletionId} will retry after failure type {ExceptionType}.",
+            var terminal = job.Attempts >= PostgresPilotOperationsRepository.MaximumDeletionAttempts;
+            logger.LogWarning(terminal
+                    ? "Privacy deletion {DeletionId} reached terminal failure after type {ExceptionType}."
+                    : "Privacy deletion {DeletionId} will retry after failure type {ExceptionType}.",
                 job.DeletionId, exception.GetType().Name);
-            PilotOperationsTelemetry.DeletionOutcomes.Add(1, new TagList { { "outcome", "retry" } });
+            PilotOperationsTelemetry.DeletionOutcomes.Add(1,
+                new TagList { { "outcome", terminal ? "terminal-failure" : "retry" } });
             try
             {
                 await operations.RetryDeletionAsync(job, _workerId, "storage-or-database", CancellationToken.None);
@@ -114,6 +118,8 @@ public sealed class PrivacyDeletionCoordinator(
                             new TagList { { "queue", "deletion" } });
                         PilotOperationsTelemetry.OldestJobAge.Record(queue.OldestDeletionAgeSeconds,
                             new TagList { { "queue", "deletion" } });
+                        PilotOperationsTelemetry.QueueDepth.Record(queue.TerminalDeletionFailures,
+                            new TagList { { "queue", "deletion-terminal-failure" } });
                         PilotOperationsTelemetry.ReconciliationOutcomes.Add(1,
                             new TagList { { "outcome", "completed" } });
                     }

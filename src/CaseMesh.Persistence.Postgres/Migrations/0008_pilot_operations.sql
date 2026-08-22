@@ -54,6 +54,29 @@ CREATE TRIGGER tenants_seed_closed_pilot_entitlement
 AFTER INSERT ON casemesh.tenants
 FOR EACH ROW EXECUTE FUNCTION casemesh.seed_closed_pilot_entitlement();
 
+CREATE OR REPLACE FUNCTION casemesh.create_owned_workspace(
+    requested_user_id uuid,
+    requested_tenant_id uuid,
+    requested_display_name text,
+    requested_created_at timestamptz)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, casemesh
+AS $$
+BEGIN
+    IF NULLIF(current_setting('casemesh.user_id', true), '')::uuid IS DISTINCT FROM requested_user_id THEN
+        RAISE EXCEPTION 'The authenticated user does not match the workspace owner.'
+            USING ERRCODE = '42501';
+    END IF;
+    PERFORM set_config('casemesh.tenant_id', requested_tenant_id::text, true);
+    INSERT INTO casemesh.tenants (tenant_id, display_name, created_at)
+    VALUES (requested_tenant_id, requested_display_name, requested_created_at);
+    INSERT INTO casemesh.tenant_memberships (tenant_id, user_id, membership_role, created_at)
+    VALUES (requested_tenant_id, requested_user_id, 1, requested_created_at);
+END;
+$$;
+
 CREATE TABLE casemesh.pilot_quota_reservations (
     tenant_id uuid NOT NULL,
     reservation_id uuid NOT NULL,
@@ -126,7 +149,7 @@ CREATE TABLE casemesh.privacy_deletion_jobs (
     deletion_id uuid NOT NULL,
     matter_id uuid NOT NULL,
     requested_by_user_id uuid NOT NULL,
-    status smallint NOT NULL CHECK (status BETWEEN 1 AND 4),
+    status smallint NOT NULL CHECK (status BETWEEN 1 AND 5),
     attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     available_at timestamptz NOT NULL,
     lease_owner uuid NULL,
@@ -148,7 +171,7 @@ CREATE UNIQUE INDEX privacy_deletion_jobs_active_matter_uq
     WHERE status IN (1,2,4);
 
 CREATE INDEX privacy_deletion_jobs_claim_ix
-    ON casemesh.privacy_deletion_jobs (available_at,requested_at)
+    ON casemesh.privacy_deletion_jobs (tenant_id,available_at,requested_at,deletion_id)
     WHERE status IN (1,2,4);
 
 CREATE FUNCTION casemesh.pending_privacy_deletion_scopes(p_now timestamptz)
@@ -231,6 +254,7 @@ $$;
 DO $$
 DECLARE
     runtime_role name;
+    granted_roles integer := 0;
 BEGIN
     FOR runtime_role IN
         SELECT pg_get_userbyid(grant_entry.grantee)
@@ -250,14 +274,18 @@ BEGIN
            AND bool_or(grant_entry.privilege_type = 'UPDATE')
            AND bool_or(grant_entry.privilege_type = 'DELETE')
     LOOP
+        granted_roles := granted_roles + 1;
         EXECUTE format('GRANT SELECT ON TABLE casemesh.pilot_entitlements TO %I', runtime_role);
         EXECUTE format('GRANT SELECT,INSERT,DELETE ON TABLE casemesh.pilot_quota_reservations TO %I', runtime_role);
-        EXECUTE format('GRANT SELECT,INSERT,UPDATE ON TABLE casemesh.pilot_usage_daily TO %I', runtime_role);
+        EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON TABLE casemesh.pilot_usage_daily TO %I', runtime_role);
         EXECUTE format('GRANT SELECT,INSERT,DELETE ON TABLE casemesh.pilot_usage_events TO %I', runtime_role);
         EXECUTE format('GRANT SELECT,INSERT,DELETE ON TABLE casemesh.generated_export_objects TO %I', runtime_role);
         EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON TABLE casemesh.privacy_deletion_jobs TO %I', runtime_role);
         EXECUTE format('GRANT EXECUTE ON FUNCTION casemesh.pending_privacy_deletion_scopes(timestamptz) TO %I', runtime_role);
         EXECUTE format('GRANT EXECUTE ON FUNCTION casemesh.pilot_maintenance_tenants() TO %I', runtime_role);
     END LOOP;
+    IF granted_roles = 0 THEN
+        RAISE EXCEPTION 'Migration 0008 requires an existing restricted runtime login role with direct Matter table privileges';
+    END IF;
 END;
 $$;

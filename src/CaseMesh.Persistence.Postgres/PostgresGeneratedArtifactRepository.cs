@@ -89,15 +89,15 @@ public sealed class PostgresGeneratedArtifactRepository : IGeneratedArtifactMeta
 
     Task<IReadOnlyList<GeneratedArtifactStorageMetadata>> IGeneratedArtifactMetadataRepository.ListMatterAsync(
         TenantId tenantId, Guid matterId, CancellationToken cancellationToken) =>
-        ListAsync(tenantId, "AND matter_id=$2", cancellationToken, matterId);
+        ListAsync(tenantId, GeneratedArtifactFilter.Matter, matterId, cancellationToken);
 
     Task<IReadOnlyList<GeneratedArtifactStorageMetadata>> IGeneratedArtifactMetadataRepository.ListTenantAsync(
         TenantId tenantId, CancellationToken cancellationToken) =>
-        ListAsync(tenantId, string.Empty, cancellationToken);
+        ListAsync(tenantId, GeneratedArtifactFilter.Tenant, null, cancellationToken);
 
     Task<IReadOnlyList<GeneratedArtifactStorageMetadata>> IGeneratedArtifactMetadataRepository.ListExpiredAsync(
         TenantId tenantId, DateTimeOffset now, CancellationToken cancellationToken) =>
-        ListAsync(tenantId, "AND expires_at <= $2", cancellationToken, now);
+        ListAsync(tenantId, GeneratedArtifactFilter.Expired, now, cancellationToken);
 
     Task<int> IGeneratedArtifactMetadataRepository.DeleteMetadataAsync(
         TenantId tenantId, IReadOnlyCollection<GeneratedArtifactIdentity> identities,
@@ -117,18 +117,40 @@ public sealed class PostgresGeneratedArtifactRepository : IGeneratedArtifactMeta
         }, cancellationToken);
 
     private Task<IReadOnlyList<GeneratedArtifactStorageMetadata>> ListAsync(
-        TenantId tenantId, string predicate, CancellationToken cancellationToken, params object[] values) =>
+        TenantId tenantId, GeneratedArtifactFilter filter, object? value,
+        CancellationToken cancellationToken) =>
         _matterStore.InTenantTransactionAsync(tenantId, async (connection, transaction) =>
         {
-            await using var command = new NpgsqlCommand($"""
-                SELECT matter_id, export_id, artifact_kind, backend_kind, bucket_name,
-                       object_key, content_sha256, byte_length, stored_at, expires_at
-                FROM casemesh.generated_export_objects
-                WHERE tenant_id=$1 {predicate}
-                ORDER BY matter_id, export_id, artifact_kind;
-                """, connection, transaction);
-            PostgresMatterStore.AddParameters(command,
-                new object[] { tenantId.Value }.Concat(values).ToArray());
+            var commandText = filter switch
+            {
+                GeneratedArtifactFilter.Tenant => """
+                    SELECT matter_id, export_id, artifact_kind, backend_kind, bucket_name,
+                           object_key, content_sha256, byte_length, stored_at, expires_at
+                    FROM casemesh.generated_export_objects
+                    WHERE tenant_id=$1
+                    ORDER BY matter_id, export_id, artifact_kind;
+                    """,
+                GeneratedArtifactFilter.Matter => """
+                    SELECT matter_id, export_id, artifact_kind, backend_kind, bucket_name,
+                           object_key, content_sha256, byte_length, stored_at, expires_at
+                    FROM casemesh.generated_export_objects
+                    WHERE tenant_id=$1 AND matter_id=$2
+                    ORDER BY matter_id, export_id, artifact_kind;
+                    """,
+                GeneratedArtifactFilter.Expired => """
+                    SELECT matter_id, export_id, artifact_kind, backend_kind, bucket_name,
+                           object_key, content_sha256, byte_length, stored_at, expires_at
+                    FROM casemesh.generated_export_objects
+                    WHERE tenant_id=$1 AND expires_at <= $2
+                    ORDER BY matter_id, export_id, artifact_kind;
+                    """,
+                _ => throw new ArgumentOutOfRangeException(nameof(filter))
+            };
+            await using var command = new NpgsqlCommand(commandText, connection, transaction);
+            if (filter == GeneratedArtifactFilter.Tenant)
+                PostgresMatterStore.AddParameters(command, tenantId.Value);
+            else
+                PostgresMatterStore.AddParameters(command, tenantId.Value, value!);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             var result = new List<GeneratedArtifactStorageMetadata>();
             while (await reader.ReadAsync(cancellationToken))
@@ -142,6 +164,8 @@ public sealed class PostgresGeneratedArtifactRepository : IGeneratedArtifactMeta
             }
             return (IReadOnlyList<GeneratedArtifactStorageMetadata>)result;
         }, cancellationToken);
+
+    private enum GeneratedArtifactFilter { Tenant, Matter, Expired }
 
     private static void Add(NpgsqlCommand command, GeneratedArtifactStorageMetadata metadata,
         bool includeTimes = true)

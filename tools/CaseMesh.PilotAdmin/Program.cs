@@ -64,9 +64,8 @@ else if (command is "status" or "reconcile" or "benchmark")
         for (var index = 0; index < iterations; index++)
         {
             var started = Stopwatch.GetTimestamp();
-            var loaded = await store.LoadAsync(tenant, matterId)
+            _ = await store.LoadAsync(tenant, matterId)
                 ?? throw new InvalidOperationException("Matter not found.");
-            await store.SaveAsync(loaded.Evidence, loaded.Workplace);
             timings.Add(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         }
         timings.Sort();
@@ -74,7 +73,7 @@ else if (command is "status" or "reconcile" or "benchmark")
         {
             action = "benchmark",
             iterations,
-            medianMilliseconds = Percentile(timings, .50),
+            medianMilliseconds = Median(timings),
             p95Milliseconds = Percentile(timings, .95)
         });
     }
@@ -85,6 +84,9 @@ return;
 
 static double Percentile(IReadOnlyList<double> values, double percentile) =>
     values[(int)Math.Ceiling(percentile * values.Count) - 1];
+static double Median(IReadOnlyList<double> values) => values.Count % 2 == 0
+    ? (values[values.Count / 2 - 1] + values[values.Count / 2]) / 2
+    : values[values.Count / 2];
 static TenantId Tenant(string value) => new(Id(value, "Tenant"));
 static Guid Id(string value, string label) => Guid.TryParse(value, out var parsed) && parsed != Guid.Empty
     ? parsed : throw new ArgumentException($"{label} id is invalid.");

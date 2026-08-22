@@ -2,7 +2,7 @@
 
 ## Deployment boundary
 
-CaseMesh is deployed as one ASP.NET Core API/worker process, one Next.js Web process, PostgreSQL 17+, and one private S3-compatible bucket with versioning disabled. Run database migration and bucket provisioning as release jobs before switching traffic. The runtime is not a migrator and must use a PostgreSQL login with `NOSUPERUSER NOBYPASSRLS`.
+CaseMesh is deployed as one ASP.NET Core API/worker process, one Next.js Web process, PostgreSQL 17+, and one private S3-compatible bucket with versioning disabled. For a new database, run `CaseMesh.DbMigrate --through 0001`, create and grant the restricted runtime login role on the Matter tables, then run `CaseMesh.DbMigrate` to current. Migration 0008 fails closed when it cannot discover that role. Run database migration and bucket provisioning as release jobs before switching traffic. The runtime is not a migrator and must use a PostgreSQL login with `NOSUPERUSER NOBYPASSRLS`.
 
 Terminate TLS at a trusted ingress and expose only the configured `CaseMesh__PublicOrigin`. Forwarded headers must be accepted only from explicitly configured proxy addresses/networks. Do not expose PostgreSQL, object storage, scanner/OCR processes, the pilot-admin tool, or internal service ports publicly.
 
@@ -40,9 +40,9 @@ CaseMesh.PilotAdmin reconcile <tenant-id>
 CaseMesh.PilotAdmin benchmark <tenant-id> <matter-id> <3-100>
 ```
 
-Every command also requires `CaseMesh__PilotAdminTenantId` to exactly match the requested tenant, making the operator's approved scope explicit and preventing accidental cross-tenant diagnostics. `grant` alone requires the privileged operator connection. All other commands require the RLS-enforced runtime connection and cannot search globally. Output contains only typed counts, durations, tier, and opaque IDs. Do not paste customer-provided text into command arguments.
+Every command also requires `CaseMesh__PilotAdminTenantId` to exactly match the requested tenant, making the operator's approved scope explicit and preventing accidental cross-tenant diagnostics. `grant` alone requires the privileged operator connection. All other commands require the RLS-enforced runtime connection and cannot search globally. The benchmark command is read-only. Output contains only typed counts, durations, tier, and opaque IDs. Do not paste customer-provided text into command arguments.
 
-Generated exports expire under each tenant's policy and are unavailable after expiry. Maintenance deletes their private bytes before metadata and prunes expired reservations, failed job rows, daily counters, and privacy-safe operational events. Original evidence has no timer deletion: authenticated Matter deletion creates a durable job that deletes generated artifacts, then originals, then relational state. Operators must investigate jobs that remain retryable; never delete database rows manually to force completion.
+Generated exports expire under each tenant's policy and are unavailable after expiry. Maintenance deletes their private bytes before metadata and prunes expired reservations, failed job rows, daily counters, and privacy-safe operational events. Original evidence has no timer deletion: authenticated Matter deletion creates a durable job that deletes generated artifacts, then originals, then relational state. Deletion failures use exponential backoff and enter an operator-visible terminal state after five failed attempts; alert on any `deletion-terminal-failure` queue depth. Completed deletion receipts remain until tenant deletion as proof of erasure. Never delete database rows manually to force completion.
 
 ## Backup, recovery, and incidents
 

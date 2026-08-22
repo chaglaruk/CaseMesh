@@ -4,15 +4,15 @@ Date: 2026-08-22
 
 ## Workload and method
 
-The real PostgreSQL 17 integration benchmark persists one synthetic closed-pilot Matter containing 100 immutable document versions, 100 exact source spans, and 100 attributed assertions. It performs one warm-up save followed by seven complete snapshot saves through the production `PostgresMatterStore` and RLS-enforced runtime role. The fixture contains no personal data.
+The real PostgreSQL 17 integration benchmark persists one synthetic closed-pilot Matter containing 100 immutable document versions, 100 exact source spans, and 100 attributed assertions. It performs one warm-up save followed by twenty complete snapshot saves through the production `PostgresMatterStore` and RLS-enforced runtime role. The fixture contains no personal data.
 
 Local reference environment: PostgreSQL 17 Docker service on the Windows development host, Release build, local TCP connection. Result:
 
 ```json
-{"documents":100,"sourceSpans":100,"assertions":100,"iterations":7,"medianMilliseconds":922.1895,"p95Milliseconds":1188.1251}
+{"documents":100,"sourceSpans":100,"assertions":100,"iterations":20,"medianMilliseconds":753.19775,"p95Milliseconds":927.8285}
 ```
 
-The integration test intentionally asserts data scale and successful real-service completion, not a machine-specific latency threshold. `CaseMesh.PilotAdmin benchmark` provides the same operator-visible median/p95 measurement for an explicitly selected synthetic or approved pilot Matter without printing its contents.
+The integration test intentionally asserts data scale and successful real-service completion, not a machine-specific latency threshold. `CaseMesh.PilotAdmin benchmark` provides an operator-visible, read-only median/p95 load measurement for an explicitly selected synthetic or approved pilot Matter without printing its contents or writing a stale snapshot back to the Matter.
 
 ## Decision
 

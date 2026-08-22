@@ -45,7 +45,7 @@ public static class CaseMeshApiEndpoints
             };
             var ready = components.postgres && components.objectStorage && components.ingestionDependencies &&
                         components.evidenceWorker && components.deletionWorker && components.qaProvider && components.build;
-            return Results.Json(new { status = ready ? "ready" : "not-ready", components },
+            return Results.Json(new { status = ready ? "ready" : "not-ready" },
                 statusCode: ready ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);
         });
         app.MapGet("/api/auth/sign-in", (HttpContext context) =>
@@ -433,11 +433,12 @@ public static class CaseMeshApiEndpoints
             return Results.Conflict(new { title = "Evidence processing is still in progress.", code = "evidence-processing" });
         var loaded = await brains.LoadAsync(tenant, matterId, token);
         if (loaded is null) return Results.NotFound();
+        var question = RequireText(request.Question, MatterQaService.MaximumQuestionCharacters);
         var entitlements = await operations.GetEntitlementsAsync(tenant, token);
         await operations.ConsumeDailyAsync(tenant, PilotDailyUsageKind.QaRequest, cancellationToken: token);
         var qaStarted = Stopwatch.GetTimestamp();
         var answer = await qa.AskAsync(new MatterRetrievalRequest(
-            tenant, matterId, RequireText(request.Question, MatterQaService.MaximumQuestionCharacters),
+            tenant, matterId, question,
             MaximumContextBytes: entitlements.QaContextByteLimit), token);
         await RecordUsageSafelyAsync(context, () => operations.RecordUsageEventAsync(
             tenant, matterId, PilotUsageEventKind.Qa, answer.Status.ToString().ToLowerInvariant(), 1,
@@ -461,6 +462,7 @@ public static class CaseMeshApiEndpoints
         var tenant = new TenantId(tenantId);
         if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
         await using var matterLock = await repository.AcquireMatterStateLockAsync(tenant, matterId, token);
+        if (await repository.GetMatterAsync(user.Id, tenant, matterId, token) is null) return Results.NotFound();
         var entitlements = await operations.GetEntitlementsAsync(tenant, token);
         await operations.ConsumeDailyAsync(tenant, PilotDailyUsageKind.ExportGeneration, cancellationToken: token);
         var exportStarted = Stopwatch.GetTimestamp();
@@ -497,15 +499,28 @@ public static class CaseMeshApiEndpoints
         var run = await exports.GetRunAsync(tenant, matterId, exportId, token);
         if (run is null) return Results.NotFound();
         var bundle = run.Run.Artifacts.Single(item => item.Kind == ProfessionalExportArtifactKind.BundleZip);
-        await using var destination = new MemoryStream(checked((int)bundle.ByteLength));
-        await generated.ReadVerifiedAsync(new GeneratedArtifactIdentity(tenant, matterId, exportId,
-            (short)ProfessionalExportArtifactKind.BundleZip), destination, clock.GetUtcNow(), token);
-        await operations.ConsumeDailyAsync(tenant, PilotDailyUsageKind.ExportDownload, cancellationToken: token);
-        await RecordUsageSafelyAsync(context, () => operations.RecordUsageEventAsync(
-            tenant, matterId, PilotUsageEventKind.ExportDownloaded, "verified", bundle.ByteLength,
-            cancellationToken: token));
-        PilotOperationsTelemetry.ExportOutcomes.Add(1, new TagList { { "outcome", "downloaded" } });
-        return Results.File(destination.ToArray(), "application/zip", bundle.FileName, enableRangeProcessing: false);
+        if (bundle.ByteLength > int.MaxValue)
+            return Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
+                title: "The export bundle exceeds the supported delivery size.",
+                extensions: new Dictionary<string, object?> { ["code"] = "export-delivery-size-limit" });
+        var destination = new MemoryStream((int)bundle.ByteLength);
+        try
+        {
+            await generated.ReadVerifiedAsync(new GeneratedArtifactIdentity(tenant, matterId, exportId,
+                (short)ProfessionalExportArtifactKind.BundleZip), destination, clock.GetUtcNow(), token);
+            await operations.ConsumeDailyAsync(tenant, PilotDailyUsageKind.ExportDownload, cancellationToken: token);
+            await RecordUsageSafelyAsync(context, () => operations.RecordUsageEventAsync(
+                tenant, matterId, PilotUsageEventKind.ExportDownloaded, "verified", bundle.ByteLength,
+                cancellationToken: token));
+            PilotOperationsTelemetry.ExportOutcomes.Add(1, new TagList { { "outcome", "downloaded" } });
+            destination.Position = 0;
+            return Results.File(destination, "application/zip", bundle.FileName, enableRangeProcessing: false);
+        }
+        catch
+        {
+            await destination.DisposeAsync();
+            throw;
+        }
     }
 
     private static async Task<IResult> ProjectAsync(Guid tenantId, Guid matterId, HttpContext context,
@@ -544,6 +559,7 @@ public static class CaseMeshApiEndpoints
     private static async Task<bool> ReadinessAsync(Func<Task<bool>> check)
     {
         try { return await check(); }
+        catch (OperationCanceledException) { throw; }
         catch { return false; }
     }
 

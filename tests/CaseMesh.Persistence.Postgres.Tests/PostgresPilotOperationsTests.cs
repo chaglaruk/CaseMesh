@@ -161,6 +161,103 @@ public sealed class PostgresPilotOperationsTests(PostgresFixture database, ITest
     }
 
     [PostgresFact]
+    public async Task Concurrent_deletion_enqueue_is_idempotent_without_unique_constraint_leakage()
+    {
+        var user = await CreateUserAsync();
+        var tenant = new TenantId(Guid.NewGuid());
+        await using (var web = new PostgresWebWorkspaceRepository(database.AppConnectionString))
+            await web.CreateWorkspaceAsync(user, tenant, "Synthetic concurrent deletion", Now);
+        var matterId = Guid.NewGuid();
+        await SaveMatterAsync(tenant, matterId);
+        await using var first = Operations();
+        await using var second = Operations();
+
+        var jobs = await Task.WhenAll(
+            first.EnqueueDeletionAsync(user.Id, tenant, matterId),
+            second.EnqueueDeletionAsync(user.Id, tenant, matterId));
+
+        Assert.Equal(jobs[0].DeletionId, jobs[1].DeletionId);
+    }
+
+    [PostgresFact]
+    public async Task Deletion_retries_back_off_and_enter_an_alertable_terminal_state()
+    {
+        var clock = new MutableTimeProvider(Now);
+        var user = await CreateUserAsync();
+        var tenant = new TenantId(Guid.NewGuid());
+        await using (var web = new PostgresWebWorkspaceRepository(database.AppConnectionString))
+            await web.CreateWorkspaceAsync(user, tenant, "Synthetic terminal deletion", Now);
+        var matterId = Guid.NewGuid();
+        await SaveMatterAsync(tenant, matterId);
+        await using var operations = new PostgresPilotOperationsRepository(database.AppConnectionString, clock);
+        var queued = await operations.EnqueueDeletionAsync(user.Id, tenant, matterId);
+
+        PrivacyDeletionJob? current = queued;
+        for (var attempt = 1; attempt <= PostgresPilotOperationsRepository.MaximumDeletionAttempts; attempt++)
+        {
+            var worker = Guid.NewGuid();
+            current = Assert.IsType<PrivacyDeletionJob>(await operations.ClaimDeletionAsync(
+                user.Id, tenant, worker, TimeSpan.FromMinutes(1)));
+            Assert.Equal(attempt, current.Attempts);
+            await operations.RetryDeletionAsync(current, worker, "synthetic-storage-failure");
+            current = await operations.GetDeletionAsync(tenant, matterId, queued.DeletionId);
+            if (attempt < PostgresPilotOperationsRepository.MaximumDeletionAttempts)
+            {
+                Assert.Equal(PrivacyDeletionStatus.Retry, current?.Status);
+                clock.Advance(TimeSpan.FromMinutes(5 * Math.Pow(2, attempt - 1) + 1));
+            }
+        }
+
+        Assert.Equal(PrivacyDeletionStatus.TerminalFailure, current?.Status);
+        Assert.DoesNotContain(await operations.ListPendingDeletionScopesAsync(),
+            scope => scope.TenantId == tenant && scope.UserId == user.Id);
+        var queue = await operations.GetQueueSnapshotAsync(tenant);
+        Assert.Equal(0, queue.PendingDeletions);
+        Assert.Equal(1, queue.TerminalDeletionFailures);
+    }
+
+    [PostgresFact]
+    public async Task Completed_deletion_receipt_survives_routine_operational_pruning()
+    {
+        var clock = new MutableTimeProvider(Now);
+        var user = await CreateUserAsync();
+        var tenant = new TenantId(Guid.NewGuid());
+        await using (var web = new PostgresWebWorkspaceRepository(database.AppConnectionString))
+            await web.CreateWorkspaceAsync(user, tenant, "Synthetic erasure receipt", Now);
+        var matterId = Guid.NewGuid();
+        await SaveMatterAsync(tenant, matterId);
+        await using var operations = new PostgresPilotOperationsRepository(database.AppConnectionString, clock);
+        var queued = await operations.EnqueueDeletionAsync(user.Id, tenant, matterId);
+        var worker = Guid.NewGuid();
+        var claimed = Assert.IsType<PrivacyDeletionJob>(await operations.ClaimDeletionAsync(
+            user.Id, tenant, worker, TimeSpan.FromMinutes(1)));
+        await operations.CompleteDeletionAsync(claimed, worker);
+
+        clock.Advance(TimeSpan.FromDays(31));
+        await operations.PruneOperationalMetadataAsync(tenant);
+
+        var receipt = await operations.GetDeletionAsync(tenant, matterId, queued.DeletionId);
+        Assert.Equal(PrivacyDeletionStatus.Completed, receipt?.Status);
+        Assert.NotNull(receipt?.CompletedAt);
+    }
+
+    [Fact]
+    public async Task Pilot_validation_reports_the_correct_argument_names_without_database_access()
+    {
+        await using var operations = new PostgresPilotOperationsRepository("Host=invalid", new FixedTimeProvider(Now));
+        var tenant = new TenantId(Guid.NewGuid());
+        var matterId = Guid.NewGuid();
+
+        var hash = await Assert.ThrowsAsync<ArgumentException>(() =>
+            operations.ReserveEvidenceAsync(tenant, matterId, null!, 1));
+        Assert.Equal("contentSha256", hash.ParamName);
+        var duration = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            operations.RecordUsageEventAsync(tenant, matterId, PilotUsageEventKind.ApiRequest,
+                "synthetic", durationMilliseconds: -1));
+        Assert.Equal("durationMilliseconds", duration.ParamName);
+    }
+
+    [PostgresFact]
     public async Task Partial_storage_deletion_failure_remains_retryable_and_reconciliation_completes_idempotently()
     {
         var clock = new MutableTimeProvider(Now);
@@ -253,7 +350,7 @@ public sealed class PostgresPilotOperationsTests(PostgresFixture database, ITest
         await store.CreateTenantAsync(tenant, "Synthetic benchmark tenant", Now);
         await store.SaveAsync(evidence, workplace);
         var timings = new List<double>();
-        for (var iteration = 0; iteration < 7; iteration++)
+        for (var iteration = 0; iteration < 20; iteration++)
         {
             var started = Stopwatch.GetTimestamp();
             await store.SaveAsync(evidence, workplace);
@@ -266,8 +363,8 @@ public sealed class PostgresPilotOperationsTests(PostgresFixture database, ITest
             sourceSpans = evidence.SourceSpans.Count,
             assertions = evidence.Assertions.Count,
             iterations = timings.Count,
-            medianMilliseconds = timings[3],
-            p95Milliseconds = timings[^1]
+            medianMilliseconds = (timings[9] + timings[10]) / 2,
+            p95Milliseconds = timings[(int)Math.Ceiling(timings.Count * .95) - 1]
         }));
         Assert.Equal(100, evidence.DocumentVersions.Count);
         Assert.All(timings, value => Assert.True(value > 0));

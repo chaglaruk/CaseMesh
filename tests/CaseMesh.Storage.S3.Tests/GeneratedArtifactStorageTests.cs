@@ -10,6 +10,18 @@ public sealed class GeneratedArtifactStorageTests(StorageIntegrationFixture fixt
     private static readonly DateTimeOffset StoredAt = new(2026, 8, 22, 10, 0, 0, TimeSpan.Zero);
 
     [StorageFact]
+    public async Task Readiness_proves_real_private_create_and_delete_access_without_leaving_a_probe()
+    {
+        await using var store = CreateStore();
+
+        Assert.True(await store.CheckReadinessAsync());
+
+        var missing = await Assert.ThrowsAsync<Amazon.S3.AmazonS3Exception>(() =>
+            fixture.S3.GetObjectMetadataAsync(fixture.BucketName, "v1/readiness/runtime-capability-probe"));
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, missing.StatusCode);
+    }
+
+    [StorageFact]
     public async Task Private_export_bundle_round_trips_and_wrong_tenant_cannot_resolve_or_read_it()
     {
         var (scope, package, bundle) = await ExportAsync("generated-round-trip");
@@ -84,8 +96,9 @@ public sealed class GeneratedArtifactStorageTests(StorageIntegrationFixture fixt
         Assert.False(await fixture.PhysicalExistsAsync(scope));
         Assert.Null(await generated.GetMetadataAsync(identity));
         Assert.False(await fixture.MatterExistsAsync(scope));
-        await Assert.ThrowsAsync<Amazon.S3.AmazonS3Exception>(() =>
+        var missing = await Assert.ThrowsAsync<Amazon.S3.AmazonS3Exception>(() =>
             fixture.S3.GetObjectMetadataAsync(fixture.BucketName, Key(identity)));
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, missing.StatusCode);
     }
 
     private async Task<(SyntheticObjectScope Scope, ProfessionalExportPackage Package,

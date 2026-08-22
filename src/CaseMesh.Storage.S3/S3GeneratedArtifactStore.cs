@@ -39,6 +39,7 @@ public sealed class S3GeneratedArtifactStore : IGeneratedArtifactStore
 
     public async ValueTask DisposeAsync()
     {
+        await _service.DisposeAsync();
         await _backend.DisposeAsync();
         await _matterStore.DisposeAsync();
     }

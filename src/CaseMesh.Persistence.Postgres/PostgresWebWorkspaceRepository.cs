@@ -303,7 +303,8 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
 
     public Task CompleteAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId, int attempts,
         DateTimeOffset completedAt, CancellationToken cancellationToken = default) =>
-        FinishAsync(userId, tenantId, matterId, jobId, workerId, attempts, completedAt, true, null, cancellationToken);
+        FinishAsync(userId, tenantId, matterId, jobId, workerId, attempts, completedAt,
+            true, null, maximumAttempts: 1, cancellationToken);
 
     public Task FailAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId, int attempts,
         DateTimeOffset failedAt, string failureCode, CancellationToken cancellationToken = default) =>
@@ -317,11 +318,6 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
         return FinishAsync(userId, tenantId, matterId, jobId, workerId, attempts, failedAt,
             false, failureCode, maximumAttempts, cancellationToken);
     }
-
-    private Task FinishAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId,
-        int attempts, DateTimeOffset at, bool completed, string? failureCode,
-        CancellationToken cancellationToken) => FinishAsync(userId, tenantId, matterId, jobId, workerId,
-            attempts, at, completed, failureCode, 3, cancellationToken);
 
     private Task FinishAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId,
         int attempts, DateTimeOffset at, bool completed, string? failureCode, int maximumAttempts,

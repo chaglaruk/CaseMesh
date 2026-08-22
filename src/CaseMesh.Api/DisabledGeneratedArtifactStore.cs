@@ -19,6 +19,6 @@ internal sealed class DisabledGeneratedArtifactStore : IGeneratedArtifactStore
         CancellationToken cancellationToken = default) => Task.FromResult(true);
     public Task<int> DeleteExpiredAsync(TenantId tenantId, DateTimeOffset now,
         CancellationToken cancellationToken = default) => Task.FromResult(0);
-    public Task<bool> CheckReadinessAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
+    public Task<bool> CheckReadinessAsync(CancellationToken cancellationToken = default) => Task.FromResult(false);
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

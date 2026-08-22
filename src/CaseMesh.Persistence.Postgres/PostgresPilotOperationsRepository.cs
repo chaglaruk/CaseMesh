@@ -54,13 +54,13 @@ public sealed record PilotUsageSnapshot(
     long QaRequestsToday,
     long ExportsToday);
 
-public enum PrivacyDeletionStatus { Pending = 1, Processing = 2, Completed = 3, Retry = 4 }
+public enum PrivacyDeletionStatus { Pending = 1, Processing = 2, Completed = 3, Retry = 4, TerminalFailure = 5 }
 public sealed record PrivacyDeletionJob(TenantId TenantId, Guid DeletionId, Guid MatterId,
     Guid RequestedByUserId, PrivacyDeletionStatus Status, int Attempts, string? FailureCategory,
     DateTimeOffset RequestedAt, DateTimeOffset? CompletedAt);
 public sealed record PrivacyDeletionScope(Guid UserId, TenantId TenantId);
 public sealed record PilotQueueSnapshot(long PendingJobs, double OldestJobAgeSeconds,
-    long PendingDeletions, double OldestDeletionAgeSeconds);
+    long PendingDeletions, double OldestDeletionAgeSeconds, long TerminalDeletionFailures);
 
 public sealed class PilotQuotaExceededException(string code) : Exception("The configured pilot resource limit was reached.")
 {
@@ -69,7 +69,10 @@ public sealed class PilotQuotaExceededException(string code) : Exception("The co
 
 public sealed class PostgresPilotOperationsRepository : IAsyncDisposable
 {
+    public const int MaximumDeletionAttempts = 5;
     private static readonly TimeSpan ReservationLifetime = TimeSpan.FromMinutes(15);
+    private static readonly TenantId MaintenanceScope =
+        new(new Guid("00000000-0000-0000-0000-000000000001"));
     private readonly PostgresMatterStore _store;
     private readonly TimeProvider _timeProvider;
 
@@ -117,7 +120,8 @@ public sealed class PostgresPilotOperationsRepository : IAsyncDisposable
     {
         RequireMatter(matterId);
         if (byteLength <= 0) throw new ArgumentOutOfRangeException(nameof(byteLength));
-        if (contentSha256.Length != 64 || contentSha256.Any(character => !Uri.IsHexDigit(character)))
+        if (contentSha256 is null || contentSha256.Length != 64 ||
+            contentSha256.Any(character => !Uri.IsHexDigit(character)))
             throw new ArgumentException("A SHA-256 identity is required.", nameof(contentSha256));
         var now = _timeProvider.GetUtcNow();
         return _store.InTenantTransactionAsync(tenantId, async (connection, transaction) =>
@@ -253,7 +257,8 @@ public sealed class PostgresPilotOperationsRepository : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
-        if (quantity < 0 || durationMilliseconds < 0) throw new ArgumentOutOfRangeException(nameof(quantity));
+        if (quantity < 0) throw new ArgumentOutOfRangeException(nameof(quantity));
+        if (durationMilliseconds < 0) throw new ArgumentOutOfRangeException(nameof(durationMilliseconds));
         if (string.IsNullOrWhiteSpace(outcomeCode) || outcomeCode.Length > 80 ||
             outcomeCode.Any(character => !(char.IsAsciiLetterOrDigit(character) || character == '-')))
             throw new ArgumentException("A bounded typed outcome code is required.", nameof(outcomeCode));
@@ -305,7 +310,7 @@ public sealed class PostgresPilotOperationsRepository : IAsyncDisposable
     }
 
     public Task<bool> CheckReadinessAsync(CancellationToken cancellationToken = default) =>
-        _store.InTenantTransactionAsync(new TenantId(Guid.Parse("00000000-0000-0000-0000-000000000001")),
+        _store.InTenantTransactionAsync(MaintenanceScope,
             async (connection, transaction) =>
             {
                 await using var command = new NpgsqlCommand("""
@@ -341,18 +346,13 @@ public sealed class PostgresPilotOperationsRepository : IAsyncDisposable
                 DELETE FROM casemesh.web_processing_jobs
                 WHERE tenant_id=$1 AND status=4 AND created_at < $2;
                 """, cancellationToken, tenantId.Value, now.AddDays(-entitlement.FailedJobRetentionDays));
-            count += await PostgresMatterStore.ExecuteAsync(connection, transaction, """
-                DELETE FROM casemesh.privacy_deletion_jobs
-                WHERE tenant_id=$1 AND status=3 AND completed_at < $2;
-                """, cancellationToken, tenantId.Value,
-                now.AddDays(-entitlement.OperationalLogRetentionDays));
             return count;
         }, cancellationToken);
     }
 
     public Task<IReadOnlyList<TenantId>> ListMaintenanceTenantsAsync(
         CancellationToken cancellationToken = default) =>
-        _store.InTenantTransactionAsync(new TenantId(Guid.Parse("00000000-0000-0000-0000-000000000001")),
+        _store.InTenantTransactionAsync(MaintenanceScope,
             async (connection, transaction) =>
             {
                 await using var command = new NpgsqlCommand(
@@ -377,13 +377,14 @@ public sealed class PostgresPilotOperationsRepository : IAsyncDisposable
                             FROM casemesh.web_processing_jobs WHERE tenant_id=$1 AND status IN (1,2)),0),
                   (SELECT count(*) FROM casemesh.privacy_deletion_jobs WHERE tenant_id=$1 AND status IN (1,2,4)),
                   COALESCE((SELECT extract(epoch FROM ($2-min(requested_at)))
-                            FROM casemesh.privacy_deletion_jobs WHERE tenant_id=$1 AND status IN (1,2,4)),0);
+                            FROM casemesh.privacy_deletion_jobs WHERE tenant_id=$1 AND status IN (1,2,4)),0),
+                  (SELECT count(*) FROM casemesh.privacy_deletion_jobs WHERE tenant_id=$1 AND status=5);
                 """, connection, transaction);
             PostgresMatterStore.AddParameters(command, tenantId.Value, now);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
             return new PilotQueueSnapshot(reader.GetInt64(0), Convert.ToDouble(reader.GetDecimal(1)),
-                reader.GetInt64(2), Convert.ToDouble(reader.GetDecimal(3)));
+                reader.GetInt64(2), Convert.ToDouble(reader.GetDecimal(3)), reader.GetInt64(4));
         }, cancellationToken);
     }
 
@@ -411,6 +412,8 @@ public sealed class PostgresPilotOperationsRepository : IAsyncDisposable
                 if (await membership.ExecuteScalarAsync(cancellationToken) is not true)
                     throw new UnauthorizedAccessException("No workspace membership was found.");
             }
+            await LockAsync(connection, transaction,
+                $"casemesh-deletion-enqueue:{tenantId.Value:D}:{matterId:D}", cancellationToken);
             await using (var existing = new NpgsqlCommand("""
                 SELECT tenant_id,deletion_id,matter_id,requested_by_user_id,status,attempts,
                        failure_category,requested_at,completed_at
@@ -459,7 +462,7 @@ public sealed class PostgresPilotOperationsRepository : IAsyncDisposable
     {
         var now = _timeProvider.GetUtcNow();
         return await _store.InTenantTransactionAsync(
-            new TenantId(Guid.Parse("00000000-0000-0000-0000-000000000001")),
+            MaintenanceScope,
             async (connection, transaction) =>
             {
                 await using var command = new NpgsqlCommand(
@@ -514,18 +517,26 @@ public sealed class PostgresPilotOperationsRepository : IAsyncDisposable
             failureCategory.Any(character => !(char.IsAsciiLetterOrDigit(character) || character == '-'))))
             throw new ArgumentException("A bounded failure category is required.", nameof(failureCategory));
         var now = _timeProvider.GetUtcNow();
+        var status = completed
+            ? PrivacyDeletionStatus.Completed
+            : job.Attempts >= MaximumDeletionAttempts
+                ? PrivacyDeletionStatus.TerminalFailure
+                : PrivacyDeletionStatus.Retry;
+        var availableAt = status == PrivacyDeletionStatus.Retry
+            ? now.AddMinutes(5 * Math.Pow(2, Math.Max(0, job.Attempts - 1)))
+            : now;
         return _store.InTenantTransactionAsync(job.TenantId, async (connection, transaction) =>
         {
             var count = await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 UPDATE casemesh.privacy_deletion_jobs
                 SET status=$7,lease_owner=NULL,lease_expires_at=NULL,failure_category=$8,
                     completed_at=CASE WHEN $7=3 THEN $6 ELSE NULL END,
-                    available_at=CASE WHEN $7=4 THEN $6 + interval '5 minutes' ELSE available_at END
+                    available_at=$9
                 WHERE tenant_id=$1 AND deletion_id=$2 AND matter_id=$3
                   AND lease_owner=$4 AND attempts=$5 AND status=2;
                 """, cancellationToken, job.TenantId.Value, job.DeletionId, job.MatterId,
-                workerId, job.Attempts, now, (short)(completed ? PrivacyDeletionStatus.Completed : PrivacyDeletionStatus.Retry),
-                failureCategory?.ToLowerInvariant());
+                workerId, job.Attempts, now, (short)status,
+                failureCategory?.ToLowerInvariant(), availableAt);
             if (count != 1) throw new InvalidOperationException("The deletion lease is no longer current.");
             return true;
         }, cancellationToken);
@@ -562,10 +573,18 @@ public sealed class PostgresPilotOperationsRepository : IAsyncDisposable
         NpgsqlTransaction transaction,
         TenantId tenantId,
         CancellationToken cancellationToken)
+        => await LockAsync(connection, transaction,
+            $"casemesh-pilot-quota:{tenantId.Value:D}", cancellationToken);
+
+    private static async Task LockAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string key,
+        CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
             "SELECT pg_advisory_xact_lock(hashtextextended($1,0));", connection, transaction);
-        command.Parameters.AddWithValue($"casemesh-pilot-quota:{tenantId.Value:D}");
+        command.Parameters.AddWithValue(key);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
