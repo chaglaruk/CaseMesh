@@ -22,6 +22,17 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   await expect(page.getByText(/Document author.*asserted/)).toBeVisible({timeout:60_000});
   await page.getByRole("button",{name:"View source"}).click();
   await expect(page.getByLabel("Source citation detail")).toContainText("twelve absence days");
+
+  await page.getByRole("button",{name:"Prepare"}).click();
+  await expect(page.getByRole("heading",{name:"Prepare for a meeting"})).toBeVisible();
+  await expect(page.getByLabel("Meeting preparation")).toContainText("canonical Matter evidence state");
+  await expect(page.getByLabel("Meeting preparation")).toContainText(/twelve absence days/i);
+  await page.getByLabel("Meeting preparation").getByRole("button",{name:"View exact source"}).first().click();
+  await expect(page.getByLabel("Source citation detail")).toContainText("twelve absence days");
+  const prepareAccessibility=await new AxeBuilder({page}).analyze();
+  expect(prepareAccessibility.violations).toEqual([]);
+
+  await page.getByRole("button",{name:"Evidence"}).click();
   page.on("dialog",dialog=>dialog.accept("ten absence days were recorded"));
   await page.getByRole("button",{name:"Correct with audit trail"}).click();
   await expect(page.getByText(/ten absence days were recorded/)).toBeVisible();
@@ -47,14 +58,14 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   await expect(page.getByLabel("What your evidence shows")).toHaveCount(0);
   await expect(page.getByLabel("Source citation detail")).toContainText("Select a citation");
   await page.unroute("**/questions/ask");
+
   await page.getByRole("button",{name:"Prepare"}).click();
-  await expect(page.getByRole("heading",{name:"Prepare for a meeting"})).toBeVisible();
-  await expect(page.getByLabel("Meeting preparation")).toContainText("canonical Matter evidence state");
-  await expect(page.getByLabel("Meeting preparation")).toContainText(/absence days/i);
-  await page.getByLabel("Meeting preparation").getByRole("button",{name:"View exact source"}).first().click();
-  await expect(page.getByLabel("Source citation detail")).toContainText("absence days");
-  const prepareAccessibility=await new AxeBuilder({page}).analyze();
-  expect(prepareAccessibility.violations).toEqual([]);
+  await expect(page.getByLabel("Meeting preparation")).toContainText("assertion without documentary source");
+  await expect(page.getByLabel("Meeting preparation")).toContainText("corrected history review");
+  await expect(page.getByLabel("Meeting preparation")).not.toContainText("ten absence days were recorded");
+  const correctedPrepareAccessibility=await new AxeBuilder({page}).analyze();
+  expect(correctedPrepareAccessibility.violations).toEqual([]);
+
   await page.getByRole("button",{name:"Overview"}).click();
   const accessibility=await new AxeBuilder({page}).analyze();
   expect(accessibility.violations).toEqual([]);
