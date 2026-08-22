@@ -1,3 +1,4 @@
+using System.Text.Json;
 using CaseMesh.Core.Models;
 using CaseMesh.MatterBrain;
 using CaseMesh.Persistence.Postgres;
@@ -16,6 +17,7 @@ internal static class MeetingPreparationProjection
         var gaps = FactualGapAnalyzer.Analyze(loaded.Evidence, loaded.Workplace, loaded.Brain);
         var activeDependencies = loaded.Brain.ActiveDependencies.ToArray();
         var sourceSpansById = loaded.Evidence.SourceSpans.ToDictionary(item => item.Id);
+        var candidatesById = loaded.Brain.Candidates.ToDictionary(item => item.Id);
         var extractedCanonicalRecords = loaded.Brain.Dependencies
             .Select(item => (item.CanonicalKind, item.CanonicalId))
             .ToHashSet();
@@ -142,20 +144,36 @@ internal static class MeetingPreparationProjection
             .ThenBy(item => item.Id)
             .Select(item =>
             {
-                var sourceSpanIds = activeDependencies
+                var activeCandidateIds = activeDependencies
                     .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
                                          dependency.CanonicalId == item.Id)
-                    .Select(dependency => dependency.SourceSpanId)
-                    .Where(sourceSpansById.ContainsKey)
+                    .Select(dependency => dependency.CandidateId)
                     .Distinct()
-                    .OrderBy(id => id)
+                    .ToHashSet();
+                var activeCandidates = activeCandidateIds
+                    .Where(candidatesById.ContainsKey)
+                    .Select(id => candidatesById[id])
+                    .Where(candidate => candidate.Kind == ExtractionCandidateKind.Person &&
+                                        candidate.Disposition == CandidateDisposition.Validated)
                     .ToArray();
+                var fieldsSourceBacked = activeCandidates.Length > 0 &&
+                                         activeCandidates.All(candidate => CandidateSupportsParticipant(candidate, item));
+                var sourceSpanIds = fieldsSourceBacked
+                    ? activeDependencies
+                        .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
+                                             dependency.CanonicalId == item.Id &&
+                                             activeCandidateIds.Contains(dependency.CandidateId))
+                        .Select(dependency => dependency.SourceSpanId)
+                        .Where(sourceSpansById.ContainsKey)
+                        .Distinct()
+                        .OrderBy(id => id)
+                        .ToArray()
+                    : [];
                 var documentVersionIds = sourceSpanIds
                     .Select(id => sourceSpansById[id].DocumentVersion.DocumentVersionId)
                     .Distinct()
                     .OrderBy(id => id)
                     .ToArray();
-                var sourceBacked = sourceSpanIds.Length > 0;
                 return new
                 {
                     item.Id,
@@ -163,10 +181,12 @@ internal static class MeetingPreparationProjection
                     item.RoleLabels,
                     sourceSpanIds,
                     documentVersionIds,
-                    provenanceStatus = sourceBacked ? "SourceBackedExtraction" : "Unsupported",
-                    identityNotice = sourceBacked
+                    provenanceStatus = fieldsSourceBacked ? "SourceBackedExtraction" : "Unsupported",
+                    identityNotice = fieldsSourceBacked
                         ? "Extracted participant record from cited documentary evidence; identity and role labels still require review."
-                        : "Participant record has no active documentary provenance; verify the displayed name and role labels before relying on it."
+                        : activeCandidates.Length == 0
+                            ? "Participant record has no active documentary provenance; verify the displayed name and role labels before relying on it."
+                            : "Active extraction no longer exactly supports the stored participant name and role labels; verify these fields before relying on them."
                 };
             }).ToArray();
 
@@ -215,6 +235,27 @@ internal static class MeetingPreparationProjection
                 "External legal guidance and Live meeting assistance are separate surfaces."
             }
         };
+    }
+
+    private static bool CandidateSupportsParticipant(ExtractionCandidateRecord candidate, Person participant)
+    {
+        try
+        {
+            var entity = JsonSerializer.Deserialize<EntityCandidate>(candidate.PayloadJson);
+            if (entity is null || entity.Kind != CanonicalEntityKind.Person ||
+                !string.Equals(entity.DisplayName, participant.DisplayName, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var candidateRoles = entity.RoleLabels.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+            var participantRoles = participant.RoleLabels.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+            return candidateRoles.SequenceEqual(participantRoles, StringComparer.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static object? DisputedAssertion(Assertion? assertion)
