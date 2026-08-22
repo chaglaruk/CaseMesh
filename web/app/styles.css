@@ -2,6 +2,8 @@
 * { box-sizing:border-box; }
 body { margin:0; color:var(--ink); background:var(--paper); font:16px/1.5 system-ui,-apple-system,sans-serif; }
 a { color:var(--brand); }
+.skip-link { position:absolute; left:12px; top:-80px; z-index:100; padding:10px 14px; background:#fff; color:var(--ink); border:2px solid var(--brand); }
+.skip-link:focus { top:10px; }
 .topbar { height:64px; padding:0 5vw; display:flex; align-items:center; gap:18px; border-bottom:1px solid var(--line); background:#fff; }
 .brand { color:var(--ink); font:700 24px Georgia,serif; text-decoration:none; }
 main { width:min(1180px,90vw); margin:40px auto; }
@@ -11,7 +13,8 @@ h1,h2,h3 { font-family:Georgia,serif; line-height:1.15; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:0 6px 20px #17373a0a; }
 .button,button { border:0; border-radius:8px; padding:10px 16px; background:var(--brand); color:#fff; font-weight:650; cursor:pointer; }
 button.secondary,.button.secondary { color:var(--brand); background:#e5f0ef; }
-button:focus-visible,a:focus-visible,input:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+button:disabled { cursor:not-allowed; opacity:.65; }
 label { display:grid; gap:6px; font-weight:650; margin-bottom:14px; }
 input,textarea { padding:10px 12px; border:1px solid #9da9a7; border-radius:8px; font:inherit; }
 .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }

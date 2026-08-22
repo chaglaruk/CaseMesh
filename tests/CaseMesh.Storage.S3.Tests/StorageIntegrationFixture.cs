@@ -59,7 +59,8 @@ public sealed class StorageIntegrationFixture : IAsyncLifetime
 
         var adminBuilder = new NpgsqlConnectionStringBuilder(rootBuilder.ConnectionString) { Database = _databaseName };
         AdminConnectionString = adminBuilder.ConnectionString;
-        await new PostgresMigrator().MigrateAsync(AdminConnectionString);
+        var migrator = new PostgresMigrator();
+        await migrator.MigrateThroughAsync(AdminConnectionString, "0001");
 
         await using (var admin = new NpgsqlConnection(AdminConnectionString))
         {
@@ -72,6 +73,7 @@ public sealed class StorageIntegrationFixture : IAsyncLifetime
                 """, admin);
             await createRole.ExecuteNonQueryAsync();
         }
+        await migrator.MigrateAsync(AdminConnectionString);
 
         AppConnectionString = new NpgsqlConnectionStringBuilder(adminBuilder.ConnectionString)
         {

@@ -17,6 +17,10 @@ public sealed class CaseMeshApiOptions
     public string S3AccessKey { get; init; } = string.Empty;
     public string S3SecretKey { get; init; } = string.Empty;
     public bool AllowInsecureLocalObjectStorage { get; init; }
+    public string ClamAvExecutablePath { get; init; } = string.Empty;
+    public string TesseractExecutablePath { get; init; } = string.Empty;
+    public string PopplerExecutablePath { get; init; } = string.Empty;
+    public string BuildIdentity { get; init; } = string.Empty;
 
     public void Validate(string environment)
     {
@@ -41,6 +45,20 @@ public sealed class CaseMeshApiOptions
             ArgumentException.ThrowIfNullOrWhiteSpace(S3BucketName);
             ArgumentException.ThrowIfNullOrWhiteSpace(S3AccessKey);
             ArgumentException.ThrowIfNullOrWhiteSpace(S3SecretKey);
+            ArgumentException.ThrowIfNullOrWhiteSpace(ClamAvExecutablePath);
+            ArgumentException.ThrowIfNullOrWhiteSpace(TesseractExecutablePath);
+            ArgumentException.ThrowIfNullOrWhiteSpace(PopplerExecutablePath);
+            ArgumentException.ThrowIfNullOrWhiteSpace(BuildIdentity);
+            RequireExecutable(ClamAvExecutablePath, nameof(ClamAvExecutablePath));
+            RequireExecutable(TesseractExecutablePath, nameof(TesseractExecutablePath));
+            RequireExecutable(PopplerExecutablePath, nameof(PopplerExecutablePath));
         }
+    }
+
+    private static void RequireExecutable(string value, string name)
+    {
+        if (string.Equals(value, "runtime-configured", StringComparison.OrdinalIgnoreCase) ||
+            !Path.IsPathRooted(value))
+            throw new InvalidOperationException($"{name} must be an explicit absolute deployment path.");
     }
 }

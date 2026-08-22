@@ -303,19 +303,30 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
 
     public Task CompleteAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId, int attempts,
         DateTimeOffset completedAt, CancellationToken cancellationToken = default) =>
-        FinishAsync(userId, tenantId, matterId, jobId, workerId, attempts, completedAt, true, null, cancellationToken);
+        FinishAsync(userId, tenantId, matterId, jobId, workerId, attempts, completedAt,
+            true, null, maximumAttempts: 1, cancellationToken);
 
     public Task FailAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId, int attempts,
         DateTimeOffset failedAt, string failureCode, CancellationToken cancellationToken = default) =>
-        FinishAsync(userId, tenantId, matterId, jobId, workerId, attempts, failedAt, false, failureCode, cancellationToken);
+        FailAsync(userId, tenantId, matterId, jobId, workerId, attempts, failedAt, failureCode, 3, cancellationToken);
+
+    public Task FailAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId, int attempts,
+        DateTimeOffset failedAt, string failureCode, int maximumAttempts,
+        CancellationToken cancellationToken = default)
+    {
+        if (maximumAttempts is < 1 or > 20) throw new ArgumentOutOfRangeException(nameof(maximumAttempts));
+        return FinishAsync(userId, tenantId, matterId, jobId, workerId, attempts, failedAt,
+            false, failureCode, maximumAttempts, cancellationToken);
+    }
 
     private Task FinishAsync(Guid userId, TenantId tenantId, Guid matterId, Guid jobId, Guid workerId,
-        int attempts, DateTimeOffset at, bool completed, string? failureCode, CancellationToken cancellationToken) =>
+        int attempts, DateTimeOffset at, bool completed, string? failureCode, int maximumAttempts,
+        CancellationToken cancellationToken) =>
         InAuthorizedTenantTransactionAsync(userId, tenantId, async (connection, transaction) =>
         {
             await using var command = new NpgsqlCommand("""
                 UPDATE casemesh.web_processing_jobs
-                SET status=CASE WHEN $7=4 AND attempts < 3 THEN 1 ELSE $7 END,
+                SET status=CASE WHEN $7=4 AND attempts < $9 THEN 1 ELSE $7 END,
                     lease_owner=NULL,lease_expires_at=NULL,failure_code=$8,
                     completed_at=CASE WHEN $7=3 THEN $6 ELSE NULL END,
                     available_at=CASE WHEN $7=4 THEN $6 + interval '5 minutes' ELSE available_at END
@@ -323,7 +334,8 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
                   AND lease_owner=$4 AND attempts=$5;
                 """, connection, transaction);
             PostgresMatterStore.AddParameters(command, tenantId.Value, matterId, jobId, workerId, attempts, at,
-                (short)(completed ? WebProcessingStatus.Completed : WebProcessingStatus.Failed), failureCode);
+                (short)(completed ? WebProcessingStatus.Completed : WebProcessingStatus.Failed), failureCode,
+                maximumAttempts);
             if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
                 throw new InvalidOperationException("The processing-job lease is missing or no longer owned by this worker.");
             return true;

@@ -16,7 +16,7 @@ public sealed class PostgresMigrator
         CancellationToken cancellationToken = default) =>
         await MigrateThroughAsync(connectionString, maximumVersion: null, cancellationToken);
 
-    internal async Task<IReadOnlyList<AppliedMigration>> MigrateThroughAsync(
+    public async Task<IReadOnlyList<AppliedMigration>> MigrateThroughAsync(
         string connectionString,
         string? maximumVersion,
         CancellationToken cancellationToken = default)

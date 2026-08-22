@@ -51,7 +51,8 @@ public sealed class IngestionIntegrationFixture : IAsyncLifetime
         }
 
         AdminConnection = new NpgsqlConnectionStringBuilder(rootBuilder.ConnectionString) { Database = _database }.ConnectionString;
-        await new PostgresMigrator().MigrateAsync(AdminConnection);
+        var migrator = new PostgresMigrator();
+        await migrator.MigrateThroughAsync(AdminConnection, "0001");
         await using (var admin = new NpgsqlConnection(AdminConnection))
         {
             await admin.OpenAsync();
@@ -63,6 +64,7 @@ public sealed class IngestionIntegrationFixture : IAsyncLifetime
                 """, admin);
             await role.ExecuteNonQueryAsync();
         }
+        await migrator.MigrateAsync(AdminConnection);
 
         AppConnection = new NpgsqlConnectionStringBuilder(AdminConnection)
         {
@@ -74,13 +76,19 @@ public sealed class IngestionIntegrationFixture : IAsyncLifetime
         var bucket = $"casemesh-ingestion-{suffix}";
         StorageOptions = new S3ObjectStorageOptions
         {
-            Endpoint = new Uri(endpoint), Region = "us-east-1", BucketName = bucket,
-            AccessKey = access, SecretKey = secret, AllowInsecureLocalEndpoint = true
+            Endpoint = new Uri(endpoint),
+            Region = "us-east-1",
+            BucketName = bucket,
+            AccessKey = access,
+            SecretKey = secret,
+            AllowInsecureLocalEndpoint = true
         };
         _s3 = new AmazonS3Client(new BasicAWSCredentials(access, secret), new AmazonS3Config
         {
-            ServiceURL = endpoint.TrimEnd('/'), AuthenticationRegion = "us-east-1",
-            ForcePathStyle = true, UseHttp = new Uri(endpoint).Scheme == Uri.UriSchemeHttp
+            ServiceURL = endpoint.TrimEnd('/'),
+            AuthenticationRegion = "us-east-1",
+            ForcePathStyle = true,
+            UseHttp = new Uri(endpoint).Scheme == Uri.UriSchemeHttp
         });
         await _s3.PutBucketAsync(new PutBucketRequest { BucketName = bucket });
     }

@@ -1,10 +1,13 @@
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
 using CaseMesh.Api;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Routing.Patterns;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -24,6 +27,90 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
         Assert.Contains("frame-ancestors 'none'", response.Headers.GetValues("Content-Security-Policy").Single());
         Assert.Equal("no-referrer", response.Headers.GetValues("Referrer-Policy").Single());
         Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+    }
+
+    [Fact]
+    public async Task Readiness_failure_exposes_only_the_aggregate_status()
+    {
+        using var response = await _factory.CreateClient().GetAsync("/health/ready");
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains("not-ready", body);
+        Assert.DoesNotContain("components", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("objectStorage", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Password", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("unavailable", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("127.0.0.1", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Telemetry_uses_route_templates_and_never_request_evidence_or_question_values()
+    {
+        const string sensitive = "synthetic-secret-question-and-evidence";
+        var observed = new List<string>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meter) =>
+        {
+            if (instrument.Meter.Name == PilotOperationsTelemetry.MeterName) meter.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            foreach (var tag in tags) observed.Add($"{tag.Key}={tag.Value}");
+        });
+        listener.SetMeasurementEventCallback<double>((_, _, tags, _) =>
+        {
+            foreach (var tag in tags) observed.Add($"{tag.Key}={tag.Value}");
+        });
+        listener.Start();
+        var context = new DefaultHttpContext();
+        context.Request.Method = sensitive;
+        context.Request.Path = $"/api/workspaces/{sensitive}/questions/ask";
+        context.Response.Body = new MemoryStream();
+        context.SetEndpoint(new RouteEndpoint(_ => Task.CompletedTask,
+            RoutePatternFactory.Parse("/api/workspaces/{tenantId}/matters/{matterId}/questions/ask"),
+            0, EndpointMetadataCollection.Empty, "synthetic-safe-route"));
+
+        await new PilotTelemetryMiddleware(_ => Task.CompletedTask).InvokeAsync(context);
+
+        Assert.Contains(observed, value => value.Contains("http.route=/api/workspaces/{tenantId}", StringComparison.Ordinal));
+        Assert.Contains(observed, value => value == "http.request.method=_OTHER");
+        Assert.DoesNotContain(observed, value => value.Contains(sensitive, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Telemetry_observes_the_exception_handlers_final_status_class()
+    {
+        var observed = new List<string>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meter) =>
+        {
+            if (instrument.Meter.Name == PilotOperationsTelemetry.MeterName) meter.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, _, tags, _) =>
+        {
+            if (instrument.Name != "casemesh.api.requests") return;
+            foreach (var tag in tags) observed.Add($"{tag.Key}={tag.Value}");
+        });
+        listener.Start();
+
+        using var response = await _factory.CreateClient().PostAsJsonAsync("/api/auth/test-sign-in",
+            new TestSignInRequest("", "Synthetic User"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("http.response.status_class=4xx", observed);
+    }
+
+    [Fact]
+    public async Task Unauthenticated_requests_do_not_consume_a_tenants_QA_rate_limiter()
+    {
+        using var client = _factory.CreateClient();
+        var path = $"/api/workspaces/{Guid.NewGuid():D}/matters/{Guid.NewGuid():D}/questions/ask";
+
+        for (var attempt = 0; attempt < 13; attempt++)
+        {
+            using var response = await client.PostAsJsonAsync(path, new { question = "Synthetic question" });
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        }
     }
 
     [Fact]
@@ -70,7 +157,7 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
     public async Task Invalid_antiforgery_token_is_a_client_error()
     {
         using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
-            { AllowAutoRedirect = false, HandleCookies = false });
+        { AllowAutoRedirect = false, HandleCookies = false });
         using var signIn = await client.PostAsJsonAsync("/api/auth/test-sign-in",
             new TestSignInRequest("synthetic-invalid-csrf", "Synthetic CSRF User"));
         client.DefaultRequestHeaders.Add("Cookie", signIn.Headers.GetValues("Set-Cookie").Single().Split(';', 2)[0]);
@@ -195,11 +282,37 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
     {
         var options = new CaseMeshApiOptions
         {
-            PostgresConnectionString = "Host=invalid", PublicOrigin = "https://casemesh.invalid",
-            S3Endpoint = "https://storage.invalid", S3BucketName = "private", S3AccessKey = "external",
+            PostgresConnectionString = "Host=invalid",
+            PublicOrigin = "https://casemesh.invalid",
+            S3Endpoint = "https://storage.invalid",
+            S3BucketName = "private",
+            S3AccessKey = "external",
             S3SecretKey = "external"
         };
         Assert.Throws<ArgumentNullException>(() => options.Validate("Production"));
+    }
+
+    [Fact]
+    public void Production_rejects_placeholder_ingestion_provider_paths()
+    {
+        var source = ValidOptions();
+        var options = new CaseMeshApiOptions
+        {
+            PostgresConnectionString = source.PostgresConnectionString,
+            PublicOrigin = source.PublicOrigin,
+            OidcAuthority = source.OidcAuthority,
+            OidcClientId = source.OidcClientId,
+            OidcClientSecret = source.OidcClientSecret,
+            S3Endpoint = source.S3Endpoint,
+            S3BucketName = source.S3BucketName,
+            S3AccessKey = source.S3AccessKey,
+            S3SecretKey = source.S3SecretKey,
+            ClamAvExecutablePath = "runtime-configured",
+            TesseractExecutablePath = source.TesseractExecutablePath,
+            PopplerExecutablePath = source.PopplerExecutablePath,
+            BuildIdentity = source.BuildIdentity
+        };
+        Assert.Throws<InvalidOperationException>(() => options.Validate("Production"));
     }
 
     [Theory]
@@ -209,18 +322,31 @@ public sealed class ApiSecurityTests : IClassFixture<SyntheticApiFactory>
     {
         var options = new CaseMeshApiOptions
         {
-            PostgresConnectionString = "Host=invalid", PublicOrigin = "http://casemesh.invalid",
-            S3Endpoint = "https://storage.invalid", S3BucketName = "private",
-            S3AccessKey = "external", S3SecretKey = "external"
+            PostgresConnectionString = "Host=invalid",
+            PublicOrigin = "http://casemesh.invalid",
+            S3Endpoint = "https://storage.invalid",
+            S3BucketName = "private",
+            S3AccessKey = "external",
+            S3SecretKey = "external"
         };
         Assert.Throws<InvalidOperationException>(() => options.Validate(environment));
     }
 
     private static CaseMeshApiOptions ValidOptions(string origin = "https://casemesh.invalid") => new()
     {
-        PostgresConnectionString = "Host=invalid", PublicOrigin = origin,
-        OidcAuthority = "https://idp.invalid", OidcClientId = "client", OidcClientSecret = "external",
-        S3Endpoint = "https://storage.invalid", S3BucketName = "private", S3AccessKey = "external", S3SecretKey = "external"
+        PostgresConnectionString = "Host=invalid",
+        PublicOrigin = origin,
+        OidcAuthority = "https://idp.invalid",
+        OidcClientId = "client",
+        OidcClientSecret = "external",
+        S3Endpoint = "https://storage.invalid",
+        S3BucketName = "private",
+        S3AccessKey = "external",
+        S3SecretKey = "external",
+        ClamAvExecutablePath = "/opt/casemesh/clamdscan",
+        TesseractExecutablePath = "/opt/casemesh/tesseract",
+        PopplerExecutablePath = "/opt/casemesh/pdftoppm",
+        BuildIdentity = "synthetic-build"
     };
 }
 
@@ -228,11 +354,20 @@ internal static class OptionsExtensions
 {
     internal static CaseMeshApiOptions WithTestAuth(this CaseMeshApiOptions source) => new()
     {
-        PostgresConnectionString = source.PostgresConnectionString, PublicOrigin = source.PublicOrigin,
-        OidcAuthority = source.OidcAuthority, OidcClientId = source.OidcClientId,
-        OidcClientSecret = source.OidcClientSecret, S3Endpoint = source.S3Endpoint,
-        S3BucketName = source.S3BucketName, S3AccessKey = source.S3AccessKey,
-        S3SecretKey = source.S3SecretKey, EnableTestAuthentication = true
+        PostgresConnectionString = source.PostgresConnectionString,
+        PublicOrigin = source.PublicOrigin,
+        OidcAuthority = source.OidcAuthority,
+        OidcClientId = source.OidcClientId,
+        OidcClientSecret = source.OidcClientSecret,
+        S3Endpoint = source.S3Endpoint,
+        S3BucketName = source.S3BucketName,
+        S3AccessKey = source.S3AccessKey,
+        S3SecretKey = source.S3SecretKey,
+        ClamAvExecutablePath = source.ClamAvExecutablePath,
+        TesseractExecutablePath = source.TesseractExecutablePath,
+        PopplerExecutablePath = source.PopplerExecutablePath,
+        BuildIdentity = source.BuildIdentity,
+        EnableTestAuthentication = true
     };
 }
 
