@@ -143,6 +143,7 @@ app.UseAuthorization();
 app.UseRateLimiter();
 app.UseMiddleware<ApiAntiforgeryMiddleware>();
 app.MapCaseMeshApi(options, app.Environment);
+app.MapMeetingPreparationApi();
 app.Run();
 
 public partial class Program;
