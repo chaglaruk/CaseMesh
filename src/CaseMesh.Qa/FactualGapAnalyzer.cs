@@ -20,8 +20,20 @@ public static class FactualGapAnalyzer
 
         var gaps = new List<FactualGap>();
         var assertions = evidence.Assertions.ToDictionary(item => item.Id);
+        var extractedCanonicalRecords = brain.Dependencies
+            .Select(item => (item.CanonicalKind, item.CanonicalId))
+            .ToHashSet();
+        var activeCanonicalRecords = brain.ActiveDependencies
+            .Select(item => (item.CanonicalKind, item.CanonicalId))
+            .ToHashSet();
+        bool IsCurrentCanonical(CanonicalRecordKind kind, Guid id) =>
+            !extractedCanonicalRecords.Contains((kind, id)) || activeCanonicalRecords.Contains((kind, id));
+
         foreach (var contradiction in evidence.Contradictions
-                     .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved)
+                     .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved &&
+                                    IsCurrentCanonical(CanonicalRecordKind.Contradiction, item.Id) &&
+                                    IsCurrentCanonical(CanonicalRecordKind.Assertion, item.AssertionAId) &&
+                                    IsCurrentCanonical(CanonicalRecordKind.Assertion, item.AssertionBId))
                      .OrderBy(item => item.Id))
         {
             gaps.Add(new FactualGap("unresolved-contradiction",
@@ -31,7 +43,8 @@ public static class FactualGapAnalyzer
         }
 
         foreach (var assertion in evidence.Assertions.Where(item => item.SourceSpanId is null &&
-                     item.VerificationState != VerificationState.Rejected).OrderBy(item => item.Id))
+                     item.VerificationState != VerificationState.Rejected &&
+                     IsCurrentCanonical(CanonicalRecordKind.Assertion, item.Id)).OrderBy(item => item.Id))
         {
             gaps.Add(new FactualGap("assertion-without-documentary-source",
                 "An attributed statement has no linked documentary source and requires supporting evidence or review.",
@@ -60,7 +73,9 @@ public static class FactualGapAnalyzer
         var linksByEvent = evidence.AssertionEventLinks.GroupBy(item => item.EventId);
         foreach (var links in linksByEvent)
         {
-            var linked = links.Select(item => assertions[item.AssertionId]).Where(item => item.EventTime.HasValue).ToArray();
+            var linked = links.Select(item => assertions[item.AssertionId])
+                .Where(item => item.EventTime.HasValue && IsCurrentCanonical(CanonicalRecordKind.Assertion, item.Id))
+                .ToArray();
             if (linked.Select(item => item.EventTime).Distinct().Skip(1).Any())
                 gaps.Add(new FactualGap("chronology-date-conflict",
                     "Linked attributed statements contain different dates for the same chronology item.",
