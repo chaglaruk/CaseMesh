@@ -1,4 +1,5 @@
 using CaseMesh.Core.Models;
+using CaseMesh.MatterBrain;
 using CaseMesh.Persistence.Postgres;
 using CaseMesh.Qa;
 
@@ -25,6 +26,7 @@ internal static class MeetingPreparationProjection
             .ToArray();
         var currentAssertionIds = currentAssertions.Select(item => item.Id).ToHashSet();
         var assertionsById = loaded.Evidence.Assertions.ToDictionary(item => item.Id);
+        var sourceSpansById = loaded.Evidence.SourceSpans.ToDictionary(item => item.Id);
 
         var evidencePoints = currentAssertions
             .Take(MaximumPriorityItems)
@@ -105,10 +107,44 @@ internal static class MeetingPreparationProjection
             notice = "Evidence-review prompt only; not an accusation, legal finding or legal duty."
         }).ToArray();
 
+        var participants = loaded.Brain.People
+            .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Id)
+            .Select(item =>
+            {
+                var sourceSpanIds = loaded.Brain.ActiveDependencies
+                    .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
+                                         dependency.CanonicalId == item.Id)
+                    .Select(dependency => dependency.SourceSpanId)
+                    .Where(sourceSpansById.ContainsKey)
+                    .Distinct()
+                    .OrderBy(id => id)
+                    .ToArray();
+                var documentVersionIds = sourceSpanIds
+                    .Select(id => sourceSpansById[id].DocumentVersion.DocumentVersionId)
+                    .Distinct()
+                    .OrderBy(id => id)
+                    .ToArray();
+                var sourceBacked = sourceSpanIds.Length > 0;
+                return new
+                {
+                    item.Id,
+                    item.DisplayName,
+                    item.RoleLabels,
+                    sourceSpanIds,
+                    documentVersionIds,
+                    provenanceStatus = sourceBacked ? "SourceBackedExtraction" : "Unsupported",
+                    identityNotice = sourceBacked
+                        ? "Extracted participant record from cited documentary evidence; identity and role labels still require review."
+                        : "Participant record has no active documentary provenance; verify the displayed name and role labels before relying on it."
+                };
+            }).ToArray();
+
         var referencedSourceIds = evidencePoints.SelectMany(item => item.sourceSpanIds)
             .Concat(chronology.SelectMany(item => item.sourceSpanIds))
             .Concat(unresolvedDisputes.SelectMany(item => item.sourceSpanIds))
             .Concat(gaps.SelectMany(item => item.SourceSpanIds))
+            .Concat(participants.SelectMany(item => item.sourceSpanIds))
             .ToHashSet();
         var sourceSpans = loaded.Evidence.SourceSpans
             .Where(item => referencedSourceIds.Contains(item.Id))
@@ -137,16 +173,7 @@ internal static class MeetingPreparationProjection
                 : "Preparation reflects the canonical Matter evidence state at the time this view was loaded.",
             evidencePoints,
             chronology,
-            participants = loaded.Brain.People
-                .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(item => item.Id)
-                .Select(item => new
-                {
-                    item.Id,
-                    item.DisplayName,
-                    item.RoleLabels,
-                    identityNotice = "Structured participant record; unresolved identity ambiguity remains a factual gap."
-                }).ToArray(),
+            participants,
             unresolvedDisputes,
             questionsToClarify,
             evidenceToHaveReady,
