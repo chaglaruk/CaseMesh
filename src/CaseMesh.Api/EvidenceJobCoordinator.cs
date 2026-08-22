@@ -75,6 +75,8 @@ public sealed class EvidenceJobCoordinator(
     {
         await using var processingLock = await jobs.AcquireProcessingLockAsync(
             job.TenantId, job.JobId, cancellationToken);
+        await using var matterStateLock = await jobs.AcquireMatterStateLockAsync(
+            job.TenantId, job.MatterId, cancellationToken);
         try
         {
             await jobs.RenewLeaseAsync(userId, job, _workerId,

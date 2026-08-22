@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>CaseMesh.Qa</RootNamespace>
+    <AssemblyName>CaseMesh.Qa</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CaseMesh.Core\CaseMesh.Core.csproj" />
+    <ProjectReference Include="..\CaseMesh.MatterBrain\CaseMesh.MatterBrain.csproj" />
+  </ItemGroup>
+</Project>

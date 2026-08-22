@@ -197,6 +197,19 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
             return await reader.ReadAsync(cancellationToken) ? ReadJob(reader) : null;
         }, cancellationToken);
 
+    public Task<bool> HasActiveJobsAsync(Guid userId, TenantId tenantId, Guid matterId,
+        CancellationToken cancellationToken = default) =>
+        InAuthorizedTenantTransactionAsync(userId, tenantId, async (connection, transaction) =>
+        {
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1 FROM casemesh.web_processing_jobs
+                    WHERE tenant_id=$1 AND matter_id=$2 AND status IN (1,2));
+                """, connection, transaction);
+            PostgresMatterStore.AddParameters(command, tenantId.Value, matterId);
+            return await command.ExecuteScalarAsync(cancellationToken) is true;
+        }, cancellationToken);
+
     public Task<WebProcessingJob?> ClaimAsync(Guid userId, TenantId tenantId, Guid workerId,
         DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken = default) =>
         InAuthorizedTenantTransactionAsync(userId, tenantId, async (connection, transaction) =>
@@ -241,14 +254,29 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
     public async Task<IAsyncDisposable> AcquireProcessingLockAsync(TenantId tenantId, Guid jobId,
         CancellationToken cancellationToken = default)
     {
+        if (jobId == Guid.Empty) throw new ArgumentException("Job id is required.", nameof(jobId));
+        return await AcquireSessionLockAsync(ProcessingLockName(tenantId, jobId), cancellationToken);
+    }
+
+    public async Task<IAsyncDisposable> AcquireMatterStateLockAsync(TenantId tenantId, Guid matterId,
+        CancellationToken cancellationToken = default)
+    {
+        if (tenantId.Value == Guid.Empty) throw new ArgumentException("Tenant id is required.", nameof(tenantId));
+        if (matterId == Guid.Empty) throw new ArgumentException("Matter id is required.", nameof(matterId));
+        return await AcquireSessionLockAsync(MatterStateLockName(tenantId, matterId), cancellationToken);
+    }
+
+    private async Task<IAsyncDisposable> AcquireSessionLockAsync(string lockName,
+        CancellationToken cancellationToken)
+    {
         var connection = await OpenSafeAsync(cancellationToken);
         try
         {
             await using var command = new NpgsqlCommand(
                 "SELECT pg_advisory_lock(hashtextextended($1,0));", connection);
-            PostgresMatterStore.AddParameters(command, ProcessingLockName(tenantId, jobId));
+            PostgresMatterStore.AddParameters(command, lockName);
             await command.ExecuteNonQueryAsync(cancellationToken);
-            return new ProcessingLock(_dataSource, connection, ProcessingLockName(tenantId, jobId));
+            return new SessionAdvisoryLock(_dataSource, connection, lockName);
         }
         catch
         {
@@ -370,7 +398,10 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
     private static string ProcessingLockName(TenantId tenantId, Guid jobId) =>
         $"casemesh-web-job:{tenantId.Value:D}:{jobId:D}";
 
-    private sealed class ProcessingLock(
+    private static string MatterStateLockName(TenantId tenantId, Guid matterId) =>
+        $"casemesh-matter-state:{tenantId.Value:D}:{matterId:D}";
+
+    private sealed class SessionAdvisoryLock(
         NpgsqlDataSource dataSource,
         NpgsqlConnection connection,
         string lockName) : IAsyncDisposable
@@ -384,7 +415,7 @@ public sealed class PostgresWebWorkspaceRepository : IAsyncDisposable
                     "SELECT pg_advisory_unlock(hashtextextended($1,0));", connection);
                 PostgresMatterStore.AddParameters(command, lockName);
                 if (await command.ExecuteScalarAsync() is not true)
-                    throw new InvalidOperationException("The PostgreSQL processing lock was not held.");
+                    throw new InvalidOperationException("The PostgreSQL session advisory lock was not held.");
             }
             catch (Exception exception)
             {

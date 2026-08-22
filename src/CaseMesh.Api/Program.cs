@@ -2,6 +2,7 @@ using System.Threading.RateLimiting;
 using CaseMesh.Api;
 using CaseMesh.Ingestion;
 using CaseMesh.Persistence.Postgres;
+using CaseMesh.Qa;
 using CaseMesh.Storage;
 using CaseMesh.Storage.S3;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -18,6 +19,12 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(_ => new PostgresWebWorkspaceRepository(options.PostgresConnectionString));
 builder.Services.AddSingleton(_ => new PostgresMatterBrainStore(options.PostgresConnectionString));
 builder.Services.AddSingleton(_ => new PostgresMatterStore(options.PostgresConnectionString));
+builder.Services.AddSingleton(provider => new PostgresMatterEvidenceRetriever(
+    provider.GetRequiredService<PostgresMatterStore>()));
+builder.Services.AddSingleton<IMatterEvidenceRetriever>(provider =>
+    provider.GetRequiredService<PostgresMatterEvidenceRetriever>());
+builder.Services.AddSingleton<IMatterReasoningProvider, DeterministicMatterReasoningProvider>();
+builder.Services.AddSingleton<MatterQaService>();
 builder.Services.AddSingleton(_ => new PostgresProfessionalExportService(options.PostgresConnectionString, TimeProvider.System));
 builder.Services.AddSingleton<IOriginalEvidenceStore>(_ => isExplicitTestHarness && string.IsNullOrWhiteSpace(options.S3Endpoint)
     ? new DisabledEvidenceStore()
@@ -98,6 +105,9 @@ builder.Services.AddRateLimiter(limiter =>
         RateLimitPartition.GetFixedWindowLimiter(
             context.User.FindFirst("sub")?.Value ?? context.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
             _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    limiter.AddPolicy("matter-qa", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.User.FindFirst("sub")?.Value ?? "unauthenticated",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 12, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
 var app = builder.Build();

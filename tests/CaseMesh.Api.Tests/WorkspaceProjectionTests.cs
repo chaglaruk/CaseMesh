@@ -4,6 +4,7 @@ using CaseMesh.Core.Services;
 using CaseMesh.Core.Workplace;
 using CaseMesh.MatterBrain;
 using CaseMesh.Persistence.Postgres;
+using CaseMesh.Qa;
 
 namespace CaseMesh.Api.Tests;
 
@@ -56,6 +57,56 @@ public sealed class WorkspaceProjectionTests
         Assert.Contains(firstSpan.Id, spanIds);
         Assert.Contains(secondSpan.Id, spanIds);
         Assert.DoesNotContain(unrelatedSpan.Id, spanIds);
+    }
+
+    [Fact]
+    public void Questions_projection_exposes_factual_gaps_and_processing_state()
+    {
+        var loaded = CreateContradictedMatter();
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(WorkspaceProjection.Questions(loaded, true)));
+
+        Assert.True(json.RootElement.GetProperty("processing").GetBoolean());
+        Assert.Contains(json.RootElement.GetProperty("gaps").EnumerateArray(), item =>
+            item.GetProperty("Code").GetString() == "unresolved-contradiction" &&
+            item.GetProperty("Route").GetString() == "disputed");
+        Assert.Contains("not legal", json.RootElement.GetProperty("notice").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Answer_projection_returns_only_exact_cited_source_spans()
+    {
+        var loaded = CreateContradictedMatter();
+        var cited = loaded.Evidence.SourceSpans.First();
+        var retrievalId = Guid.NewGuid();
+        var answer = new MatterQaAnswer(MatterAnswerStatus.Answered, "Synthetic answer",
+            [new VerifiedMatterClaim("Employer asserted a count.", MatterClaimKind.Evidence, [retrievalId])],
+            [new VerifiedMatterCitation(retrievalId, RetrievalMaterialKind.Assertion,
+                loaded.Evidence.Assertions.First().Id, cited.Id, cited.DocumentVersion.DocumentVersionId,
+                cited.DocumentVersion.OriginalObjectId, cited.DocumentVersion.ContentSha256,
+                "Employer asserted a count", "Employer", "Contradicted", false)], [], null,
+            new MatterReasoningProviderDescriptor("synthetic", "golden", "v1"));
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(WorkspaceProjection.QuestionAnswer(loaded, answer)));
+
+        var span = Assert.Single(json.RootElement.GetProperty("sourceSpans").EnumerateArray());
+        Assert.Equal(cited.Id, span.GetProperty("Id").GetGuid());
+        Assert.Equal(cited.DocumentVersion.DocumentVersionId, span.GetProperty("DocumentVersionId").GetGuid());
+        Assert.Contains("generation time", json.RootElement.GetProperty("currentnessNotice").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static PersistedMatterBrain CreateContradictedMatter()
+    {
+        var now = new DateTimeOffset(2026, 5, 1, 9, 0, 0, TimeSpan.Zero);
+        var graph = new MatterEvidenceGraph(new Matter(Guid.NewGuid(), new TenantId(Guid.NewGuid()),
+            "workplace-dispute", "Synthetic Matter", "open", now, now));
+        var first = AddAssertion(graph, AddSource(graph, 'A', "Employer states 12 days."), "12", now);
+        var second = AddAssertion(graph, AddSource(graph, 'B', "Attendance records 10 days."), "10", now);
+        graph.AddContradiction(Guid.NewGuid(), first.Id, second.Id,
+            ContradictionType.NumericMismatch, "synthetic-rule", now);
+        return new PersistedMatterBrain(graph, new WorkplaceMatter(graph), new MatterBrainState(graph));
     }
 
     private static SourceSpan AddSource(MatterEvidenceGraph graph, char hash, string text)

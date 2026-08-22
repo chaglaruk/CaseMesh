@@ -1,5 +1,6 @@
 using CaseMesh.Core.Models;
 using CaseMesh.Persistence.Postgres;
+using CaseMesh.Qa;
 
 namespace CaseMesh.Api;
 
@@ -93,16 +94,24 @@ internal static class WorkspaceProjection
         acasProcessStates = loaded.Workplace.AcasProcessStates
     };
 
-    internal static object OpenQuestions(PersistedMatterBrain loaded)
+    internal static object Questions(PersistedMatterBrain loaded, bool processing) => new
     {
-        var questions = new List<object>();
-        if (loaded.Evidence.DocumentVersions.Count == 0)
-            questions.Add(new { category = "evidence", question = "Which source documents should be added to this Matter?", relatedIds = Array.Empty<Guid>() });
-        foreach (var contradiction in loaded.Evidence.Contradictions.Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved))
-            questions.Add(new { category = "contradiction", question = "What evidence could help clarify these conflicting attributed statements?", relatedIds = new[] { contradiction.AssertionAId, contradiction.AssertionBId } });
-        foreach (var assertion in loaded.Evidence.Assertions.Where(item => item.SourceSpanId is null))
-            questions.Add(new { category = "provenance", question = "Is there documentary evidence supporting this attributed statement?", relatedIds = new[] { assertion.Id } });
-        return new { questions };
+        processing,
+        gaps = FactualGapAnalyzer.Analyze(loaded.Evidence, loaded.Workplace, loaded.Brain),
+        notice = "These are factual evidence gaps, not legal findings, accusations or advice."
+    };
+
+    internal static object QuestionAnswer(PersistedMatterBrain loaded, MatterQaAnswer answer)
+    {
+        var sourceIds = answer.Citations.Select(item => item.SourceSpanId).ToHashSet();
+        return new
+        {
+            answer,
+            sourceSpans = loaded.Evidence.SourceSpans.Where(item => sourceIds.Contains(item.Id))
+                .Select(SourceSpanProjection).ToArray(),
+            gaps = FactualGapAnalyzer.Analyze(loaded.Evidence, loaded.Workplace, loaded.Brain),
+            currentnessNotice = "This answer reflects the Matter evidence state at generation time. Start a new thread after evidence changes."
+        };
     }
 
     private static object Assertion(Assertion item) => new
