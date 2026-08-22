@@ -98,16 +98,24 @@ public sealed class MeetingPreparationProjectionTests
         brain.AcceptEntityMerge(Guid.NewGuid(), proposal.Id, "synthetic-reviewer", DateTimeOffset.UtcNow.AddMinutes(1));
 
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
-        var participants = json.RootElement.GetProperty("participants").EnumerateArray().ToArray();
-        Assert.Equal(2, participants.Length);
-        Assert.All(participants, participant =>
-        {
-            Assert.Equal("SourceBackedExtraction", participant.GetProperty("provenanceStatus").GetString());
-            Assert.Contains(firstSpan.Id,
-                participant.GetProperty("sourceSpanIds").EnumerateArray().Select(item => item.GetGuid()));
-            Assert.Contains(firstSpan.DocumentVersion.DocumentVersionId,
-                participant.GetProperty("documentVersionIds").EnumerateArray().Select(item => item.GetGuid()));
-        });
+        var participant = Assert.Single(json.RootElement.GetProperty("participants").EnumerateArray());
+        Assert.Equal(people[1].Id, participant.GetProperty("Id").GetGuid());
+        Assert.Equal("SourceBackedExtraction", participant.GetProperty("provenanceStatus").GetString());
+        Assert.Equal(2, participant.GetProperty("mergedIdentityIds").GetArrayLength());
+        Assert.Contains(people[0].Id,
+            participant.GetProperty("mergedIdentityIds").EnumerateArray().Select(item => item.GetGuid()));
+        Assert.Contains(people[1].Id,
+            participant.GetProperty("mergedIdentityIds").EnumerateArray().Select(item => item.GetGuid()));
+        var aliases = participant.GetProperty("identityAliases").EnumerateArray()
+            .Select(item => item.GetProperty("Value").GetString()).ToArray();
+        Assert.Contains("Alex Smith", aliases);
+        Assert.Contains("Alex Smyth", aliases);
+        Assert.Contains(firstSpan.Id,
+            participant.GetProperty("sourceSpanIds").EnumerateArray().Select(item => item.GetGuid()));
+        Assert.Contains(firstSpan.DocumentVersion.DocumentVersionId,
+            participant.GetProperty("documentVersionIds").EnumerateArray().Select(item => item.GetGuid()));
+        Assert.Contains("collapsed duplicate participant", participant.GetProperty("identityNotice").GetString(),
+            StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(json.RootElement.GetProperty("questionsToClarify").EnumerateArray(), item =>
             item.GetProperty("Code").GetString() == "entity-ambiguity");
         Assert.Contains(firstSpan.Id, json.RootElement.GetProperty("sourceSpans").EnumerateArray()
@@ -200,6 +208,24 @@ public sealed class MeetingPreparationProjectionTests
         Assert.Contains(firstSpan.Id,
             dated.GetProperty("sourceSpanIds").EnumerateArray().Select(item => item.GetGuid()));
         Assert.All(chronology, item => Assert.True(item.GetProperty("sourceSpanIds").GetArrayLength() > 0));
+    }
+
+    [Fact]
+    public void Preparation_omits_stale_event_date_after_assertion_date_correction()
+    {
+        var loaded = CreateSyntheticMatter(out _, out _, out _);
+        var matterEvent = Assert.Single(loaded.Evidence.Events);
+        var original = loaded.Evidence.Assertions.OrderBy(item => item.AssertedAt).First();
+        var correctedEventTime = matterEvent.StartTime!.Value.AddDays(3);
+
+        loaded.Brain.CorrectAssertion(original.Id, Guid.NewGuid(), "11", correctedEventTime,
+            Guid.NewGuid(), "synthetic-reviewer", original.AssertedAt.AddHours(1));
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
+        Assert.DoesNotContain(json.RootElement.GetProperty("chronology").EnumerateArray(), item =>
+            item.GetProperty("Id").GetGuid() == matterEvent.Id);
+        Assert.Contains(json.RootElement.GetProperty("questionsToClarify").EnumerateArray(), item =>
+            item.GetProperty("Code").GetString() == "corrected-history-review");
     }
 
     [Fact]
