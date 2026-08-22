@@ -32,7 +32,7 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   const prepareAccessibility=await new AxeBuilder({page}).analyze();
   expect(prepareAccessibility.violations).toEqual([]);
 
-  await page.getByRole("button",{name:"Evidence"}).click();
+  await page.getByRole("button",{name:"Evidence",exact:true}).click();
   page.on("dialog",dialog=>dialog.accept("ten absence days were recorded"));
   await page.getByRole("button",{name:"Correct with audit trail"}).click();
   await expect(page.getByText(/ten absence days were recorded/)).toBeVisible();
