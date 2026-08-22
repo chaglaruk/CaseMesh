@@ -88,11 +88,12 @@ public static class FactualGapAnalyzer
         var completedProposals = brain.EntityResolutionActions.Where(item =>
                 item.Kind is EntityResolutionActionKind.Accepted or EntityResolutionActionKind.Rejected or EntityResolutionActionKind.Reversed)
             .Select(item => item.ProposalId).ToHashSet();
-        var invalidatedRunIds = brain.DependencyInvalidations
+        var reextractedSupport = brain.DependencyInvalidations
+            .Where(invalidation => invalidation.InvalidatedByRunId.HasValue)
             .Join(brain.Dependencies,
                 invalidation => invalidation.DependencyId,
                 dependency => dependency.Id,
-                (_, dependency) => dependency.RunId)
+                (_, dependency) => (dependency.RunId, dependency.SourceSpanId))
             .ToHashSet();
         var entityMatchCandidates = brain.Candidates
             .Where(item => item.Kind == ExtractionCandidateKind.EntityMatch &&
@@ -104,7 +105,7 @@ public static class FactualGapAnalyzer
         {
             if (!string.Equals(action.Actor, "structured-extraction", StringComparison.Ordinal)) return true;
             return !entityMatchCandidates.TryGetValue(action.ProposalId, out var candidate) ||
-                   !invalidatedRunIds.Contains(candidate.RunId);
+                   !candidate.SourceSpanIds.Any(sourceId => reextractedSupport.Contains((candidate.RunId, sourceId)));
         }
 
         foreach (var proposal in brain.EntityResolutionActions.Where(item =>
