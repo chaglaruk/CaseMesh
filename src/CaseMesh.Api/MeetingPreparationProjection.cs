@@ -16,14 +16,15 @@ internal static class MeetingPreparationProjection
         var gaps = FactualGapAnalyzer.Analyze(loaded.Evidence, loaded.Workplace, loaded.Brain);
         var activeDependencies = loaded.Brain.ActiveDependencies.ToArray();
         var sourceSpansById = loaded.Evidence.SourceSpans.ToDictionary(item => item.Id);
-        var extractedAssertionIds = loaded.Brain.Dependencies
-            .Where(item => item.CanonicalKind == CanonicalRecordKind.Assertion)
-            .Select(item => item.CanonicalId)
+        var extractedCanonicalRecords = loaded.Brain.Dependencies
+            .Select(item => (item.CanonicalKind, item.CanonicalId))
             .ToHashSet();
-        var activeExtractedAssertionIds = activeDependencies
-            .Where(item => item.CanonicalKind == CanonicalRecordKind.Assertion)
-            .Select(item => item.CanonicalId)
+        var activeCanonicalRecords = activeDependencies
+            .Select(item => (item.CanonicalKind, item.CanonicalId))
             .ToHashSet();
+        bool IsCurrentCanonical(CanonicalRecordKind kind, Guid id) =>
+            !extractedCanonicalRecords.Contains((kind, id)) || activeCanonicalRecords.Contains((kind, id));
+
         var currentAssertions = loaded.Evidence.Assertions
             .Where(item => item.SourceSpanId.HasValue &&
                            item.SupersededByAssertionId is null &&
@@ -31,7 +32,7 @@ internal static class MeetingPreparationProjection
                            item.VerificationState != VerificationState.Rejected &&
                            item.OriginClass != EvidenceOriginClass.AiGeneratedInference &&
                            item.AssertionClass != AssertionClass.AiInference &&
-                           (!extractedAssertionIds.Contains(item.Id) || activeExtractedAssertionIds.Contains(item.Id)))
+                           IsCurrentCanonical(CanonicalRecordKind.Assertion, item.Id))
             .OrderBy(item => item.EventTime ?? item.AssertedAt)
             .ThenBy(item => item.Id)
             .ToArray();
@@ -57,7 +58,8 @@ internal static class MeetingPreparationProjection
             }).ToArray();
 
         var chronology = loaded.Evidence.Events
-            .Where(item => item.Status is not (EventStatus.Superseded or EventStatus.Rejected))
+            .Where(item => item.Status is not (EventStatus.Superseded or EventStatus.Rejected) &&
+                           IsCurrentCanonical(CanonicalRecordKind.Event, item.Id))
             .Select(item =>
             {
                 var linkedAssertionSourceIds = loaded.Evidence.AssertionEventLinks
@@ -94,7 +96,10 @@ internal static class MeetingPreparationProjection
             .ToArray();
 
         var unresolvedDisputes = loaded.Evidence.Contradictions
-            .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved)
+            .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved &&
+                           IsCurrentCanonical(CanonicalRecordKind.Contradiction, item.Id) &&
+                           IsCurrentCanonical(CanonicalRecordKind.Assertion, item.AssertionAId) &&
+                           IsCurrentCanonical(CanonicalRecordKind.Assertion, item.AssertionBId))
             .OrderBy(item => item.Id)
             .Select(item =>
             {
@@ -132,6 +137,7 @@ internal static class MeetingPreparationProjection
         }).ToArray();
 
         var participants = loaded.Brain.People
+            .Where(item => IsCurrentCanonical(CanonicalRecordKind.Person, item.Id))
             .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.Id)
             .Select(item =>
