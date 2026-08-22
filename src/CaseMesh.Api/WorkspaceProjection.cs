@@ -109,7 +109,8 @@ internal static class WorkspaceProjection
             answer,
             sourceSpans = loaded.Evidence.SourceSpans.Where(item => sourceIds.Contains(item.Id))
                 .Select(SourceSpanProjection).ToArray(),
-            gaps = FactualGapAnalyzer.Analyze(loaded.Evidence, loaded.Workplace, loaded.Brain)
+            gaps = FactualGapAnalyzer.Analyze(loaded.Evidence, loaded.Workplace, loaded.Brain),
+            currentnessNotice = "This answer reflects the Matter evidence state at generation time. Start a new thread after evidence changes."
         };
     }
 

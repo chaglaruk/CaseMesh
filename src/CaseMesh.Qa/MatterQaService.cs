@@ -61,8 +61,9 @@ public sealed class MatterQaService
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(_reasoningTimeout);
-            output = await _reasoningProvider.AnswerAsync(
+            var providerTask = _reasoningProvider.AnswerAsync(
                 new MatterReasoningRequest(question, EvidenceBoundaryInstruction, context), deadline.Token);
+            output = await providerTask.WaitAsync(_reasoningTimeout, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -105,7 +106,7 @@ public sealed class MatterQaService
         verifiedClaims = [];
         verifiedCitations = [];
         failureCode = "invalid-provider-output";
-        if (output is null || string.IsNullOrWhiteSpace(output.Summary) ||
+        if (output is null || string.IsNullOrWhiteSpace(output.Summary) || output.Summary.Length > MaximumAnswerCharacters ||
             output.Claims is null || output.Warnings is null || output.Claims.Count is 0 or > MaximumClaims ||
             output.Warnings.Count > MaximumWarnings || output.Summary.Any(char.IsControl))
             return false;
@@ -113,10 +114,12 @@ public sealed class MatterQaService
         if (output.Warnings.Any(item => string.IsNullOrWhiteSpace(item) || item.Length > 1_000 || item.Any(char.IsControl)))
             return false;
 
-        var aggregateText = output.Summary + " " + string.Join(' ', output.Claims.Select(item => item.Text)) + " " +
-                            string.Join(' ', output.Warnings);
-        if (aggregateText.Length > MaximumAnswerCharacters || ProhibitedOutputTerms.Any(term =>
-                aggregateText.Contains(term, StringComparison.OrdinalIgnoreCase)))
+        if (output.Claims.Any(claim => claim is null || string.IsNullOrWhiteSpace(claim.Text) ||
+                claim.Text.Length > 2_000 || claim.Text.Any(char.IsControl)) ||
+            checked(output.Summary.Length + output.Claims.Sum(item => item.Text.Length) +
+                output.Warnings.Sum(item => item.Length)) > MaximumAnswerCharacters ||
+            ContainsProhibitedOutput(output.Summary) || output.Claims.Any(item => ContainsProhibitedOutput(item.Text)) ||
+            output.Warnings.Any(ContainsProhibitedOutput))
         {
             failureCode = "prohibited-output";
             return false;
@@ -127,8 +130,7 @@ public sealed class MatterQaService
         var claims = new List<VerifiedMatterClaim>();
         foreach (var claim in output.Claims)
         {
-            if (!Enum.IsDefined(claim.Kind) || string.IsNullOrWhiteSpace(claim.Text) || claim.Text.Length > 2_000 ||
-                claim.Text.Any(char.IsControl) || claim.CitationResultIds is null ||
+            if (!Enum.IsDefined(claim.Kind) || claim.CitationResultIds is null ||
                 claim.CitationResultIds.Count != claim.CitationResultIds.Distinct().Count())
                 return false;
             if ((claim.Kind == MatterClaimKind.Evidence && claim.CitationResultIds.Count == 0) ||
@@ -143,7 +145,13 @@ public sealed class MatterQaService
                 }
                 used.Add(id);
             }
-            claims.Add(new VerifiedMatterClaim(claim.Text.Trim(), claim.Kind, claim.CitationResultIds.ToArray()));
+            var verifiedText = claim.Kind == MatterClaimKind.Evidence
+                ? string.Join(" | ", claim.CitationResultIds.Select(id =>
+                    $"{allowed[id].Attribution} — {allowed[id].Label}"))
+                : claim.Text.Trim();
+            if (verifiedText.Length > 2_000)
+                return false;
+            claims.Add(new VerifiedMatterClaim(verifiedText, claim.Kind, claim.CitationResultIds.ToArray()));
         }
 
         verifiedClaims = claims;
@@ -197,6 +205,9 @@ public sealed class MatterQaService
             : $"CaseMesh found {evidenceClaims} source-backed Matter {(evidenceClaims == 1 ? "claim" : "claims")} and " +
               $"{analysisClaims} separately labelled {(analysisClaims == 1 ? "analysis item" : "analysis items")}.";
     }
+
+    private static bool ContainsProhibitedOutput(string text) =>
+        ProhibitedOutputTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
 
     private static MatterQaAnswer Insufficient(string summary, string failureCode) => new(
         MatterAnswerStatus.InsufficientEvidence, summary, [], [],

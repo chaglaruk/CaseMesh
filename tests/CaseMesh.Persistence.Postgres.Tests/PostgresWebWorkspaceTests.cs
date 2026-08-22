@@ -71,6 +71,23 @@ public sealed class PostgresWebWorkspaceTests(PostgresFixture database)
     }
 
     [PostgresFact]
+    public async Task Matter_state_lock_serializes_evidence_read_and_write_work_per_matter()
+    {
+        await using var firstRepository = new PostgresWebWorkspaceRepository(database.AppConnectionString);
+        await using var secondRepository = new PostgresWebWorkspaceRepository(database.AppConnectionString);
+        var tenant = new TenantId(Guid.NewGuid());
+        var matterId = Guid.NewGuid();
+        var first = await firstRepository.AcquireMatterStateLockAsync(tenant, matterId);
+
+        var secondTask = secondRepository.AcquireMatterStateLockAsync(tenant, matterId);
+        await Task.Delay(100);
+        Assert.False(secondTask.IsCompleted);
+
+        await first.DisposeAsync();
+        await using var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [PostgresFact]
     public async Task Job_completion_requires_the_active_lease_owner_and_is_visible_to_member_only()
     {
         await using var repository = new PostgresWebWorkspaceRepository(database.AppConnectionString);

@@ -135,7 +135,7 @@ public sealed class MatterQaTests
     }
 
     [Fact]
-    public async Task Provider_summary_cannot_bypass_the_claim_citation_gate()
+    public async Task Provider_text_cannot_bypass_canonical_claim_and_citation_binding()
     {
         var result = Result(1, "Source-backed record", "Employer");
         var provider = new FixedReasoner(new MatterReasoningOutput(
@@ -147,7 +147,8 @@ public sealed class MatterQaTests
 
         Assert.Equal(MatterAnswerStatus.Answered, answer.Status);
         Assert.DoesNotContain("99 days", answer.Summary, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("Employer asserted a sourced record", answer.Claims.Single().Text);
+        Assert.Equal("Employer — Source-backed record", answer.Claims.Single().Text);
+        Assert.DoesNotContain("sourced record", answer.Claims.Single().Text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -186,6 +187,34 @@ public sealed class MatterQaTests
 
         Assert.Equal(MatterAnswerStatus.InsufficientEvidence, answer.Status);
         Assert.Equal("reasoning-provider-failure", answer.FailureCode);
+    }
+
+    [Fact]
+    public async Task Reasoning_provider_that_ignores_cancellation_cannot_hold_the_request_open()
+    {
+        var answerTask = new MatterQaService(
+                new FixedRetriever([Result(1, "Private source text", "Employer")]),
+                new CancellationIgnoringReasoner(), TimeSpan.FromMilliseconds(20))
+            .AskAsync(Request("source record"));
+
+        var answer = await answerTask.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(MatterAnswerStatus.InsufficientEvidence, answer.Status);
+        Assert.Equal("reasoning-provider-failure", answer.FailureCode);
+    }
+
+    [Fact]
+    public async Task Oversized_provider_output_fails_before_answer_materialization()
+    {
+        var result = Result(1, "Source-backed record", "Employer");
+        var provider = new FixedReasoner(new MatterReasoningOutput(new string('s', MaximumAllowedTestOutput),
+            [new("Source-backed record", MatterClaimKind.Evidence, [result.Id])], []));
+
+        var answer = await new MatterQaService(new FixedRetriever([result]), provider)
+            .AskAsync(Request("source record"));
+
+        Assert.Equal(MatterAnswerStatus.InsufficientEvidence, answer.Status);
+        Assert.Equal("invalid-provider-output", answer.FailureCode);
     }
 
     [Fact]
@@ -424,6 +453,15 @@ public sealed class MatterQaTests
             throw new InvalidOperationException("Unreachable synthetic provider state.");
         }
     }
+
+    private sealed class CancellationIgnoringReasoner : IMatterReasoningProvider
+    {
+        public MatterReasoningProviderDescriptor Descriptor { get; } = new("synthetic", "cancellation-ignoring", "v1");
+        public Task<MatterReasoningOutput> AnswerAsync(MatterReasoningRequest request,
+            CancellationToken cancellationToken = default) => new TaskCompletionSource<MatterReasoningOutput>().Task;
+    }
+
+    private const int MaximumAllowedTestOutput = MatterQaService.MaximumAnswerCharacters + 1;
 }
 
 internal static class RetrievalResultTestExtensions

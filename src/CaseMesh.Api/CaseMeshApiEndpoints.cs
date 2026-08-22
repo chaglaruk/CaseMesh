@@ -184,6 +184,7 @@ public static class CaseMeshApiEndpoints
         var brainPersisted = false;
         var storeAttempted = false;
         var createdOriginal = false;
+        IAsyncDisposable? matterStateLock = null;
         try
         {
             string hash;
@@ -210,6 +211,7 @@ public static class CaseMeshApiEndpoints
                 }
                 hash = Convert.ToHexString(incremental.GetHashAndReset());
             }
+            matterStateLock = await repository.AcquireMatterStateLockAsync(tenant, matterId, token);
             var loaded = await brains.LoadAsync(tenant, matterId, token) ?? throw new UnauthorizedAccessException();
             var version = loaded.Evidence.RegisterDocumentVersion(documentId, documentVersionId, hash, proposedOriginalId);
             createdOriginal = version.OriginalObjectId == proposedOriginalId;
@@ -254,7 +256,14 @@ public static class CaseMeshApiEndpoints
         }
         finally
         {
-            try { File.Delete(tempPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            try
+            {
+                if (matterStateLock is not null) await matterStateLock.DisposeAsync();
+            }
+            finally
+            {
+                try { File.Delete(tempPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
         }
     }
 
@@ -278,6 +287,7 @@ public static class CaseMeshApiEndpoints
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
         if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
+        await using var matterStateLock = await repository.AcquireMatterStateLockAsync(tenant, matterId, token);
         var loaded = await brains.LoadAsync(tenant, matterId, token);
         if (loaded is null) return Results.NotFound();
         var original = loaded.Evidence.Assertions.SingleOrDefault(item => item.Id == assertionId);
@@ -297,9 +307,10 @@ public static class CaseMeshApiEndpoints
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
         if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
+        await using var matterStateLock = await repository.AcquireMatterStateLockAsync(tenant, matterId, token);
+        var processing = await repository.HasActiveJobsAsync(user.Id, tenant, matterId, token);
         var loaded = await brains.LoadAsync(tenant, matterId, token);
         if (loaded is null) return Results.NotFound();
-        var processing = await repository.HasActiveJobsAsync(user.Id, tenant, matterId, token);
         return Results.Ok(WorkspaceProjection.Questions(loaded, processing));
     }
 
@@ -310,6 +321,7 @@ public static class CaseMeshApiEndpoints
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
         if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
+        await using var matterStateLock = await repository.AcquireMatterStateLockAsync(tenant, matterId, token);
         if (await repository.HasActiveJobsAsync(user.Id, tenant, matterId, token))
             return Results.Conflict(new { title = "Evidence processing is still in progress.", code = "evidence-processing" });
         var loaded = await brains.LoadAsync(tenant, matterId, token);
@@ -318,6 +330,8 @@ public static class CaseMeshApiEndpoints
             tenant, matterId, RequireText(request.Question, MatterQaService.MaximumQuestionCharacters)), token);
         var refreshed = await brains.LoadAsync(tenant, matterId, token);
         if (refreshed is null) return Results.NotFound();
+        if (await repository.HasActiveJobsAsync(user.Id, tenant, matterId, token))
+            return Results.Conflict(new { title = "Evidence processing started while the answer was generated.", code = "evidence-processing" });
         return Results.Ok(WorkspaceProjection.QuestionAnswer(refreshed, answer));
     }
 

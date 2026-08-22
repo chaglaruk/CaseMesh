@@ -93,6 +93,8 @@ public sealed class WorkspaceProjectionTests
         var span = Assert.Single(json.RootElement.GetProperty("sourceSpans").EnumerateArray());
         Assert.Equal(cited.Id, span.GetProperty("Id").GetGuid());
         Assert.Equal(cited.DocumentVersion.DocumentVersionId, span.GetProperty("DocumentVersionId").GetGuid());
+        Assert.Contains("generation time", json.RootElement.GetProperty("currentnessNotice").GetString(),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static PersistedMatterBrain CreateContradictedMatter()

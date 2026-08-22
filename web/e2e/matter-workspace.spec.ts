@@ -32,6 +32,7 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   await page.getByLabel("One Matter-scoped factual question").fill("What does the evidence say about absence days?");
   await page.getByRole("button",{name:"Ask your evidence"}).click();
   await expect(page.getByLabel("What your evidence shows")).toContainText(/absence days/i);
+  await expect(page.getByLabel("What your evidence shows")).toContainText(/generation time/i);
   await page.getByRole("button",{name:/View exact source/}).first().click();
   await expect(page.getByLabel("Source citation detail")).toContainText("absence days");
   await page.getByRole("button",{name:"New thread"}).click();
