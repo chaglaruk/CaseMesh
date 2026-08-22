@@ -14,8 +14,7 @@ var options = builder.Configuration.GetSection(CaseMeshApiOptions.SectionName).G
               ?? new CaseMeshApiOptions();
 options.Validate(builder.Environment.EnvironmentName);
 var isExplicitTestHarness = options.EnableTestAuthentication && builder.Environment.IsEnvironment("Testing");
-var scannerVersion = isExplicitTestHarness ? "synthetic-clean" : "runtime-configured";
-var ocrVersion = isExplicitTestHarness ? "synthetic-ocr" : "runtime-configured";
+const string runtimeDependencyVersion = "runtime-configured";
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<PilotRuntimeHealth>();
@@ -56,16 +55,16 @@ builder.Services.AddSingleton<IIngestionRepository>(provider =>
     new PostgresIngestionRepository(provider.GetRequiredService<PostgresMatterStore>()));
 builder.Services.AddSingleton<IMalwareScanner>(_ => isExplicitTestHarness
     ? new SyntheticCleanScanner()
-    : new ClamAvCliScanner(scannerVersion, TimeSpan.FromSeconds(30), options.ClamAvExecutablePath));
+    : new ClamAvCliScanner(runtimeDependencyVersion, TimeSpan.FromSeconds(30), options.ClamAvExecutablePath));
 builder.Services.AddSingleton<IOcrEngine>(_ => isExplicitTestHarness
     ? new SyntheticOcrEngine()
-    : new TesseractCliOcrEngine(ocrVersion, TimeSpan.FromSeconds(30), options.TesseractExecutablePath));
+    : new TesseractCliOcrEngine(runtimeDependencyVersion, TimeSpan.FromSeconds(30), options.TesseractExecutablePath));
 builder.Services.AddSingleton<IPdfPageRasterizer>(_ =>
     new PopplerPdfPageRasterizer("runtime-configured", TimeSpan.FromSeconds(30),
         isExplicitTestHarness ? "pdftoppm" : options.PopplerExecutablePath));
 builder.Services.AddSingleton(new IngestionPipeline("web-v1", isExplicitTestHarness ? "synthetic-clean" : "clamav-cli",
-    scannerVersion, "casemesh-parsers-v1", isExplicitTestHarness ? "synthetic-ocr" : "tesseract-cli",
-    ocrVersion));
+    runtimeDependencyVersion, "casemesh-parsers-v1", isExplicitTestHarness ? "synthetic-ocr" : "tesseract-cli",
+    runtimeDependencyVersion));
 builder.Services.AddSingleton<EvidenceJobCoordinator>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<EvidenceJobCoordinator>());
 builder.Services.AddSingleton<PrivacyDeletionCoordinator>();
