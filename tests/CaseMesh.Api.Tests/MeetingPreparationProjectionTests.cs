@@ -45,11 +45,14 @@ public sealed class MeetingPreparationProjectionTests
             EvidenceOriginClass.AiGeneratedInference, AssertionClass.AiInference,
             DisputeState.Unverified, IntegrityState.DerivedCopy, VerificationState.NotReviewed,
             createdByModel: "synthetic-model/1");
-        loaded.Evidence.AddAssertion(Guid.NewGuid(), "synthetic-employee", "rejected-value", "rejected",
+        var rejected = loaded.Evidence.AddAssertion(Guid.NewGuid(), "synthetic-employee", "rejected-value", "rejected",
             "synthetic source", DateTimeOffset.UtcNow,
             EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
             DisputeState.Unverified, IntegrityState.OriginalHashVerified, VerificationState.Rejected,
             firstSpan.Id, extractionConfidence: 0.99m);
+        var current = loaded.Evidence.Assertions.First(item => item.VerificationState != VerificationState.Rejected);
+        loaded.Evidence.AddContradiction(Guid.NewGuid(), current.Id, rejected.Id,
+            ContradictionType.DirectConflict, "synthetic-rejected-rule", DateTimeOffset.UtcNow);
 
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, true)));
         var text = json.RootElement.GetProperty("evidencePoints").ToString();
@@ -60,6 +63,11 @@ public sealed class MeetingPreparationProjectionTests
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains("not legal advice", json.RootElement.GetProperty("notices")[0].GetString(),
             StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(json.RootElement.GetProperty("unresolvedDisputes").EnumerateArray()
+                .SelectMany(item => item.GetProperty("assertions").EnumerateArray()),
+            assertion => assertion.GetProperty("Id").GetGuid() == rejected.Id &&
+                         assertion.GetProperty("rejected").GetBoolean() &&
+                         !assertion.GetProperty("current").GetBoolean());
     }
 
     private static PersistedMatterBrain CreateSyntheticMatter(
