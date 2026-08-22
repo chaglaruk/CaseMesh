@@ -158,12 +158,54 @@ public sealed class MeetingPreparationProjectionTests
         Assert.DoesNotContain("old-extracted-value", evidencePoints, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Preparation_excludes_invalidated_extracted_contradictions_from_disputes_and_gaps()
+    {
+        var loaded = CreateSyntheticMatter(out var firstSpan, out _, out _);
+        var assertedAt = new DateTimeOffset(2026, 4, 22, 11, 0, 0, TimeSpan.Zero);
+        var staleProvider = new FixedExtractionProvider(StaleContradictionOutput(firstSpan, assertedAt),
+            "contradiction-model-v1");
+
+        await new MatterBrainMergeService(TimeProvider.System)
+            .ExtractAndMergeAsync(loaded.Brain, [firstSpan.Id], staleProvider);
+        var staleContradiction = loaded.Evidence.Contradictions.Single(item =>
+            item.DetectedBy == "synthetic-extractor-conflict");
+
+        var replacementProvider = new FixedExtractionProvider(
+            AssertionOutput(firstSpan, "replacement-current-value", assertedAt), "contradiction-model-v2");
+        await new MatterBrainMergeService(TimeProvider.System)
+            .ExtractAndMergeAsync(loaded.Brain, [firstSpan.Id], replacementProvider);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
+        Assert.DoesNotContain(json.RootElement.GetProperty("unresolvedDisputes").EnumerateArray(), item =>
+            item.GetProperty("Id").GetGuid() == staleContradiction.Id);
+        Assert.DoesNotContain(json.RootElement.GetProperty("questionsToClarify").EnumerateArray(), item =>
+            item.GetProperty("RelatedRecordIds").EnumerateArray().Any(id => id.GetGuid() == staleContradiction.Id));
+    }
+
     private static StructuredExtractionOutput AssertionOutput(SourceSpan source, string value, DateTimeOffset assertedAt) =>
         new("{\"assertion\":true}", new StructuredCandidateBatch([], [],
             [new AssertionCandidate("extracted-assertion", "synthetic-employee", "extracted-value", value,
                 "Synthetic extractor", assertedAt, assertedAt, source.Id,
                 EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
                 IntegrityState.OriginalHashVerified, [source.Id], 0.95m)], [], [], [], []));
+
+    private static StructuredExtractionOutput StaleContradictionOutput(
+        SourceSpan source,
+        DateTimeOffset assertedAt) =>
+        new("{\"contradiction\":true}", new StructuredCandidateBatch([], [],
+            [
+                new AssertionCandidate("stale-a", "synthetic-employee", "stale-count", "one",
+                    "Synthetic source A", assertedAt, assertedAt, source.Id,
+                    EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
+                    IntegrityState.OriginalHashVerified, [source.Id], 0.95m),
+                new AssertionCandidate("stale-b", "synthetic-employee", "stale-count", "two",
+                    "Synthetic source B", assertedAt.AddMinutes(1), assertedAt.AddMinutes(1), source.Id,
+                    EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
+                    IntegrityState.OriginalHashVerified, [source.Id], 0.95m)
+            ], [], [], [],
+            [new ContradictionCandidate("stale-conflict", "stale-a", "stale-b",
+                ContradictionType.DirectConflict, "synthetic-extractor-conflict", [source.Id], 0.90m)]));
 
     private static PersistedMatterBrain CreateSyntheticMatter(
         out SourceSpan firstSpan,
