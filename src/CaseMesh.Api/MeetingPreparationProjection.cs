@@ -18,6 +18,8 @@ internal static class MeetingPreparationProjection
         var activeDependencies = loaded.Brain.ActiveDependencies.ToArray();
         var sourceSpansById = loaded.Evidence.SourceSpans.ToDictionary(item => item.Id);
         var candidatesById = loaded.Brain.Candidates.ToDictionary(item => item.Id);
+        var assertionsById = loaded.Evidence.Assertions.ToDictionary(item => item.Id);
+        var peopleById = loaded.Brain.People.ToDictionary(item => item.Id);
         var extractedCanonicalRecords = loaded.Brain.Dependencies
             .Select(item => (item.CanonicalKind, item.CanonicalId))
             .ToHashSet();
@@ -26,6 +28,19 @@ internal static class MeetingPreparationProjection
             .ToHashSet();
         bool IsCurrentCanonical(CanonicalRecordKind kind, Guid id) =>
             !extractedCanonicalRecords.Contains((kind, id)) || activeCanonicalRecords.Contains((kind, id));
+
+        var correctedAssertionIds = loaded.Evidence.AuditEvents
+            .Where(item => item.Kind == AuditEventKind.AssertionCorrected && item.ReplacementEntityId.HasValue)
+            .Select(item => item.ReplacementEntityId!.Value)
+            .ToHashSet();
+        bool HasCurrentCorrectionDateConflict(MatterEvent matterEvent) => loaded.Evidence.AssertionEventLinks
+            .Where(link => link.EventId == matterEvent.Id && correctedAssertionIds.Contains(link.AssertionId))
+            .Select(link => assertionsById.TryGetValue(link.AssertionId, out var assertion) ? assertion : null)
+            .Where(assertion => assertion is not null &&
+                                assertion.SupersededByAssertionId is null &&
+                                assertion.DisputeState != DisputeState.Superseded &&
+                                assertion.VerificationState != VerificationState.Rejected)
+            .Any(assertion => assertion!.EventTime != matterEvent.StartTime);
 
         var currentAssertions = loaded.Evidence.Assertions
             .Where(item => item.SourceSpanId.HasValue &&
@@ -39,7 +54,6 @@ internal static class MeetingPreparationProjection
             .ThenBy(item => item.Id)
             .ToArray();
         var currentAssertionIds = currentAssertions.Select(item => item.Id).ToHashSet();
-        var assertionsById = loaded.Evidence.Assertions.ToDictionary(item => item.Id);
 
         var evidencePoints = currentAssertions
             .Take(MaximumPriorityItems)
@@ -61,7 +75,8 @@ internal static class MeetingPreparationProjection
 
         var chronology = loaded.Evidence.Events
             .Where(item => item.Status is not (EventStatus.Superseded or EventStatus.Rejected) &&
-                           IsCurrentCanonical(CanonicalRecordKind.Event, item.Id))
+                           IsCurrentCanonical(CanonicalRecordKind.Event, item.Id) &&
+                           !HasCurrentCorrectionDateConflict(item))
             .Select(item =>
             {
                 var linkedAssertionSourceIds = loaded.Evidence.AssertionEventLinks
@@ -138,15 +153,20 @@ internal static class MeetingPreparationProjection
             notice = "Evidence-review prompt only; not an accusation, legal finding or legal duty."
         }).ToArray();
 
-        var participants = loaded.Brain.People
+        var currentPeople = loaded.Brain.People
             .Where(item => IsCurrentCanonical(CanonicalRecordKind.Person, item.Id))
-            .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(item => item.Id)
-            .Select(item =>
+            .ToArray();
+        var participants = currentPeople
+            .GroupBy(item => loaded.Brain.ResolveEntityId(CanonicalEntityKind.Person, item.Id))
+            .Select(group =>
             {
+                var resolvedId = group.Key;
+                var representative = peopleById[resolvedId];
+                var mergedIdentityIds = group.Select(item => item.Id).Distinct().OrderBy(id => id).ToArray();
+                var mergedIdentityIdSet = mergedIdentityIds.ToHashSet();
                 var activeCandidateIds = activeDependencies
                     .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
-                                         dependency.CanonicalId == item.Id)
+                                         dependency.CanonicalId == representative.Id)
                     .Select(dependency => dependency.CandidateId)
                     .Distinct()
                     .ToHashSet();
@@ -157,11 +177,11 @@ internal static class MeetingPreparationProjection
                                         candidate.Disposition == CandidateDisposition.Validated)
                     .ToArray();
                 var fieldsSourceBacked = activeCandidates.Length > 0 &&
-                                         activeCandidates.All(candidate => CandidateSupportsParticipant(candidate, item));
+                                         activeCandidates.All(candidate => CandidateSupportsParticipant(candidate, representative));
                 var sourceSpanIds = fieldsSourceBacked
                     ? activeDependencies
                         .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
-                                             dependency.CanonicalId == item.Id &&
+                                             dependency.CanonicalId == representative.Id &&
                                              activeCandidateIds.Contains(dependency.CandidateId))
                         .Select(dependency => dependency.SourceSpanId)
                         .Where(sourceSpansById.ContainsKey)
@@ -174,27 +194,51 @@ internal static class MeetingPreparationProjection
                     .Distinct()
                     .OrderBy(id => id)
                     .ToArray();
+                var identityAliases = loaded.Brain.Aliases
+                    .Where(alias => alias.EntityKind == CanonicalEntityKind.Person &&
+                                    mergedIdentityIdSet.Contains(alias.EntityId))
+                    .GroupBy(alias => new { alias.NormalizedValue, alias.SourceSpanId })
+                    .Select(aliasGroup => aliasGroup.First())
+                    .OrderBy(alias => alias.Value, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(alias => alias.Id)
+                    .Select(alias => new
+                    {
+                        alias.Value,
+                        alias.SourceSpanId
+                    })
+                    .ToArray();
+                var merged = mergedIdentityIds.Length > 1;
                 return new
                 {
-                    item.Id,
-                    item.DisplayName,
-                    item.RoleLabels,
+                    Id = representative.Id,
+                    representative.DisplayName,
+                    representative.RoleLabels,
+                    mergedIdentityIds,
+                    identityAliases,
                     sourceSpanIds,
                     documentVersionIds,
                     provenanceStatus = fieldsSourceBacked ? "SourceBackedExtraction" : "Unsupported",
-                    identityNotice = fieldsSourceBacked
-                        ? "Extracted participant record from cited documentary evidence; identity and role labels still require review."
-                        : activeCandidates.Length == 0
-                            ? "Participant record has no active documentary provenance; verify the displayed name and role labels before relying on it."
-                            : "Active extraction no longer exactly supports the stored participant name and role labels; verify these fields before relying on them."
+                    identityNotice = merged
+                        ? "User-confirmed identity merge collapsed duplicate participant records; cited aliases remain visible for review."
+                        : fieldsSourceBacked
+                            ? "Extracted participant record from cited documentary evidence; identity and role labels still require review."
+                            : activeCandidates.Length == 0
+                                ? "Participant record has no active documentary provenance; verify the displayed name and role labels before relying on it."
+                                : "Active extraction no longer exactly supports the stored participant name and role labels; verify these fields before relying on them."
                 };
-            }).ToArray();
+            })
+            .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Id)
+            .ToArray();
 
         var referencedSourceIds = evidencePoints.SelectMany(item => item.sourceSpanIds)
             .Concat(chronology.SelectMany(item => item.sourceSpanIds))
             .Concat(unresolvedDisputes.SelectMany(item => item.sourceSpanIds))
             .Concat(gaps.SelectMany(item => item.SourceSpanIds))
             .Concat(participants.SelectMany(item => item.sourceSpanIds))
+            .Concat(participants.SelectMany(item => item.identityAliases)
+                .Where(alias => alias.SourceSpanId.HasValue)
+                .Select(alias => alias.SourceSpanId!.Value))
             .ToHashSet();
         var sourceSpans = loaded.Evidence.SourceSpans
             .Where(item => referencedSourceIds.Contains(item.Id))
