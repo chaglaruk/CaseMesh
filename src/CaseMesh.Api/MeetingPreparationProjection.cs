@@ -160,18 +160,31 @@ internal static class MeetingPreparationProjection
         };
     }
 
-    private static object? DisputedAssertion(Assertion? assertion) => assertion is null ? null : new
+    private static object? DisputedAssertion(Assertion? assertion)
     {
-        assertion.Id,
-        assertion.AssertedBy,
-        assertion.SubjectReference,
-        assertion.Predicate,
-        assertion.Value,
-        assertion.SourceSpanId,
-        dispute = assertion.DisputeState.ToString(),
-        verification = assertion.VerificationState.ToString(),
-        historical = assertion.SupersededByAssertionId.HasValue || assertion.DisputeState == DisputeState.Superseded
-    };
+        if (assertion is null) return null;
+        var historical = assertion.SupersededByAssertionId.HasValue || assertion.DisputeState == DisputeState.Superseded;
+        var rejected = assertion.VerificationState == VerificationState.Rejected;
+        var aiInference = assertion.OriginClass == EvidenceOriginClass.AiGeneratedInference ||
+                          assertion.AssertionClass == AssertionClass.AiInference;
+        return new
+        {
+            assertion.Id,
+            assertion.AssertedBy,
+            assertion.SubjectReference,
+            assertion.Predicate,
+            assertion.Value,
+            assertion.SourceSpanId,
+            origin = assertion.OriginClass.ToString(),
+            assertionClass = assertion.AssertionClass.ToString(),
+            dispute = assertion.DisputeState.ToString(),
+            verification = assertion.VerificationState.ToString(),
+            historical,
+            rejected,
+            aiInference,
+            current = !historical && !rejected && !aiInference
+        };
+    }
 
     private static object SourceSpan(SourceSpan item) => new
     {
