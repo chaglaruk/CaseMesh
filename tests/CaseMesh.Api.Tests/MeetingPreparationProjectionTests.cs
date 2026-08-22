@@ -44,7 +44,7 @@ public sealed class MeetingPreparationProjectionTests
             "synthetic model", DateTimeOffset.UtcNow,
             EvidenceOriginClass.AiGeneratedInference, AssertionClass.AiInference,
             DisputeState.Unverified, IntegrityState.DerivedCopy, VerificationState.NotReviewed,
-            firstSpan.Id, extractionConfidence: 0.5m);
+            createdByModel: "synthetic-model/1");
         loaded.Evidence.AddAssertion(Guid.NewGuid(), "synthetic-employee", "rejected-value", "rejected",
             "synthetic source", DateTimeOffset.UtcNow,
             EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
