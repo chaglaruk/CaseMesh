@@ -111,6 +111,60 @@ public sealed class MeetingPreparationProjectionTests
             .Select(item => item.GetProperty("Id").GetGuid()));
     }
 
+    [Fact]
+    public async Task Preparation_uses_event_dependencies_and_prioritizes_dated_chronology()
+    {
+        var loaded = CreateSyntheticMatter(out var firstSpan, out _, out _);
+        var undated = Enumerable.Range(0, 12)
+            .Select(index => new EventCandidate($"undated-{index}", "meeting", $"Undated extracted event {index}",
+                null, null, [], [firstSpan.Id], 0.80m))
+            .ToArray();
+        var events = undated.Append(new EventCandidate("dated", "meeting", "Dated extracted meeting",
+            new DateTimeOffset(2026, 4, 20, 10, 0, 0, TimeSpan.Zero), null, [], [firstSpan.Id], 0.99m)).ToArray();
+        var provider = new FixedExtractionProvider(new StructuredExtractionOutput(
+            "{\"events\":true}", new StructuredCandidateBatch([], [], [], events, [], [], [])), "event-model");
+
+        await new MatterBrainMergeService(TimeProvider.System)
+            .ExtractAndMergeAsync(loaded.Brain, [firstSpan.Id], provider);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
+        var chronology = json.RootElement.GetProperty("chronology").EnumerateArray().ToArray();
+        Assert.Equal(12, chronology.Length);
+        var dated = Assert.Single(chronology.Where(item =>
+            item.GetProperty("Label").GetString() == "Dated extracted meeting"));
+        Assert.Contains(firstSpan.Id,
+            dated.GetProperty("sourceSpanIds").EnumerateArray().Select(item => item.GetGuid()));
+        Assert.All(chronology, item => Assert.True(item.GetProperty("sourceSpanIds").GetArrayLength() > 0));
+    }
+
+    [Fact]
+    public async Task Preparation_excludes_assertions_with_invalidated_extraction_dependencies()
+    {
+        var loaded = CreateSyntheticMatter(out var firstSpan, out _, out _);
+        var assertedAt = new DateTimeOffset(2026, 4, 21, 11, 0, 0, TimeSpan.Zero);
+        var oldProvider = new FixedExtractionProvider(AssertionOutput(firstSpan, "old-extracted-value", assertedAt),
+            "assertion-model-v1");
+        var newProvider = new FixedExtractionProvider(AssertionOutput(firstSpan, "new-extracted-value", assertedAt),
+            "assertion-model-v2");
+
+        await new MatterBrainMergeService(TimeProvider.System)
+            .ExtractAndMergeAsync(loaded.Brain, [firstSpan.Id], oldProvider);
+        await new MatterBrainMergeService(TimeProvider.System)
+            .ExtractAndMergeAsync(loaded.Brain, [firstSpan.Id], newProvider);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
+        var evidencePoints = json.RootElement.GetProperty("evidencePoints").ToString();
+        Assert.Contains("new-extracted-value", evidencePoints, StringComparison.Ordinal);
+        Assert.DoesNotContain("old-extracted-value", evidencePoints, StringComparison.Ordinal);
+    }
+
+    private static StructuredExtractionOutput AssertionOutput(SourceSpan source, string value, DateTimeOffset assertedAt) =>
+        new("{\"assertion\":true}", new StructuredCandidateBatch([], [],
+            [new AssertionCandidate("extracted-assertion", "synthetic-employee", "extracted-value", value,
+                "Synthetic extractor", assertedAt, assertedAt, source.Id,
+                EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
+                IntegrityState.OriginalHashVerified, [source.Id], 0.95m)], [], [], [], []));
+
     private static PersistedMatterBrain CreateSyntheticMatter(
         out SourceSpan firstSpan,
         out SourceSpan secondSpan,
@@ -151,10 +205,11 @@ public sealed class MeetingPreparationProjectionTests
         DisputeState.Contradicted, IntegrityState.OriginalHashVerified, VerificationState.NeedsContext,
         source.Id, eventTime: assertedAt, extractionConfidence: 0.99m);
 
-    private sealed class FixedExtractionProvider(StructuredExtractionOutput output) : IStructuredExtractionProvider
+    private sealed class FixedExtractionProvider(StructuredExtractionOutput output, string model = "synthetic-model")
+        : IStructuredExtractionProvider
     {
         public StructuredExtractionProviderDescriptor Descriptor { get; } =
-            new("synthetic-provider", "synthetic-model", "1", "1", "1");
+            new("synthetic-provider", model, "1", "1", "1");
 
         public Task<StructuredExtractionOutput> ExtractAsync(
             StructuredExtractionInput input,
