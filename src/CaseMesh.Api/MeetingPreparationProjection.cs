@@ -14,19 +14,29 @@ internal static class MeetingPreparationProjection
         ArgumentNullException.ThrowIfNull(loaded);
 
         var gaps = FactualGapAnalyzer.Analyze(loaded.Evidence, loaded.Workplace, loaded.Brain);
+        var activeDependencies = loaded.Brain.ActiveDependencies.ToArray();
+        var sourceSpansById = loaded.Evidence.SourceSpans.ToDictionary(item => item.Id);
+        var extractedAssertionIds = loaded.Brain.Dependencies
+            .Where(item => item.CanonicalKind == CanonicalRecordKind.Assertion)
+            .Select(item => item.CanonicalId)
+            .ToHashSet();
+        var activeExtractedAssertionIds = activeDependencies
+            .Where(item => item.CanonicalKind == CanonicalRecordKind.Assertion)
+            .Select(item => item.CanonicalId)
+            .ToHashSet();
         var currentAssertions = loaded.Evidence.Assertions
             .Where(item => item.SourceSpanId.HasValue &&
                            item.SupersededByAssertionId is null &&
                            item.DisputeState != DisputeState.Superseded &&
                            item.VerificationState != VerificationState.Rejected &&
                            item.OriginClass != EvidenceOriginClass.AiGeneratedInference &&
-                           item.AssertionClass != AssertionClass.AiInference)
+                           item.AssertionClass != AssertionClass.AiInference &&
+                           (!extractedAssertionIds.Contains(item.Id) || activeExtractedAssertionIds.Contains(item.Id)))
             .OrderBy(item => item.EventTime ?? item.AssertedAt)
             .ThenBy(item => item.Id)
             .ToArray();
         var currentAssertionIds = currentAssertions.Select(item => item.Id).ToHashSet();
         var assertionsById = loaded.Evidence.Assertions.ToDictionary(item => item.Id);
-        var sourceSpansById = loaded.Evidence.SourceSpans.ToDictionary(item => item.Id);
 
         var evidencePoints = currentAssertions
             .Take(MaximumPriorityItems)
@@ -48,26 +58,40 @@ internal static class MeetingPreparationProjection
 
         var chronology = loaded.Evidence.Events
             .Where(item => item.Status is not (EventStatus.Superseded or EventStatus.Rejected))
-            .OrderBy(item => item.StartTime)
-            .ThenBy(item => item.Id)
-            .Take(MaximumPriorityItems)
-            .Select(item => new
+            .Select(item =>
             {
-                item.Id,
-                item.EventType,
-                item.Label,
-                item.StartTime,
-                item.EndTime,
-                status = item.Status.ToString(),
-                verification = item.VerificationState.ToString(),
-                sourceSpanIds = loaded.Evidence.AssertionEventLinks
+                var linkedAssertionSourceIds = loaded.Evidence.AssertionEventLinks
                     .Where(link => link.EventId == item.Id && currentAssertionIds.Contains(link.AssertionId))
                     .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
-                        (_, assertion) => assertion.SourceSpanId!.Value)
+                        (_, assertion) => assertion.SourceSpanId!.Value);
+                var eventDependencySourceIds = activeDependencies
+                    .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Event &&
+                                         dependency.CanonicalId == item.Id)
+                    .Select(dependency => dependency.SourceSpanId);
+                var sourceSpanIds = linkedAssertionSourceIds
+                    .Concat(eventDependencySourceIds)
+                    .Where(sourceSpansById.ContainsKey)
                     .Distinct()
                     .OrderBy(id => id)
-                    .ToArray()
-            }).ToArray();
+                    .ToArray();
+                return new
+                {
+                    item.Id,
+                    item.EventType,
+                    item.Label,
+                    item.StartTime,
+                    item.EndTime,
+                    status = item.Status.ToString(),
+                    verification = item.VerificationState.ToString(),
+                    sourceSpanIds
+                };
+            })
+            .Where(item => item.sourceSpanIds.Length > 0)
+            .OrderByDescending(item => item.StartTime.HasValue)
+            .ThenBy(item => item.StartTime)
+            .ThenBy(item => item.Id)
+            .Take(MaximumPriorityItems)
+            .ToArray();
 
         var unresolvedDisputes = loaded.Evidence.Contradictions
             .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved)
@@ -112,7 +136,7 @@ internal static class MeetingPreparationProjection
             .ThenBy(item => item.Id)
             .Select(item =>
             {
-                var sourceSpanIds = loaded.Brain.ActiveDependencies
+                var sourceSpanIds = activeDependencies
                     .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
                                          dependency.CanonicalId == item.Id)
                     .Select(dependency => dependency.SourceSpanId)
