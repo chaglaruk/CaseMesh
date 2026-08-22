@@ -44,6 +44,8 @@ public static class FactualGapAnalyzer
 
         foreach (var assertion in evidence.Assertions.Where(item => item.SourceSpanId is null &&
                      item.VerificationState != VerificationState.Rejected &&
+                     item.OriginClass != EvidenceOriginClass.AiGeneratedInference &&
+                     item.AssertionClass != AssertionClass.AiInference &&
                      IsCurrentCanonical(CanonicalRecordKind.Assertion, item.Id)).OrderBy(item => item.Id))
         {
             gaps.Add(new FactualGap("assertion-without-documentary-source",
@@ -86,8 +88,29 @@ public static class FactualGapAnalyzer
         var completedProposals = brain.EntityResolutionActions.Where(item =>
                 item.Kind is EntityResolutionActionKind.Accepted or EntityResolutionActionKind.Rejected or EntityResolutionActionKind.Reversed)
             .Select(item => item.ProposalId).ToHashSet();
+        var invalidatedRunIds = brain.DependencyInvalidations
+            .Join(brain.Dependencies,
+                invalidation => invalidation.DependencyId,
+                dependency => dependency.Id,
+                (_, dependency) => dependency.RunId)
+            .ToHashSet();
+        var entityMatchCandidates = brain.Candidates
+            .Where(item => item.Kind == ExtractionCandidateKind.EntityMatch &&
+                           item.Disposition == CandidateDisposition.Validated)
+            .ToDictionary(
+                item => MatterBrainState.DeterministicId("entity-merge-proposal", item.RunId, item.ExternalKey),
+                item => item);
+        bool IsCurrentProposal(EntityResolutionAction action)
+        {
+            if (!string.Equals(action.Actor, "structured-extraction", StringComparison.Ordinal)) return true;
+            return !entityMatchCandidates.TryGetValue(action.ProposalId, out var candidate) ||
+                   !invalidatedRunIds.Contains(candidate.RunId);
+        }
+
         foreach (var proposal in brain.EntityResolutionActions.Where(item =>
-                     item.Kind == EntityResolutionActionKind.Proposed && !completedProposals.Contains(item.ProposalId)).OrderBy(item => item.Id))
+                     item.Kind == EntityResolutionActionKind.Proposed &&
+                     !completedProposals.Contains(item.ProposalId) &&
+                     IsCurrentProposal(item)).OrderBy(item => item.Id))
             gaps.Add(new FactualGap("entity-ambiguity",
                 "A similar-name entity match remains a proposal and requires confirmation before identities are treated as the same.",
                 "people", [proposal.Id, proposal.SourceEntityId, proposal.TargetEntityId], proposal.EvidenceSourceSpanIds));
