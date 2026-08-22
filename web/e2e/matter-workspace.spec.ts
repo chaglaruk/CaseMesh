@@ -47,6 +47,14 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   await expect(page.getByLabel("What your evidence shows")).toHaveCount(0);
   await expect(page.getByLabel("Source citation detail")).toContainText("Select a citation");
   await page.unroute("**/questions/ask");
+  await page.getByRole("button",{name:"Prepare"}).click();
+  await expect(page.getByRole("heading",{name:"Prepare for a meeting"})).toBeVisible();
+  await expect(page.getByLabel("Meeting preparation")).toContainText("canonical Matter evidence state");
+  await expect(page.getByLabel("Meeting preparation")).toContainText(/absence days/i);
+  await page.getByLabel("Meeting preparation").getByRole("button",{name:"View exact source"}).first().click();
+  await expect(page.getByLabel("Source citation detail")).toContainText("absence days");
+  const prepareAccessibility=await new AxeBuilder({page}).analyze();
+  expect(prepareAccessibility.violations).toEqual([]);
   await page.getByRole("button",{name:"Overview"}).click();
   const accessibility=await new AxeBuilder({page}).analyze();
   expect(accessibility.violations).toEqual([]);
