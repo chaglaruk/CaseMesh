@@ -98,7 +98,7 @@ public static class FactualGapAnalyzer
             .Where(item => item.Kind == ExtractionCandidateKind.EntityMatch &&
                            item.Disposition == CandidateDisposition.Validated)
             .ToDictionary(
-                item => MatterBrainState.DeterministicId("entity-merge-proposal", item.RunId, item.ExternalKey),
+                item => MatterBrainIdentity.EntityMergeProposalId(item.RunId, item.ExternalKey),
                 item => item);
         bool IsCurrentProposal(EntityResolutionAction action)
         {
