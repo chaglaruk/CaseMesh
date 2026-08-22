@@ -15,9 +15,9 @@ public sealed class MeetingPreparationProposalInvalidationTests
         var graph = new MatterEvidenceGraph(new Matter(Guid.NewGuid(), new TenantId(Guid.NewGuid()),
             "workplace-dispute", "Synthetic Matter", "active", now, now));
         var version = graph.RegisterDocumentVersion(Guid.NewGuid(), Guid.NewGuid(), new string('D', 64), Guid.NewGuid());
-        var span = graph.AddSourceSpan(Guid.NewGuid(), version,
-            "Synthetic source supports an assertion and a possible person match.", "synthetic-parser/1", 0.99m,
-            pageNumber: 1, textStart: 0, textEnd: 65);
+        const string sourceText = "Synthetic source supports an assertion and a possible person match.";
+        var span = graph.AddSourceSpan(Guid.NewGuid(), version, sourceText, "synthetic-parser/1", 0.99m,
+            pageNumber: 1, textStart: 0, textEnd: sourceText.Length);
         var workplace = new WorkplaceMatter(graph);
         var brain = new MatterBrainState(graph);
         var provider = new FixedExtractionProvider(new StructuredExtractionOutput(
