@@ -40,7 +40,7 @@ public sealed class MeetingPreparationProjectionTests
     public void Preparation_never_promotes_ai_inference_or_rejected_evidence_into_priority_points()
     {
         var loaded = CreateSyntheticMatter(out var firstSpan, out _, out _);
-        loaded.Evidence.AddAssertion(Guid.NewGuid(), "synthetic-employee", "predicted-outcome", "win",
+        var aiInference = loaded.Evidence.AddAssertion(Guid.NewGuid(), "synthetic-employee", "predicted-outcome", "win",
             "synthetic model", DateTimeOffset.UtcNow,
             EvidenceOriginClass.AiGeneratedInference, AssertionClass.AiInference,
             DisputeState.Unverified, IntegrityState.DerivedCopy, VerificationState.NotReviewed,
@@ -68,6 +68,9 @@ public sealed class MeetingPreparationProjectionTests
             assertion => assertion.GetProperty("Id").GetGuid() == rejected.Id &&
                          assertion.GetProperty("rejected").GetBoolean() &&
                          !assertion.GetProperty("current").GetBoolean());
+        Assert.DoesNotContain(json.RootElement.GetProperty("questionsToClarify").EnumerateArray(), gap =>
+            gap.GetProperty("Code").GetString() == "assertion-without-documentary-source" &&
+            gap.GetProperty("RelatedRecordIds").EnumerateArray().Any(id => id.GetGuid() == aiInference.Id));
     }
 
     [Fact]
@@ -109,6 +112,68 @@ public sealed class MeetingPreparationProjectionTests
             item.GetProperty("Code").GetString() == "entity-ambiguity");
         Assert.Contains(firstSpan.Id, json.RootElement.GetProperty("sourceSpans").EnumerateArray()
             .Select(item => item.GetProperty("Id").GetGuid()));
+    }
+
+    [Fact]
+    public async Task Preparation_marks_reused_participant_fields_unsupported_when_active_candidate_changes_roles()
+    {
+        var loaded = CreateSyntheticMatter(out var firstSpan, out _, out _);
+        var original = new FixedExtractionProvider(new StructuredExtractionOutput(
+            "{\"person\":\"employee\"}", new StructuredCandidateBatch(
+                [new EntityCandidate("person", CanonicalEntityKind.Person, "Alex Smith", "person",
+                    ["Alex Smith"], ["Employee"], [firstSpan.Id], 0.99m)], [], [], [], [], [], [])),
+            "participant-model-v1");
+        var replacement = new FixedExtractionProvider(new StructuredExtractionOutput(
+            "{\"person\":\"manager\"}", new StructuredCandidateBatch(
+                [new EntityCandidate("person", CanonicalEntityKind.Person, "Alex Smith", "person",
+                    ["Alex Smith"], ["Manager"], [firstSpan.Id], 0.99m)], [], [], [], [], [], [])),
+            "participant-model-v2");
+
+        await new MatterBrainMergeService(TimeProvider.System)
+            .ExtractAndMergeAsync(loaded.Brain, [firstSpan.Id], original);
+        await new MatterBrainMergeService(TimeProvider.System)
+            .ExtractAndMergeAsync(loaded.Brain, [firstSpan.Id], replacement);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
+        var participant = Assert.Single(json.RootElement.GetProperty("participants").EnumerateArray());
+        Assert.Equal("Alex Smith", participant.GetProperty("DisplayName").GetString());
+        Assert.Contains("Employee", participant.GetProperty("RoleLabels").EnumerateArray()
+            .Select(item => item.GetString()));
+        Assert.Equal("Unsupported", participant.GetProperty("provenanceStatus").GetString());
+        Assert.Equal(0, participant.GetProperty("sourceSpanIds").GetArrayLength());
+        Assert.Contains("no longer exactly supports", participant.GetProperty("identityNotice").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Preparation_retires_structured_entity_match_proposals_after_source_reextraction()
+    {
+        var loaded = CreateSyntheticMatter(out var firstSpan, out _, out _);
+        EntityCandidate[] entities =
+        [
+            new("person-a", CanonicalEntityKind.Person, "Alex Smith", "person",
+                ["Alex Smith"], ["Employee"], [firstSpan.Id], 0.99m),
+            new("person-b", CanonicalEntityKind.Person, "Alex Smyth", "person",
+                ["Alex Smyth"], ["Manager"], [firstSpan.Id], 0.98m)
+        ];
+        var original = new FixedExtractionProvider(new StructuredExtractionOutput(
+            "{\"match\":true}", new StructuredCandidateBatch(entities, [], [], [], [],
+                [new EntityMatchCandidate("possible-same-person", CanonicalEntityKind.Person,
+                    "person-a", "person-b", 0.88m, [firstSpan.Id], 0.90m)], [])), "match-model-v1");
+        var replacement = new FixedExtractionProvider(new StructuredExtractionOutput(
+            "{\"match\":false}", new StructuredCandidateBatch(entities, [], [], [], [], [], [])), "match-model-v2");
+
+        await new MatterBrainMergeService(TimeProvider.System)
+            .ExtractAndMergeAsync(loaded.Brain, [firstSpan.Id], original);
+        Assert.Single(loaded.Brain.EntityResolutionActions,
+            item => item.Kind == EntityResolutionActionKind.Proposed);
+
+        await new MatterBrainMergeService(TimeProvider.System)
+            .ExtractAndMergeAsync(loaded.Brain, [firstSpan.Id], replacement);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
+        Assert.DoesNotContain(json.RootElement.GetProperty("questionsToClarify").EnumerateArray(), item =>
+            item.GetProperty("Code").GetString() == "entity-ambiguity");
     }
 
     [Fact]
