@@ -72,7 +72,7 @@ public static class FactualGapAnalyzer
                 item.Kind is EntityResolutionActionKind.Accepted or EntityResolutionActionKind.Rejected or EntityResolutionActionKind.Reversed)
             .Select(item => item.ProposalId).ToHashSet();
         foreach (var proposal in brain.EntityResolutionActions.Where(item =>
-                     item.Kind == EntityResolutionActionKind.Proposed && !completedProposals.Contains(item.Id)).OrderBy(item => item.Id))
+                     item.Kind == EntityResolutionActionKind.Proposed && !completedProposals.Contains(item.ProposalId)).OrderBy(item => item.Id))
             gaps.Add(new FactualGap("entity-ambiguity",
                 "A similar-name entity match remains a proposal and requires confirmation before identities are treated as the same.",
                 "people", [proposal.Id, proposal.SourceEntityId, proposal.TargetEntityId], proposal.EvidenceSourceSpanIds));
