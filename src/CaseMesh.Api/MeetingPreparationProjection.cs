@@ -19,6 +19,7 @@ internal static class MeetingPreparationProjection
         var sourceSpansById = loaded.Evidence.SourceSpans.ToDictionary(item => item.Id);
         var candidatesById = loaded.Brain.Candidates.ToDictionary(item => item.Id);
         var assertionsById = loaded.Evidence.Assertions.ToDictionary(item => item.Id);
+        var eventsById = loaded.Evidence.Events.ToDictionary(item => item.Id);
         var peopleById = loaded.Brain.People.ToDictionary(item => item.Id);
         var extractedCanonicalRecords = loaded.Brain.Dependencies
             .Select(item => (item.CanonicalKind, item.CanonicalId))
@@ -31,6 +32,10 @@ internal static class MeetingPreparationProjection
 
         var correctedAssertionIds = loaded.Evidence.AuditEvents
             .Where(item => item.Kind == AuditEventKind.AssertionCorrected && item.ReplacementEntityId.HasValue)
+            .Select(item => item.ReplacementEntityId!.Value)
+            .ToHashSet();
+        var correctedEventIds = loaded.Evidence.AuditEvents
+            .Where(item => item.Kind == AuditEventKind.EventCorrected && item.ReplacementEntityId.HasValue)
             .Select(item => item.ReplacementEntityId!.Value)
             .ToHashSet();
         bool HasCurrentCorrectionDateConflict(MatterEvent matterEvent) => loaded.Evidence.AssertionEventLinks
@@ -55,6 +60,44 @@ internal static class MeetingPreparationProjection
             .ToArray();
         var currentAssertionIds = currentAssertions.Select(item => item.Id).ToHashSet();
 
+        Guid[] CurrentLinkedSources(Guid eventId, params AssertionEventRelation[] relations)
+        {
+            var relationSet = relations.ToHashSet();
+            return loaded.Evidence.AssertionEventLinks
+                .Where(link => link.EventId == eventId &&
+                               currentAssertionIds.Contains(link.AssertionId) &&
+                               relationSet.Contains(link.Relation))
+                .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
+                    (_, assertion) => assertion.SourceSpanId!.Value)
+                .Where(sourceSpansById.ContainsKey)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+        }
+
+        Guid[] HistoricalEventSources(Guid eventId)
+        {
+            var linked = loaded.Evidence.AssertionEventLinks
+                .Where(link => link.EventId == eventId && link.Relation is
+                    AssertionEventRelation.Supports or
+                    AssertionEventRelation.Qualifies or
+                    AssertionEventRelation.Contextualizes)
+                .Select(link => assertionsById.TryGetValue(link.AssertionId, out var assertion)
+                    ? assertion.SourceSpanId
+                    : null)
+                .Where(id => id.HasValue)
+                .Select(id => id!.Value);
+            var dependencies = loaded.Brain.Dependencies
+                .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Event &&
+                                     dependency.CanonicalId == eventId)
+                .Select(dependency => dependency.SourceSpanId);
+            return linked.Concat(dependencies)
+                .Where(sourceSpansById.ContainsKey)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+        }
+
         var evidencePoints = currentAssertions
             .Take(MaximumPriorityItems)
             .Select(item => new
@@ -75,19 +118,20 @@ internal static class MeetingPreparationProjection
 
         var chronology = loaded.Evidence.Events
             .Where(item => item.Status is not (EventStatus.Superseded or EventStatus.Rejected) &&
+                           !correctedEventIds.Contains(item.Id) &&
                            IsCurrentCanonical(CanonicalRecordKind.Event, item.Id) &&
                            !HasCurrentCorrectionDateConflict(item))
             .Select(item =>
             {
-                var linkedAssertionSourceIds = loaded.Evidence.AssertionEventLinks
-                    .Where(link => link.EventId == item.Id && currentAssertionIds.Contains(link.AssertionId))
-                    .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
-                        (_, assertion) => assertion.SourceSpanId!.Value);
+                var supportingAssertionSourceIds = CurrentLinkedSources(item.Id, AssertionEventRelation.Supports);
+                var qualifyingSourceSpanIds = CurrentLinkedSources(item.Id,
+                    AssertionEventRelation.Qualifies, AssertionEventRelation.Contextualizes);
+                var contradictingSourceSpanIds = CurrentLinkedSources(item.Id, AssertionEventRelation.Contradicts);
                 var eventDependencySourceIds = activeDependencies
                     .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Event &&
                                          dependency.CanonicalId == item.Id)
                     .Select(dependency => dependency.SourceSpanId);
-                var sourceSpanIds = linkedAssertionSourceIds
+                var sourceSpanIds = supportingAssertionSourceIds
                     .Concat(eventDependencySourceIds)
                     .Where(sourceSpansById.ContainsKey)
                     .Distinct()
@@ -102,7 +146,10 @@ internal static class MeetingPreparationProjection
                     item.EndTime,
                     status = item.Status.ToString(),
                     verification = item.VerificationState.ToString(),
-                    sourceSpanIds
+                    sourceSpanIds,
+                    qualifyingSourceSpanIds,
+                    contradictingSourceSpanIds,
+                    provenanceNotice = "Primary chronology citations are direct event extraction or supporting statements; qualifying/context and contradicting evidence are labelled separately."
                 };
             })
             .Where(item => item.sourceSpanIds.Length > 0)
@@ -110,6 +157,55 @@ internal static class MeetingPreparationProjection
             .ThenBy(item => item.StartTime)
             .ThenBy(item => item.Id)
             .Take(MaximumPriorityItems)
+            .ToArray();
+
+        var correctionHistory = loaded.Evidence.AuditEvents
+            .Where(item => item.ReplacementEntityId.HasValue &&
+                           item.Kind is AuditEventKind.AssertionCorrected or AuditEventKind.EventCorrected)
+            .OrderBy(item => item.OccurredAt)
+            .ThenBy(item => item.Id)
+            .Select(audit =>
+            {
+                if (audit.Kind == AuditEventKind.AssertionCorrected &&
+                    assertionsById.TryGetValue(audit.EntityId, out var originalAssertion) &&
+                    assertionsById.TryGetValue(audit.ReplacementEntityId!.Value, out var correctedAssertion))
+                {
+                    var historicalSourceSpanIds = originalAssertion.SourceSpanId.HasValue &&
+                                                  sourceSpansById.ContainsKey(originalAssertion.SourceSpanId.Value)
+                        ? new[] { originalAssertion.SourceSpanId.Value }
+                        : [];
+                    return new CorrectionHistoryItem(
+                        audit.Id,
+                        audit.Kind.ToString(),
+                        audit.Actor,
+                        audit.OccurredAt,
+                        audit.ChangeSummary,
+                        AssertionSnapshot(originalAssertion),
+                        AssertionSnapshot(correctedAssertion),
+                        historicalSourceSpanIds,
+                        "Historical documentary citations support only the original attributed statement. The corrected replacement is a separately attributed human correction and is not promoted to documentary fact.");
+                }
+
+                if (audit.Kind == AuditEventKind.EventCorrected &&
+                    eventsById.TryGetValue(audit.EntityId, out var originalEvent) &&
+                    eventsById.TryGetValue(audit.ReplacementEntityId!.Value, out var correctedEvent))
+                {
+                    return new CorrectionHistoryItem(
+                        audit.Id,
+                        audit.Kind.ToString(),
+                        audit.Actor,
+                        audit.OccurredAt,
+                        audit.ChangeSummary,
+                        EventSnapshot(originalEvent),
+                        EventSnapshot(correctedEvent),
+                        HistoricalEventSources(originalEvent.Id),
+                        "Historical documentary citations support only the original event record. The corrected date or label is an audited human correction and is intentionally not cited as if the old evidence stated the corrected fields.");
+                }
+
+                return null;
+            })
+            .Where(item => item is not null)
+            .Select(item => item!)
             .ToArray();
 
         var unresolvedDisputes = loaded.Evidence.Contradictions
@@ -147,10 +243,12 @@ internal static class MeetingPreparationProjection
         {
             item.Code,
             item.Summary,
-            item.Route,
+            route = item.Code == "corrected-history-review" ? "prepare" : item.Route,
             item.RelatedRecordIds,
             item.SourceSpanIds,
-            notice = "Evidence-review prompt only; not an accusation, legal finding or legal duty."
+            notice = item.Code == "corrected-history-review"
+                ? "Review the dedicated correction history below; documentary citations remain attached only to the historical record they actually support."
+                : "Evidence-review prompt only; not an accusation, legal finding or legal duty."
         }).ToArray();
 
         var currentPeople = loaded.Brain.People
@@ -233,6 +331,9 @@ internal static class MeetingPreparationProjection
 
         var referencedSourceIds = evidencePoints.SelectMany(item => item.sourceSpanIds)
             .Concat(chronology.SelectMany(item => item.sourceSpanIds))
+            .Concat(chronology.SelectMany(item => item.qualifyingSourceSpanIds))
+            .Concat(chronology.SelectMany(item => item.contradictingSourceSpanIds))
+            .Concat(correctionHistory.SelectMany(item => item.HistoricalSourceSpanIds))
             .Concat(unresolvedDisputes.SelectMany(item => item.sourceSpanIds))
             .Concat(gaps.SelectMany(item => item.SourceSpanIds))
             .Concat(participants.SelectMany(item => item.sourceSpanIds))
@@ -267,6 +368,7 @@ internal static class MeetingPreparationProjection
                 : "Preparation reflects the canonical Matter evidence state at the time this view was loaded.",
             evidencePoints,
             chronology,
+            correctionHistory,
             participants,
             unresolvedDisputes,
             questionsToClarify,
@@ -276,10 +378,41 @@ internal static class MeetingPreparationProjection
             {
                 "Meeting preparation is evidence organisation, not legal advice or a prediction of outcome.",
                 "Attributed statements and unresolved contradictions remain labelled; CaseMesh does not silently resolve them.",
+                "Human corrections are audit history, not documentary evidence; historical citations never silently transfer to corrected wording or dates.",
                 "External legal guidance and Live meeting assistance are separate surfaces."
             }
         };
     }
+
+    private static CorrectionRecordSnapshot AssertionSnapshot(Assertion assertion) => new(
+        assertion.Id,
+        "Assertion",
+        null,
+        null,
+        assertion.SubjectReference,
+        assertion.Predicate,
+        assertion.Value,
+        assertion.AssertedBy,
+        assertion.EventTime,
+        null,
+        null,
+        assertion.DisputeState.ToString(),
+        assertion.VerificationState.ToString());
+
+    private static CorrectionRecordSnapshot EventSnapshot(MatterEvent matterEvent) => new(
+        matterEvent.Id,
+        "Event",
+        matterEvent.Label,
+        matterEvent.EventType,
+        null,
+        null,
+        null,
+        null,
+        null,
+        matterEvent.StartTime,
+        matterEvent.EndTime,
+        matterEvent.Status.ToString(),
+        matterEvent.VerificationState.ToString());
 
     private static bool CandidateSupportsParticipant(ExtractionCandidateRecord candidate, Person participant)
     {
@@ -340,4 +473,30 @@ internal static class MeetingPreparationProjection
         item.ParserVersion,
         item.ExtractionConfidence
     };
+
+    private sealed record CorrectionHistoryItem(
+        Guid Id,
+        string Kind,
+        string Actor,
+        DateTimeOffset OccurredAt,
+        string ChangeSummary,
+        CorrectionRecordSnapshot Original,
+        CorrectionRecordSnapshot Replacement,
+        IReadOnlyList<Guid> HistoricalSourceSpanIds,
+        string Notice);
+
+    private sealed record CorrectionRecordSnapshot(
+        Guid Id,
+        string RecordType,
+        string? Label,
+        string? EventType,
+        string? SubjectReference,
+        string? Predicate,
+        string? Value,
+        string? AssertedBy,
+        DateTimeOffset? EventTime,
+        DateTimeOffset? StartTime,
+        DateTimeOffset? EndTime,
+        string Status,
+        string Verification);
 }
