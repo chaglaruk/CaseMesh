@@ -70,6 +70,47 @@ public sealed class MeetingPreparationProjectionTests
                          !assertion.GetProperty("current").GetBoolean());
     }
 
+    [Fact]
+    public async Task Preparation_projects_active_participant_provenance_and_excludes_completed_entity_proposals()
+    {
+        var loaded = CreateSyntheticMatter(out var firstSpan, out _, out _);
+        var brain = loaded.Brain;
+        var provider = new FixedExtractionProvider(new StructuredExtractionOutput(
+            "{\"synthetic\":true}",
+            new StructuredCandidateBatch(
+                [
+                    new EntityCandidate("person-a", CanonicalEntityKind.Person, "Alex Smith", "person",
+                        ["Alex Smith"], ["Employee"], [firstSpan.Id], 0.99m),
+                    new EntityCandidate("person-b", CanonicalEntityKind.Person, "Alex Smyth", "person",
+                        ["Alex Smyth"], ["Manager"], [firstSpan.Id], 0.98m)
+                ],
+                [], [], [], [], [], [])));
+
+        await new MatterBrainMergeService(TimeProvider.System)
+            .ExtractAndMergeAsync(brain, [firstSpan.Id], provider);
+        var people = brain.People.OrderBy(item => item.DisplayName, StringComparer.Ordinal).ToArray();
+        Assert.Equal(2, people.Length);
+        var proposal = brain.ProposeEntityMerge(Guid.NewGuid(), CanonicalEntityKind.Person,
+            people[0].Id, people[1].Id, [firstSpan.Id], 0.90m, "synthetic-reviewer", DateTimeOffset.UtcNow);
+        brain.AcceptEntityMerge(Guid.NewGuid(), proposal.Id, "synthetic-reviewer", DateTimeOffset.UtcNow.AddMinutes(1));
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
+        var participants = json.RootElement.GetProperty("participants").EnumerateArray().ToArray();
+        Assert.Equal(2, participants.Length);
+        Assert.All(participants, participant =>
+        {
+            Assert.Equal("SourceBackedExtraction", participant.GetProperty("provenanceStatus").GetString());
+            Assert.Contains(firstSpan.Id,
+                participant.GetProperty("sourceSpanIds").EnumerateArray().Select(item => item.GetGuid()));
+            Assert.Contains(firstSpan.DocumentVersion.DocumentVersionId,
+                participant.GetProperty("documentVersionIds").EnumerateArray().Select(item => item.GetGuid()));
+        });
+        Assert.DoesNotContain(json.RootElement.GetProperty("questionsToClarify").EnumerateArray(), item =>
+            item.GetProperty("Code").GetString() == "entity-ambiguity");
+        Assert.Contains(firstSpan.Id, json.RootElement.GetProperty("sourceSpans").EnumerateArray()
+            .Select(item => item.GetProperty("Id").GetGuid()));
+    }
+
     private static PersistedMatterBrain CreateSyntheticMatter(
         out SourceSpan firstSpan,
         out SourceSpan secondSpan,
@@ -109,4 +150,14 @@ public sealed class MeetingPreparationProjectionTests
         EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
         DisputeState.Contradicted, IntegrityState.OriginalHashVerified, VerificationState.NeedsContext,
         source.Id, eventTime: assertedAt, extractionConfidence: 0.99m);
+
+    private sealed class FixedExtractionProvider(StructuredExtractionOutput output) : IStructuredExtractionProvider
+    {
+        public StructuredExtractionProviderDescriptor Descriptor { get; } =
+            new("synthetic-provider", "synthetic-model", "1", "1", "1");
+
+        public Task<StructuredExtractionOutput> ExtractAsync(
+            StructuredExtractionInput input,
+            CancellationToken cancellationToken = default) => Task.FromResult(output);
+    }
 }
