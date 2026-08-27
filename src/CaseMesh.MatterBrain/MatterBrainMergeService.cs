@@ -69,11 +69,6 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
 
         var allCandidates = PrepareCandidates(output.Candidates);
         var generatedAt = _timeProvider.GetUtcNow();
-        var latestGeneratedAt = state.Runs.Select(item => (DateTimeOffset?)item.GeneratedAt).Max();
-        if (latestGeneratedAt.HasValue && generatedAt <= latestGeneratedAt.Value)
-        {
-            generatedAt = latestGeneratedAt.Value.AddMilliseconds(1);
-        }
         var runId = MatterBrainState.DeterministicId("extraction-run", state.MatterId, fingerprint);
         var run = new ExtractionRun(
             runId,
