@@ -76,7 +76,11 @@ public static class FactualGapAnalyzer
         foreach (var links in linksByEvent)
         {
             var linked = links.Select(item => assertions[item.AssertionId])
-                .Where(item => item.EventTime.HasValue && IsCurrentCanonical(CanonicalRecordKind.Assertion, item.Id))
+                .Where(item => item.EventTime.HasValue &&
+                               item.SupersededByAssertionId is null &&
+                               item.DisputeState != DisputeState.Superseded &&
+                               item.VerificationState != VerificationState.Rejected &&
+                               IsCurrentCanonical(CanonicalRecordKind.Assertion, item.Id))
                 .ToArray();
             if (linked.Select(item => item.EventTime).Distinct().Skip(1).Any())
                 gaps.Add(new FactualGap("chronology-date-conflict",
