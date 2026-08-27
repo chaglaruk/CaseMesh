@@ -37,9 +37,9 @@ public sealed class MeetingPreparationAliasProvenanceTests
             item => item.GetProperty("Value").GetString() == "A. Smith");
 
         Assert.Equal("SourceBackedExtraction", alias.GetProperty("provenanceStatus").GetString());
-        Assert.Equal([first.Id, second.Id].Order().ToArray(),
+        Assert.Equal(new[] { first.Id, second.Id }.Order().ToArray(),
             alias.GetProperty("sourceSpanIds").EnumerateArray().Select(item => item.GetGuid()).ToArray());
-        Assert.Equal([first.DocumentVersion.DocumentVersionId, second.DocumentVersion.DocumentVersionId].Order().ToArray(),
+        Assert.Equal(new[] { first.DocumentVersion.DocumentVersionId, second.DocumentVersion.DocumentVersionId }.Order().ToArray(),
             alias.GetProperty("documentVersionIds").EnumerateArray().Select(item => item.GetGuid()).ToArray());
         var projectedSources = json.RootElement.GetProperty("sourceSpans").EnumerateArray()
             .Select(item => item.GetProperty("Id").GetGuid()).ToArray();
