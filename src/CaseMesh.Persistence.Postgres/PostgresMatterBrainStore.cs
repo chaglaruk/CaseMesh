@@ -188,18 +188,19 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
                 """
                 INSERT INTO casemesh.extraction_runs
                     (tenant_id,matter_id,extraction_run_id,fingerprint,provider,model,extraction_version,
-                     prompt_version,schema_version,generated_at,raw_result_digest)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING;
+                     prompt_version,schema_version,generated_at,raw_result_digest,run_sequence)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT DO NOTHING;
                 """,
                 """
                 SELECT EXISTS (SELECT 1 FROM casemesh.extraction_runs
                     WHERE tenant_id=$1 AND matter_id=$2 AND extraction_run_id=$3 AND fingerprint=$4
                       AND provider=$5 AND model=$6 AND extraction_version=$7 AND prompt_version=$8
-                      AND schema_version=$9 AND generated_at=$10 AND raw_result_digest=$11);
+                      AND schema_version=$9 AND generated_at=$10 AND raw_result_digest=$11
+                      AND run_sequence IS NOT DISTINCT FROM $12);
                 """,
                 cancellationToken, tenantId, matterId, run.Id, run.Fingerprint, run.Provider.Provider,
                 run.Provider.Model, run.Provider.ExtractionVersion, run.Provider.PromptVersion,
-                run.Provider.SchemaVersion, run.GeneratedAt, run.RawResultDigest);
+                run.Provider.SchemaVersion, run.GeneratedAt, run.RawResultDigest, run.Sequence);
             await WriteOrderedSourcesAsync(connection, transaction, "extraction_run_sources", "extraction_run_id",
                 tenantId, matterId, run.Id, run.SourceSpanIds, cancellationToken);
         }
@@ -415,8 +416,9 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
         var runs = new List<ExtractionRun>();
         await using (var command = Command(connection, transaction, """
                          SELECT extraction_run_id,fingerprint,provider,model,extraction_version,prompt_version,
-                                schema_version,generated_at,raw_result_digest
-                         FROM casemesh.extraction_runs WHERE tenant_id=$1 AND matter_id=$2 ORDER BY generated_at,extraction_run_id
+                                schema_version,generated_at,raw_result_digest,run_sequence
+                         FROM casemesh.extraction_runs WHERE tenant_id=$1 AND matter_id=$2
+                         ORDER BY run_sequence NULLS FIRST,generated_at,extraction_run_id
                          """, tenantId, matterId))
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
@@ -427,7 +429,7 @@ public sealed class PostgresMatterBrainStore : IAsyncDisposable
                     new StructuredExtractionProviderDescriptor(reader.GetString(2), reader.GetString(3),
                         reader.GetString(4), reader.GetString(5), reader.GetString(6)),
                     (runSources.GetValueOrDefault(id) ?? []).AsReadOnly(),
-                    reader.GetFieldValue<DateTimeOffset>(7), reader.GetString(8)));
+                    reader.GetFieldValue<DateTimeOffset>(7), reader.GetString(8), GetNullable<long>(reader, 9)));
             }
         }
 
