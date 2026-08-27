@@ -92,16 +92,22 @@ public static class FactualGapAnalyzer
         var completedProposals = brain.EntityResolutionActions.Where(item =>
                 item.Kind is EntityResolutionActionKind.Accepted or EntityResolutionActionKind.Rejected or EntityResolutionActionKind.Reversed)
             .Select(item => item.ProposalId).ToHashSet();
-        var orderedRuns = brain.Runs.OrderBy(item => item.GeneratedAt).ThenBy(item => item.Id).ToArray();
-        var runsById = orderedRuns.ToDictionary(item => item.Id);
-        var runOrderById = orderedRuns.Select((run, index) => (run.Id, index))
-            .ToDictionary(item => item.Id, item => item.index);
+        var runsById = brain.Runs.ToDictionary(item => item.Id);
         var entityMatchCandidates = brain.Candidates
             .Where(item => item.Kind == ExtractionCandidateKind.EntityMatch &&
                            item.Disposition == CandidateDisposition.Validated)
             .ToDictionary(
                 item => MatterBrainIdentity.EntityMergeProposalId(item.RunId, item.ExternalKey),
                 item => item);
+        bool IsLaterRun(ExtractionRun run, ExtractionRun candidateRun)
+        {
+            if (run.Id == candidateRun.Id) return false;
+            if (run.Sequence.HasValue && candidateRun.Sequence.HasValue)
+                return run.Sequence.Value > candidateRun.Sequence.Value;
+            if (run.Sequence.HasValue) return true;
+            if (candidateRun.Sequence.HasValue) return false;
+            return run.GeneratedAt > candidateRun.GeneratedAt;
+        }
         bool IsCurrentProposal(EntityResolutionAction action)
         {
             if (!string.Equals(action.Actor, "structured-extraction", StringComparison.Ordinal)) return true;
@@ -109,9 +115,8 @@ public static class FactualGapAnalyzer
                 !runsById.TryGetValue(candidate.RunId, out var candidateRun)) return true;
 
             var candidateSources = candidate.SourceSpanIds.ToHashSet();
-            var candidateRunOrder = runOrderById[candidateRun.Id];
-            return !orderedRuns.Any(run =>
-                runOrderById[run.Id] > candidateRunOrder &&
+            return !brain.Runs.Any(run =>
+                IsLaterRun(run, candidateRun) &&
                 run.SourceSpanIds.Any(candidateSources.Contains));
         }
 
