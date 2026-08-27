@@ -46,7 +46,7 @@ internal static class MeetingPreparationProjection
                                 assertion.SupersededByAssertionId is null &&
                                 assertion.DisputeState != DisputeState.Superseded &&
                                 assertion.VerificationState != VerificationState.Rejected)
-            .Any(assertion => assertion!.EventTime != matterEvent.StartTime);
+            .Any(assertion => assertion!.EventTime.HasValue && assertion.EventTime != matterEvent.StartTime);
 
         var currentAssertions = loaded.Evidence.Assertions
             .Where(item => item.SourceSpanId.HasValue &&
@@ -99,27 +99,50 @@ internal static class MeetingPreparationProjection
                 .ToArray();
         }
 
-        Guid[] HistoricalEventSources(Guid eventId)
+        HistoricalEventProvenance HistoricalEventSources(MatterEvent matterEvent)
         {
             var linked = loaded.Evidence.AssertionEventLinks
-                .Where(link => link.EventId == eventId && link.Relation is
-                    AssertionEventRelation.Supports or
-                    AssertionEventRelation.Qualifies or
-                    AssertionEventRelation.Contextualizes)
-                .Select(link => assertionsById.TryGetValue(link.AssertionId, out var assertion)
-                    ? assertion.SourceSpanId
-                    : null)
-                .Where(id => id.HasValue)
-                .Select(id => id!.Value);
-            var dependencies = loaded.Brain.Dependencies
+                .Where(link => link.EventId == matterEvent.Id)
+                .Select(link => new
+                {
+                    link.Relation,
+                    Assertion = assertionsById.TryGetValue(link.AssertionId, out var assertion) ? assertion : null
+                })
+                .Where(item => item.Assertion?.SourceSpanId is not null &&
+                               sourceSpansById.ContainsKey(item.Assertion.SourceSpanId.Value))
+                .ToArray();
+            var directEventSources = loaded.Brain.Dependencies
                 .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Event &&
-                                     dependency.CanonicalId == eventId)
+                                     dependency.CanonicalId == matterEvent.Id)
                 .Select(dependency => dependency.SourceSpanId);
-            return linked.Concat(dependencies)
+            var supporting = linked
+                .Where(item => item.Relation == AssertionEventRelation.Supports &&
+                               (!matterEvent.StartTime.HasValue ||
+                                !item.Assertion!.EventTime.HasValue ||
+                                item.Assertion.EventTime == matterEvent.StartTime))
+                .Select(item => item.Assertion!.SourceSpanId!.Value)
+                .Concat(directEventSources)
                 .Where(sourceSpansById.ContainsKey)
                 .Distinct()
                 .OrderBy(id => id)
                 .ToArray();
+            var qualifying = linked
+                .Where(item => item.Relation is AssertionEventRelation.Qualifies or AssertionEventRelation.Contextualizes)
+                .Select(item => item.Assertion!.SourceSpanId!.Value)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+            var contradicting = linked
+                .Where(item => item.Relation == AssertionEventRelation.Contradicts ||
+                               (item.Relation == AssertionEventRelation.Supports &&
+                                matterEvent.StartTime.HasValue &&
+                                item.Assertion!.EventTime.HasValue &&
+                                item.Assertion.EventTime != matterEvent.StartTime))
+                .Select(item => item.Assertion!.SourceSpanId!.Value)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+            return new HistoricalEventProvenance(supporting, qualifying, contradicting);
         }
 
         var evidencePoints = currentAssertions
@@ -217,6 +240,8 @@ internal static class MeetingPreparationProjection
                         AssertionSnapshot(originalAssertion),
                         AssertionSnapshot(correctedAssertion),
                         historicalSourceSpanIds,
+                        [],
+                        [],
                         originalIsAiInference
                             ? "The historical record was AI inference, not documentary evidence. It has no documentary citation to transfer; the replacement is a separately attributed human correction."
                             : "Historical documentary citations support only the original attributed statement. The corrected replacement is a separately attributed human correction and is not promoted to documentary fact.");
@@ -226,6 +251,7 @@ internal static class MeetingPreparationProjection
                     eventsById.TryGetValue(audit.EntityId, out var originalEvent) &&
                     eventsById.TryGetValue(audit.ReplacementEntityId!.Value, out var correctedEvent))
                 {
+                    var historical = HistoricalEventSources(originalEvent);
                     return new CorrectionHistoryItem(
                         audit.Id,
                         audit.Kind.ToString(),
@@ -234,8 +260,10 @@ internal static class MeetingPreparationProjection
                         audit.ChangeSummary,
                         EventSnapshot(originalEvent),
                         EventSnapshot(correctedEvent),
-                        HistoricalEventSources(originalEvent.Id),
-                        "Historical documentary citations support only the original event record. The corrected date or label is an audited human correction and is intentionally not cited as if the old evidence stated the corrected fields.");
+                        historical.SupportingSourceSpanIds,
+                        historical.QualifyingSourceSpanIds,
+                        historical.ContradictingSourceSpanIds,
+                        "Historical supporting citations apply only to the original event record. Qualifying/context and contradicting or date-mismatched sources are labelled separately. The corrected date or label is an audited human correction and is intentionally not cited as if old evidence stated the corrected fields.");
                 }
 
                 return null;
@@ -418,6 +446,8 @@ internal static class MeetingPreparationProjection
             .Concat(chronology.SelectMany(item => item.qualifyingSourceSpanIds))
             .Concat(chronology.SelectMany(item => item.contradictingSourceSpanIds))
             .Concat(correctionHistory.SelectMany(item => item.HistoricalSourceSpanIds))
+            .Concat(correctionHistory.SelectMany(item => item.HistoricalQualifyingSourceSpanIds))
+            .Concat(correctionHistory.SelectMany(item => item.HistoricalContradictingSourceSpanIds))
             .Concat(unresolvedDisputes.SelectMany(item => item.sourceSpanIds))
             .Concat(gaps.SelectMany(item => item.SourceSpanIds))
             .Concat(participants.SelectMany(item => item.sourceSpanIds))
@@ -568,10 +598,13 @@ internal static class MeetingPreparationProjection
             assertion.SubjectReference,
             assertion.Predicate,
             assertion.Value,
+            assertion.AssertedAt,
             assertion.EventTime,
             assertion.SourceSpanId,
             origin = assertion.OriginClass.ToString(),
             assertionClass = assertion.AssertionClass.ToString(),
+            integrity = assertion.IntegrityState.ToString(),
+            assertion.ExtractionConfidence,
             dispute = assertion.DisputeState.ToString(),
             verification = assertion.VerificationState.ToString(),
             historical,
@@ -594,6 +627,11 @@ internal static class MeetingPreparationProjection
         item.ExtractionConfidence
     };
 
+    private sealed record HistoricalEventProvenance(
+        IReadOnlyList<Guid> SupportingSourceSpanIds,
+        IReadOnlyList<Guid> QualifyingSourceSpanIds,
+        IReadOnlyList<Guid> ContradictingSourceSpanIds);
+
     private sealed record CorrectionHistoryItem(
         Guid Id,
         string Kind,
@@ -603,6 +641,8 @@ internal static class MeetingPreparationProjection
         CorrectionRecordSnapshot Original,
         CorrectionRecordSnapshot Replacement,
         IReadOnlyList<Guid> HistoricalSourceSpanIds,
+        IReadOnlyList<Guid> HistoricalQualifyingSourceSpanIds,
+        IReadOnlyList<Guid> HistoricalContradictingSourceSpanIds,
         string Notice);
 
     private sealed record CorrectionRecordSnapshot(
