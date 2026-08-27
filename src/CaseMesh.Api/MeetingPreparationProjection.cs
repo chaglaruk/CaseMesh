@@ -28,6 +28,21 @@ internal static class MeetingPreparationProjection
             .ToHashSet();
         bool IsCurrentCanonical(CanonicalRecordKind kind, Guid id) =>
             !extractedCanonicalRecords.Contains((kind, id)) || activeCanonicalRecords.Contains((kind, id));
+        bool HasCompleteCurrentCandidateProvenance(
+            ExtractionCandidateRecord candidate,
+            CanonicalRecordKind canonicalKind,
+            Guid canonicalId)
+        {
+            var candidateSources = candidate.SourceSpanIds.Distinct().ToArray();
+            if (candidateSources.Length == 0) return false;
+            var activeSources = activeDependencies
+                .Where(dependency => dependency.CanonicalKind == canonicalKind &&
+                                     dependency.CanonicalId == canonicalId &&
+                                     dependency.CandidateId == candidate.Id)
+                .Select(dependency => dependency.SourceSpanId)
+                .ToHashSet();
+            return candidateSources.All(activeSources.Contains);
+        }
         bool HasCompleteCurrentEventProvenance(Guid eventId)
         {
             var eventDependencies = loaded.Brain.Dependencies
@@ -71,6 +86,7 @@ internal static class MeetingPreparationProjection
             .ToHashSet();
         bool HasCurrentCorrectionDateConflict(MatterEvent matterEvent) => loaded.Evidence.AssertionEventLinks
             .Where(link => link.EventId == matterEvent.Id &&
+                           IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
                            link.Relation == AssertionEventRelation.Supports &&
                            correctedAssertionIds.Contains(link.AssertionId))
             .Select(link => assertionsById.TryGetValue(link.AssertionId, out var assertion) ? assertion : null)
@@ -94,6 +110,7 @@ internal static class MeetingPreparationProjection
         var currentAssertionIds = currentAssertions.Select(item => item.Id).ToHashSet();
         bool HasCurrentSupersedingEvidence(Guid eventId) => loaded.Evidence.AssertionEventLinks.Any(link =>
             link.EventId == eventId &&
+            IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
             link.Relation == AssertionEventRelation.Supersedes &&
             currentAssertionIds.Contains(link.AssertionId));
 
@@ -102,6 +119,7 @@ internal static class MeetingPreparationProjection
             var relationSet = relations.ToHashSet();
             return loaded.Evidence.AssertionEventLinks
                 .Where(link => link.EventId == matterEvent.Id &&
+                               IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
                                currentAssertionIds.Contains(link.AssertionId) &&
                                relationSet.Contains(link.Relation))
                 .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
@@ -122,6 +140,7 @@ internal static class MeetingPreparationProjection
             if (!matterEvent.StartTime.HasValue) return [];
             return loaded.Evidence.AssertionEventLinks
                 .Where(link => link.EventId == matterEvent.Id &&
+                               IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
                                link.Relation == AssertionEventRelation.Supports &&
                                currentAssertionIds.Contains(link.AssertionId))
                 .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
@@ -139,6 +158,7 @@ internal static class MeetingPreparationProjection
             if (!matterEvent.StartTime.HasValue) return [];
             return loaded.Evidence.AssertionEventLinks
                 .Where(link => link.EventId == matterEvent.Id &&
+                               IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
                                link.Relation == AssertionEventRelation.Supports &&
                                currentAssertionIds.Contains(link.AssertionId))
                 .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
@@ -404,13 +424,18 @@ internal static class MeetingPreparationProjection
                             .Where(candidate => candidate.Kind == ExtractionCandidateKind.Person &&
                                                 candidate.Disposition == CandidateDisposition.Validated)
                             .ToArray();
-                        var fieldsSourceBacked = activeCandidates.Length > 0 &&
-                                                 activeCandidates.All(candidate => CandidateSupportsParticipant(candidate, member));
+                        var completeActiveCandidates = activeCandidates
+                            .Where(candidate => HasCompleteCurrentCandidateProvenance(
+                                candidate, CanonicalRecordKind.Person, member.Id))
+                            .ToArray();
+                        var fieldsSourceBacked = completeActiveCandidates.Length > 0 &&
+                                                 completeActiveCandidates.All(candidate => CandidateSupportsParticipant(candidate, member));
+                        var sourceBackedCandidateIds = completeActiveCandidates.Select(candidate => candidate.Id).ToHashSet();
                         var sourceSpanIds = fieldsSourceBacked
                             ? activeDependencies
                                 .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
                                                      dependency.CanonicalId == member.Id &&
-                                                     activeCandidateIds.Contains(dependency.CandidateId))
+                                                     sourceBackedCandidateIds.Contains(dependency.CandidateId))
                                 .Select(dependency => dependency.SourceSpanId)
                                 .Where(sourceSpansById.ContainsKey)
                                 .Distinct()
@@ -431,10 +456,12 @@ internal static class MeetingPreparationProjection
                             documentVersionIds,
                             provenanceStatus = fieldsSourceBacked ? "SourceBackedExtraction" : "Unsupported",
                             provenanceNotice = fieldsSourceBacked
-                                ? "Current merged identity member fields are backed by the cited extraction spans; identity and role labels still require review."
+                                ? "Current merged identity member fields are backed by the complete cited extraction source set; identity and role labels still require review."
                                 : activeCandidates.Length == 0
                                     ? "Current merged identity member has no active documentary provenance; verify its name and role labels before relying on them."
-                                    : "Active extraction no longer exactly supports this member's stored name and role labels; verify these fields before relying on them."
+                                    : completeActiveCandidates.Length == 0
+                                        ? "Active extraction provenance is incomplete after source invalidation; no surviving span is promoted as field-level support."
+                                        : "Active extraction no longer exactly supports this member's stored name and role labels; verify these fields before relying on them."
                         };
                     })
                     .ToArray();
@@ -449,10 +476,13 @@ internal static class MeetingPreparationProjection
                         var activeAliasCandidateIds = activeDependencies
                             .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
                                                  mergedIdentityIdSet.Contains(dependency.CanonicalId))
-                            .Select(dependency => dependency.CandidateId)
+                            .Select(dependency => new { dependency.CandidateId, dependency.CanonicalId })
                             .Distinct()
-                            .Where(candidatesById.ContainsKey)
-                            .Where(candidateId => CandidateSupportsAlias(candidatesById[candidateId], alias.NormalizedValue))
+                            .Where(item => candidatesById.ContainsKey(item.CandidateId))
+                            .Where(item => CandidateSupportsAlias(candidatesById[item.CandidateId], alias.NormalizedValue))
+                            .Where(item => HasCompleteCurrentCandidateProvenance(
+                                candidatesById[item.CandidateId], CanonicalRecordKind.Person, item.CanonicalId))
+                            .Select(item => item.CandidateId)
                             .ToHashSet();
                         var sourceSpanIds = activeDependencies
                             .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
@@ -476,8 +506,8 @@ internal static class MeetingPreparationProjection
                             documentVersionIds,
                             provenanceStatus = sourceBacked ? "SourceBackedExtraction" : "Unsupported",
                             provenanceNotice = sourceBacked
-                                ? "Alias is backed by the cited active extraction spans."
-                                : "Alias has no current documentary provenance; verify it before relying on it."
+                                ? "Alias is backed by the complete cited active extraction source set."
+                                : "Alias has no complete current documentary provenance; verify it before relying on it."
                         };
                     })
                     .OrderBy(alias => alias.Value, StringComparer.OrdinalIgnoreCase)
