@@ -62,7 +62,12 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   await page.getByRole("button",{name:"Prepare"}).click();
   await expect(page.getByLabel("Meeting preparation")).toContainText("assertion without documentary source");
   await expect(page.getByLabel("Meeting preparation")).toContainText("corrected history review");
-  await expect(page.getByLabel("Meeting preparation")).not.toContainText("ten absence days were recorded");
+  await expect(page.getByRole("heading",{name:"Correction history"})).toBeVisible();
+  await expect(page.getByLabel("Meeting preparation")).toContainText("Corrected replacement:");
+  await expect(page.getByLabel("Meeting preparation")).toContainText("ten absence days were recorded");
+  await expect(page.getByLabel("Meeting preparation")).toContainText("Historical documentary citations support only the original attributed statement");
+  await page.getByRole("button",{name:"View historical source for original record"}).click();
+  await expect(page.getByLabel("Source citation detail")).toContainText("twelve absence days");
   const correctedPrepareAccessibility=await new AxeBuilder({page}).analyze();
   expect(correctedPrepareAccessibility.violations).toEqual([]);
 
