@@ -114,7 +114,7 @@ public sealed class MeetingPreparationProjectionTests
             participant.GetProperty("sourceSpanIds").EnumerateArray().Select(item => item.GetGuid()));
         Assert.Contains(firstSpan.DocumentVersion.DocumentVersionId,
             participant.GetProperty("documentVersionIds").EnumerateArray().Select(item => item.GetGuid()));
-        Assert.Contains("collapsed duplicate participant", participant.GetProperty("identityNotice").GetString(),
+        Assert.Contains("collapsed current participant records", participant.GetProperty("identityNotice").GetString(),
             StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(json.RootElement.GetProperty("questionsToClarify").EnumerateArray(), item =>
             item.GetProperty("Code").GetString() == "entity-ambiguity");
