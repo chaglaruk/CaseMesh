@@ -485,6 +485,7 @@ internal static class MeetingPreparationProjection
         assertion.OriginClass.ToString(),
         assertion.AssertionClass.ToString(),
         assertion.IntegrityState.ToString(),
+        assertion.ExtractionConfidence,
         assertion.DisputeState.ToString(),
         assertion.VerificationState.ToString());
 
@@ -501,6 +502,7 @@ internal static class MeetingPreparationProjection
         null,
         matterEvent.StartTime,
         matterEvent.EndTime,
+        null,
         null,
         null,
         null,
@@ -619,6 +621,7 @@ internal static class MeetingPreparationProjection
         string? Origin,
         string? AssertionClass,
         string? Integrity,
+        decimal? ExtractionConfidence,
         string Status,
         string Verification);
 }
