@@ -37,6 +37,32 @@ public sealed class MeetingPreparationChronologyDisputeRegressionTests
     }
 
     [Fact]
+    public void Date_mismatched_support_is_not_presented_as_primary_chronology_support()
+    {
+        var now = new DateTimeOffset(2026, 5, 6, 10, 0, 0, TimeSpan.Zero);
+        var graph = CreateGraph(now, out var matchingSpan, out var mismatchedSpan);
+        var eventTime = new DateTimeOffset(2026, 4, 10, 10, 0, 0, TimeSpan.Zero);
+        var matching = AddAssertion(graph, matchingSpan, "Matching support", eventTime, now);
+        var mismatched = AddAssertion(graph, mismatchedSpan, "Mismatched support", eventTime.AddDays(1), now.AddMinutes(1));
+        var matterEvent = graph.AddEvent(Guid.NewGuid(), "meeting", "Synthetic dated meeting",
+            EventStatus.Disputed, VerificationState.NeedsContext, eventTime);
+        graph.AddAssertionEventLink(Guid.NewGuid(), matching.Id, matterEvent.Id, AssertionEventRelation.Supports);
+        graph.AddAssertionEventLink(Guid.NewGuid(), mismatched.Id, matterEvent.Id, AssertionEventRelation.Supports);
+        var loaded = new PersistedMatterBrain(graph, new WorkplaceMatter(graph), new MatterBrainState(graph));
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
+        var projected = Assert.Single(json.RootElement.GetProperty("chronology").EnumerateArray(),
+            item => item.GetProperty("Id").GetGuid() == matterEvent.Id);
+        var primary = projected.GetProperty("sourceSpanIds").EnumerateArray().Select(item => item.GetGuid()).ToArray();
+        var contradicting = projected.GetProperty("contradictingSourceSpanIds").EnumerateArray()
+            .Select(item => item.GetGuid()).ToArray();
+
+        Assert.Contains(matchingSpan.Id, primary);
+        Assert.DoesNotContain(mismatchedSpan.Id, primary);
+        Assert.Contains(mismatchedSpan.Id, contradicting);
+    }
+
+    [Fact]
     public void Temporal_dispute_preserves_each_asserted_event_time()
     {
         var now = new DateTimeOffset(2026, 5, 7, 9, 0, 0, TimeSpan.Zero);
