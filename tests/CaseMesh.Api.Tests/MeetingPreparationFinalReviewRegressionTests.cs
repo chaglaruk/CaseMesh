@@ -110,7 +110,7 @@ public sealed class MeetingPreparationFinalReviewRegressionTests
     }
 
     [Fact]
-    public void Assertion_correction_snapshot_keeps_dispute_and_verification_state()
+    public void Assertion_correction_snapshot_exposes_historical_dispute_and_verification_state()
     {
         var now = new DateTimeOffset(2026, 6, 2, 12, 0, 0, TimeSpan.Zero);
         var graph = CreateGraph(now);
@@ -130,7 +130,7 @@ public sealed class MeetingPreparationFinalReviewRegressionTests
         var replacementSnapshot = history.GetProperty("Replacement");
 
         Assert.Equal("Superseded", originalSnapshot.GetProperty("Status").GetString());
-        Assert.Equal("Confirmed", originalSnapshot.GetProperty("Verification").GetString());
+        Assert.Equal("Rejected", originalSnapshot.GetProperty("Verification").GetString());
         Assert.Equal("Unverified", replacementSnapshot.GetProperty("Status").GetString());
         Assert.Equal("NotReviewed", replacementSnapshot.GetProperty("Verification").GetString());
     }
