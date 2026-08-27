@@ -61,15 +61,38 @@ internal static class MeetingPreparationProjection
             .ToArray();
         var currentAssertionIds = currentAssertions.Select(item => item.Id).ToHashSet();
 
-        Guid[] CurrentLinkedSources(Guid eventId, params AssertionEventRelation[] relations)
+        Guid[] CurrentLinkedSources(MatterEvent matterEvent, params AssertionEventRelation[] relations)
         {
             var relationSet = relations.ToHashSet();
             return loaded.Evidence.AssertionEventLinks
-                .Where(link => link.EventId == eventId &&
+                .Where(link => link.EventId == matterEvent.Id &&
                                currentAssertionIds.Contains(link.AssertionId) &&
                                relationSet.Contains(link.Relation))
                 .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
-                    (_, assertion) => assertion.SourceSpanId!.Value)
+                    (link, assertion) => new { link, assertion })
+                .Where(item => item.link.Relation != AssertionEventRelation.Supports ||
+                               !matterEvent.StartTime.HasValue ||
+                               !item.assertion.EventTime.HasValue ||
+                               item.assertion.EventTime == matterEvent.StartTime)
+                .Select(item => item.assertion.SourceSpanId!.Value)
+                .Where(sourceSpansById.ContainsKey)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+        }
+
+        Guid[] MismatchedSupportingSources(MatterEvent matterEvent)
+        {
+            if (!matterEvent.StartTime.HasValue) return [];
+            return loaded.Evidence.AssertionEventLinks
+                .Where(link => link.EventId == matterEvent.Id &&
+                               link.Relation == AssertionEventRelation.Supports &&
+                               currentAssertionIds.Contains(link.AssertionId))
+                .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
+                    (_, assertion) => assertion)
+                .Where(assertion => assertion.EventTime.HasValue &&
+                                    assertion.EventTime != matterEvent.StartTime)
+                .Select(assertion => assertion.SourceSpanId!.Value)
                 .Where(sourceSpansById.ContainsKey)
                 .Distinct()
                 .OrderBy(id => id)
@@ -108,10 +131,13 @@ internal static class MeetingPreparationProjection
                 item.Predicate,
                 item.Value,
                 item.AssertedBy,
+                item.AssertedAt,
                 item.EventTime,
                 sourceSpanIds = new[] { item.SourceSpanId!.Value },
                 origin = item.OriginClass.ToString(),
                 assertionClass = item.AssertionClass.ToString(),
+                integrity = item.IntegrityState.ToString(),
+                item.ExtractionConfidence,
                 dispute = item.DisputeState.ToString(),
                 verification = item.VerificationState.ToString(),
                 epistemicNotice = "Attributed evidence point; not automatically an established fact."
@@ -124,10 +150,14 @@ internal static class MeetingPreparationProjection
                            !HasCurrentCorrectionDateConflict(item))
             .Select(item =>
             {
-                var supportingAssertionSourceIds = CurrentLinkedSources(item.Id, AssertionEventRelation.Supports);
-                var qualifyingSourceSpanIds = CurrentLinkedSources(item.Id,
+                var supportingAssertionSourceIds = CurrentLinkedSources(item, AssertionEventRelation.Supports);
+                var qualifyingSourceSpanIds = CurrentLinkedSources(item,
                     AssertionEventRelation.Qualifies, AssertionEventRelation.Contextualizes);
-                var contradictingSourceSpanIds = CurrentLinkedSources(item.Id, AssertionEventRelation.Contradicts);
+                var contradictingSourceSpanIds = CurrentLinkedSources(item, AssertionEventRelation.Contradicts)
+                    .Concat(MismatchedSupportingSources(item))
+                    .Distinct()
+                    .OrderBy(id => id)
+                    .ToArray();
                 var eventDependencySourceIds = activeDependencies
                     .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Event &&
                                          dependency.CanonicalId == item.Id)
@@ -150,7 +180,7 @@ internal static class MeetingPreparationProjection
                     sourceSpanIds,
                     qualifyingSourceSpanIds,
                     contradictingSourceSpanIds,
-                    provenanceNotice = "Primary chronology citations are direct event extraction or supporting statements; qualifying/context and contradicting evidence are labelled separately."
+                    provenanceNotice = "Primary chronology citations are direct event extraction or supporting statements whose alleged event time does not conflict with the displayed event date; qualifying/context and contradicting or date-mismatched evidence are labelled separately."
                 };
             })
             .Where(item => item.sourceSpanIds.Length > 0)
@@ -175,6 +205,9 @@ internal static class MeetingPreparationProjection
                                                   sourceSpansById.ContainsKey(originalAssertion.SourceSpanId.Value)
                         ? new[] { originalAssertion.SourceSpanId.Value }
                         : [];
+                    var originalIsAiInference =
+                        originalAssertion.OriginClass == EvidenceOriginClass.AiGeneratedInference ||
+                        originalAssertion.AssertionClass == AssertionClass.AiInference;
                     return new CorrectionHistoryItem(
                         audit.Id,
                         audit.Kind.ToString(),
@@ -184,7 +217,9 @@ internal static class MeetingPreparationProjection
                         AssertionSnapshot(originalAssertion),
                         AssertionSnapshot(correctedAssertion),
                         historicalSourceSpanIds,
-                        "Historical documentary citations support only the original attributed statement. The corrected replacement is a separately attributed human correction and is not promoted to documentary fact.");
+                        originalIsAiInference
+                            ? "The historical record was AI inference, not documentary evidence. It has no documentary citation to transfer; the replacement is a separately attributed human correction."
+                            : "Historical documentary citations support only the original attributed statement. The corrected replacement is a separately attributed human correction and is not promoted to documentary fact.");
                 }
 
                 if (audit.Kind == AuditEventKind.EventCorrected &&
@@ -443,9 +478,13 @@ internal static class MeetingPreparationProjection
         assertion.Predicate,
         assertion.Value,
         assertion.AssertedBy,
+        assertion.AssertedAt,
         assertion.EventTime,
         null,
         null,
+        assertion.OriginClass.ToString(),
+        assertion.AssertionClass.ToString(),
+        assertion.IntegrityState.ToString(),
         assertion.DisputeState.ToString(),
         assertion.VerificationState.ToString());
 
@@ -459,8 +498,12 @@ internal static class MeetingPreparationProjection
         null,
         null,
         null,
+        null,
         matterEvent.StartTime,
         matterEvent.EndTime,
+        null,
+        null,
+        null,
         matterEvent.Status.ToString(),
         matterEvent.VerificationState.ToString());
 
@@ -569,9 +612,13 @@ internal static class MeetingPreparationProjection
         string? Predicate,
         string? Value,
         string? AssertedBy,
+        DateTimeOffset? AssertedAt,
         DateTimeOffset? EventTime,
         DateTimeOffset? StartTime,
         DateTimeOffset? EndTime,
+        string? Origin,
+        string? AssertionClass,
+        string? Integrity,
         string Status,
         string Verification);
 }
