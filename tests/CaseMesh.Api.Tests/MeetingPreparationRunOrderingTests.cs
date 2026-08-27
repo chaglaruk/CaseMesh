@@ -14,7 +14,7 @@ public sealed class MeetingPreparationRunOrderingTests
         var now = new DateTimeOffset(2026, 5, 4, 9, 0, 0, TimeSpan.Zero);
         var graph = new MatterEvidenceGraph(new Matter(Guid.NewGuid(), new TenantId(Guid.NewGuid()),
             "workplace-dispute", "Synthetic fixed-clock Matter", "active", now, now));
-        var version = graph.RegisterDocumentVersion(Guid.NewGuid(), Guid.NewGuid(), new string('G', 64), Guid.NewGuid());
+        var version = graph.RegisterDocumentVersion(Guid.NewGuid(), Guid.NewGuid(), new string('E', 64), Guid.NewGuid());
         const string text = "Synthetic evidence for Alex Smith and Alex Smyth.";
         var span = graph.AddSourceSpan(Guid.NewGuid(), version, text, "synthetic-parser/1", 0.99m,
             pageNumber: 1, textStart: 0, textEnd: text.Length);
