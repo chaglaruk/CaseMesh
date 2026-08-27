@@ -108,6 +108,21 @@ public static class FactualGapAnalyzer
             if (candidateRun.Sequence.HasValue) return false;
             return run.GeneratedAt > candidateRun.GeneratedAt;
         }
+        bool HasLegacyOrderingAmbiguity(EntityResolutionAction action)
+        {
+            if (!string.Equals(action.Actor, "structured-extraction", StringComparison.Ordinal) ||
+                !entityMatchCandidates.TryGetValue(action.ProposalId, out var candidate) ||
+                !runsById.TryGetValue(candidate.RunId, out var candidateRun) ||
+                candidateRun.Sequence.HasValue)
+                return false;
+
+            var candidateSources = candidate.SourceSpanIds.ToHashSet();
+            return brain.Runs.Any(run =>
+                run.Id != candidateRun.Id &&
+                !run.Sequence.HasValue &&
+                run.GeneratedAt == candidateRun.GeneratedAt &&
+                candidateSources.All(sourceId => run.SourceSpanIds.Contains(sourceId)));
+        }
         bool IsCurrentProposal(EntityResolutionAction action)
         {
             if (!string.Equals(action.Actor, "structured-extraction", StringComparison.Ordinal)) return true;
@@ -117,16 +132,20 @@ public static class FactualGapAnalyzer
             var candidateSources = candidate.SourceSpanIds.ToHashSet();
             return !brain.Runs.Any(run =>
                 IsLaterRun(run, candidateRun) &&
-                run.SourceSpanIds.Any(candidateSources.Contains));
+                candidateSources.All(sourceId => run.SourceSpanIds.Contains(sourceId)));
         }
 
         foreach (var proposal in brain.EntityResolutionActions.Where(item =>
                      item.Kind == EntityResolutionActionKind.Proposed &&
                      !completedProposals.Contains(item.ProposalId) &&
                      IsCurrentProposal(item)).OrderBy(item => item.Id))
-            gaps.Add(new FactualGap("entity-ambiguity",
-                "A similar-name entity match remains a proposal and requires confirmation before identities are treated as the same.",
+        {
+            var summary = HasLegacyOrderingAmbiguity(proposal)
+                ? "A similar-name entity match remains unresolved because legacy extraction runs share the same timestamp and no truthful execution sequence was recorded; confirm the identity manually."
+                : "A similar-name entity match remains a proposal and requires confirmation before identities are treated as the same.";
+            gaps.Add(new FactualGap("entity-ambiguity", summary,
                 "people", [proposal.Id, proposal.SourceEntityId, proposal.TargetEntityId], proposal.EvidenceSourceSpanIds));
+        }
 
         return gaps.OrderBy(item => item.Code, StringComparer.Ordinal)
             .ThenBy(item => item.RelatedRecordIds.FirstOrDefault()).ToArray();
