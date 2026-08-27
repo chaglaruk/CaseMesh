@@ -117,7 +117,7 @@ public sealed class MeetingPreparationFinalReviewRegressionTests
         var span = AddSource(graph, 'N', "Synthetic statement requiring correction.");
         var original = graph.AddAssertion(Guid.NewGuid(), "synthetic-subject", "status", "old", "synthetic source", now,
             EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
-            DisputeState.NeedsContext, IntegrityState.OriginalHashVerified, VerificationState.Confirmed,
+            DisputeState.Contradicted, IntegrityState.OriginalHashVerified, VerificationState.Confirmed,
             span.Id, null, 0.55m);
         var brain = new MatterBrainState(graph);
         var loaded = new PersistedMatterBrain(graph, new WorkplaceMatter(graph), brain);
