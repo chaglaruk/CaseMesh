@@ -15,8 +15,8 @@ public sealed class MeetingPreparationAliasProvenanceTests
         var now = new DateTimeOffset(2026, 5, 5, 9, 0, 0, TimeSpan.Zero);
         var graph = new MatterEvidenceGraph(new Matter(Guid.NewGuid(), new TenantId(Guid.NewGuid()),
             "workplace-dispute", "Synthetic alias Matter", "active", now, now));
-        var first = AddSource(graph, 'H', "Alex Smith is also referred to as A. Smith in this record.");
-        var second = AddSource(graph, 'I', "A second record also uses the name A. Smith for Alex Smith.");
+        var first = AddSource(graph, 'A', "Alex Smith is also referred to as A. Smith in this record.");
+        var second = AddSource(graph, 'B', "A second record also uses the name A. Smith for Alex Smith.");
         var brain = new MatterBrainState(graph);
         var loaded = new PersistedMatterBrain(graph, new WorkplaceMatter(graph), brain);
         var provider = new FixedExtractionProvider(new StructuredExtractionOutput(
