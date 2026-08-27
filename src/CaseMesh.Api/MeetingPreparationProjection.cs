@@ -38,7 +38,9 @@ internal static class MeetingPreparationProjection
             .Select(item => item.ReplacementEntityId!.Value)
             .ToHashSet();
         bool HasCurrentCorrectionDateConflict(MatterEvent matterEvent) => loaded.Evidence.AssertionEventLinks
-            .Where(link => link.EventId == matterEvent.Id && correctedAssertionIds.Contains(link.AssertionId))
+            .Where(link => link.EventId == matterEvent.Id &&
+                           link.Relation == AssertionEventRelation.Supports &&
+                           correctedAssertionIds.Contains(link.AssertionId))
             .Select(link => assertionsById.TryGetValue(link.AssertionId, out var assertion) ? assertion : null)
             .Where(assertion => assertion is not null &&
                                 assertion.SupersededByAssertionId is null &&
@@ -315,15 +317,45 @@ internal static class MeetingPreparationProjection
                 var identityAliases = loaded.Brain.Aliases
                     .Where(alias => alias.EntityKind == CanonicalEntityKind.Person &&
                                     mergedIdentityIdSet.Contains(alias.EntityId))
-                    .GroupBy(alias => new { alias.NormalizedValue, alias.SourceSpanId })
-                    .Select(aliasGroup => aliasGroup.First())
-                    .OrderBy(alias => alias.Value, StringComparer.OrdinalIgnoreCase)
-                    .ThenBy(alias => alias.Id)
-                    .Select(alias => new
+                    .GroupBy(alias => alias.NormalizedValue, StringComparer.Ordinal)
+                    .Select(aliasGroup =>
                     {
-                        alias.Value,
-                        alias.SourceSpanId
+                        var alias = aliasGroup.OrderBy(item => item.Id).First();
+                        var activeAliasCandidateIds = activeDependencies
+                            .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
+                                                 mergedIdentityIdSet.Contains(dependency.CanonicalId))
+                            .Select(dependency => dependency.CandidateId)
+                            .Distinct()
+                            .Where(candidatesById.ContainsKey)
+                            .Where(candidateId => CandidateSupportsAlias(candidatesById[candidateId], alias.NormalizedValue))
+                            .ToHashSet();
+                        var sourceSpanIds = activeDependencies
+                            .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
+                                                 mergedIdentityIdSet.Contains(dependency.CanonicalId) &&
+                                                 activeAliasCandidateIds.Contains(dependency.CandidateId))
+                            .Select(dependency => dependency.SourceSpanId)
+                            .Where(sourceSpansById.ContainsKey)
+                            .Distinct()
+                            .OrderBy(id => id)
+                            .ToArray();
+                        var documentVersionIds = sourceSpanIds
+                            .Select(id => sourceSpansById[id].DocumentVersion.DocumentVersionId)
+                            .Distinct()
+                            .OrderBy(id => id)
+                            .ToArray();
+                        var sourceBacked = sourceSpanIds.Length > 0;
+                        return new
+                        {
+                            alias.Value,
+                            sourceSpanIds,
+                            documentVersionIds,
+                            provenanceStatus = sourceBacked ? "SourceBackedExtraction" : "Unsupported",
+                            provenanceNotice = sourceBacked
+                                ? "Alias is backed by the cited active extraction spans."
+                                : "Alias has no current documentary provenance; verify it before relying on it."
+                        };
                     })
+                    .OrderBy(alias => alias.Value, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
                 var merged = currentMembers.Length > 1;
                 return new
@@ -357,8 +389,7 @@ internal static class MeetingPreparationProjection
             .Concat(participants.SelectMany(item => item.identityMembers)
                 .SelectMany(member => member.sourceSpanIds))
             .Concat(participants.SelectMany(item => item.identityAliases)
-                .Where(alias => alias.SourceSpanId.HasValue)
-                .Select(alias => alias.SourceSpanId!.Value))
+                .SelectMany(alias => alias.sourceSpanIds))
             .ToHashSet();
         var sourceSpans = loaded.Evidence.SourceSpans
             .Where(item => referencedSourceIds.Contains(item.Id))
@@ -454,6 +485,30 @@ internal static class MeetingPreparationProjection
         }
     }
 
+    private static bool CandidateSupportsAlias(ExtractionCandidateRecord candidate, string normalizedAlias)
+    {
+        if (candidate.Kind != ExtractionCandidateKind.Person || candidate.Disposition != CandidateDisposition.Validated)
+        {
+            return false;
+        }
+
+        try
+        {
+            var entity = JsonSerializer.Deserialize<EntityCandidate>(candidate.PayloadJson);
+            return entity is { Kind: CanonicalEntityKind.Person } &&
+                   entity.Aliases.Append(entity.DisplayName)
+                       .Any(value => string.Equals(NormalizeAlias(value), normalizedAlias, StringComparison.Ordinal));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string NormalizeAlias(string value) =>
+        string.Join(' ', value.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            .ToUpperInvariant();
+
     private static object? DisputedAssertion(Assertion? assertion)
     {
         if (assertion is null) return null;
@@ -468,6 +523,7 @@ internal static class MeetingPreparationProjection
             assertion.SubjectReference,
             assertion.Predicate,
             assertion.Value,
+            assertion.EventTime,
             assertion.SourceSpanId,
             origin = assertion.OriginClass.ToString(),
             assertionClass = assertion.AssertionClass.ToString(),
