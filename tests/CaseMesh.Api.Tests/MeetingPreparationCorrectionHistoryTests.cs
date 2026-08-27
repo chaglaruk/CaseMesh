@@ -56,6 +56,8 @@ public sealed class MeetingPreparationCorrectionHistoryTests
         Assert.Equal("10", history.GetProperty("Replacement").GetProperty("Value").GetString());
         Assert.Equal("OriginalContemporaneousRecord", history.GetProperty("Original").GetProperty("Origin").GetString());
         Assert.Equal("AttributedAssertion", history.GetProperty("Original").GetProperty("AssertionClass").GetString());
+        Assert.Equal(0.99m, history.GetProperty("Original").GetProperty("ExtractionConfidence").GetDecimal());
+        Assert.Equal(JsonValueKind.Null, history.GetProperty("Replacement").GetProperty("ExtractionConfidence").ValueKind);
         Assert.Equal("RetrospectiveNote", history.GetProperty("Replacement").GetProperty("Origin").GetString());
         Assert.Equal("AttributedAssertion", history.GetProperty("Replacement").GetProperty("AssertionClass").GetString());
         Assert.Contains(source.Id, history.GetProperty("HistoricalSourceSpanIds").EnumerateArray()
@@ -89,6 +91,8 @@ public sealed class MeetingPreparationCorrectionHistoryTests
 
         Assert.Equal("AiGeneratedInference", originalSnapshot.GetProperty("Origin").GetString());
         Assert.Equal("AiInference", originalSnapshot.GetProperty("AssertionClass").GetString());
+        Assert.Equal(JsonValueKind.Null, originalSnapshot.GetProperty("ExtractionConfidence").ValueKind);
+        Assert.Equal(JsonValueKind.Null, replacementSnapshot.GetProperty("ExtractionConfidence").ValueKind);
         Assert.Equal("RetrospectiveNote", replacementSnapshot.GetProperty("Origin").GetString());
         Assert.Equal("AttributedAssertion", replacementSnapshot.GetProperty("AssertionClass").GetString());
         Assert.Empty(history.GetProperty("HistoricalSourceSpanIds").EnumerateArray());
@@ -119,6 +123,8 @@ public sealed class MeetingPreparationCorrectionHistoryTests
         Assert.Equal("EventCorrected", history.GetProperty("Kind").GetString());
         Assert.Equal(extractedDate, history.GetProperty("Original").GetProperty("StartTime").GetDateTimeOffset());
         Assert.Equal(correctedDate, history.GetProperty("Replacement").GetProperty("StartTime").GetDateTimeOffset());
+        Assert.Equal(JsonValueKind.Null, history.GetProperty("Original").GetProperty("ExtractionConfidence").ValueKind);
+        Assert.Equal(JsonValueKind.Null, history.GetProperty("Replacement").GetProperty("ExtractionConfidence").ValueKind);
         Assert.Contains(source.Id, history.GetProperty("HistoricalSourceSpanIds").EnumerateArray()
             .Select(item => item.GetGuid()));
         Assert.Contains("intentionally not cited", history.GetProperty("Notice").GetString(),
