@@ -20,7 +20,6 @@ internal static class MeetingPreparationProjection
         var candidatesById = loaded.Brain.Candidates.ToDictionary(item => item.Id);
         var assertionsById = loaded.Evidence.Assertions.ToDictionary(item => item.Id);
         var eventsById = loaded.Evidence.Events.ToDictionary(item => item.Id);
-        var peopleById = loaded.Brain.People.ToDictionary(item => item.Id);
         var extractedCanonicalRecords = loaded.Brain.Dependencies
             .Select(item => (item.CanonicalKind, item.CanonicalId))
             .ToHashSet();
@@ -258,40 +257,61 @@ internal static class MeetingPreparationProjection
             .GroupBy(item => loaded.Brain.ResolveEntityId(CanonicalEntityKind.Person, item.Id))
             .Select(group =>
             {
+                var currentMembers = group.OrderBy(item => item.Id).ToArray();
                 var resolvedId = group.Key;
-                var representative = peopleById[resolvedId];
-                var mergedIdentityIds = group.Select(item => item.Id).Distinct().OrderBy(id => id).ToArray();
+                var representative = currentMembers.FirstOrDefault(item => item.Id == resolvedId) ?? currentMembers[0];
+                var mergedIdentityIds = currentMembers.Select(item => item.Id).ToArray();
                 var mergedIdentityIdSet = mergedIdentityIds.ToHashSet();
-                var activeCandidateIds = activeDependencies
-                    .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
-                                         dependency.CanonicalId == representative.Id)
-                    .Select(dependency => dependency.CandidateId)
-                    .Distinct()
-                    .ToHashSet();
-                var activeCandidates = activeCandidateIds
-                    .Where(candidatesById.ContainsKey)
-                    .Select(id => candidatesById[id])
-                    .Where(candidate => candidate.Kind == ExtractionCandidateKind.Person &&
-                                        candidate.Disposition == CandidateDisposition.Validated)
+                var identityMembers = currentMembers
+                    .Select(member =>
+                    {
+                        var activeCandidateIds = activeDependencies
+                            .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
+                                                 dependency.CanonicalId == member.Id)
+                            .Select(dependency => dependency.CandidateId)
+                            .Distinct()
+                            .ToHashSet();
+                        var activeCandidates = activeCandidateIds
+                            .Where(candidatesById.ContainsKey)
+                            .Select(id => candidatesById[id])
+                            .Where(candidate => candidate.Kind == ExtractionCandidateKind.Person &&
+                                                candidate.Disposition == CandidateDisposition.Validated)
+                            .ToArray();
+                        var fieldsSourceBacked = activeCandidates.Length > 0 &&
+                                                 activeCandidates.All(candidate => CandidateSupportsParticipant(candidate, member));
+                        var sourceSpanIds = fieldsSourceBacked
+                            ? activeDependencies
+                                .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
+                                                     dependency.CanonicalId == member.Id &&
+                                                     activeCandidateIds.Contains(dependency.CandidateId))
+                                .Select(dependency => dependency.SourceSpanId)
+                                .Where(sourceSpansById.ContainsKey)
+                                .Distinct()
+                                .OrderBy(id => id)
+                                .ToArray()
+                            : [];
+                        var documentVersionIds = sourceSpanIds
+                            .Select(id => sourceSpansById[id].DocumentVersion.DocumentVersionId)
+                            .Distinct()
+                            .OrderBy(id => id)
+                            .ToArray();
+                        return new
+                        {
+                            member.Id,
+                            member.DisplayName,
+                            member.RoleLabels,
+                            sourceSpanIds,
+                            documentVersionIds,
+                            provenanceStatus = fieldsSourceBacked ? "SourceBackedExtraction" : "Unsupported",
+                            provenanceNotice = fieldsSourceBacked
+                                ? "Current merged identity member fields are backed by the cited extraction spans; identity and role labels still require review."
+                                : activeCandidates.Length == 0
+                                    ? "Current merged identity member has no active documentary provenance; verify its name and role labels before relying on them."
+                                    : "Active extraction no longer exactly supports this member's stored name and role labels; verify these fields before relying on them."
+                        };
+                    })
                     .ToArray();
-                var fieldsSourceBacked = activeCandidates.Length > 0 &&
-                                         activeCandidates.All(candidate => CandidateSupportsParticipant(candidate, representative));
-                var sourceSpanIds = fieldsSourceBacked
-                    ? activeDependencies
-                        .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Person &&
-                                             dependency.CanonicalId == representative.Id &&
-                                             activeCandidateIds.Contains(dependency.CandidateId))
-                        .Select(dependency => dependency.SourceSpanId)
-                        .Where(sourceSpansById.ContainsKey)
-                        .Distinct()
-                        .OrderBy(id => id)
-                        .ToArray()
-                    : [];
-                var documentVersionIds = sourceSpanIds
-                    .Select(id => sourceSpansById[id].DocumentVersion.DocumentVersionId)
-                    .Distinct()
-                    .OrderBy(id => id)
-                    .ToArray();
+                var representativeMember = identityMembers.Single(item => item.Id == representative.Id);
                 var identityAliases = loaded.Brain.Aliases
                     .Where(alias => alias.EntityKind == CanonicalEntityKind.Person &&
                                     mergedIdentityIdSet.Contains(alias.EntityId))
@@ -305,24 +325,21 @@ internal static class MeetingPreparationProjection
                         alias.SourceSpanId
                     })
                     .ToArray();
-                var merged = mergedIdentityIds.Length > 1;
+                var merged = currentMembers.Length > 1;
                 return new
                 {
                     Id = representative.Id,
                     representative.DisplayName,
                     representative.RoleLabels,
                     mergedIdentityIds,
+                    identityMembers,
                     identityAliases,
-                    sourceSpanIds,
-                    documentVersionIds,
-                    provenanceStatus = fieldsSourceBacked ? "SourceBackedExtraction" : "Unsupported",
+                    sourceSpanIds = representativeMember.sourceSpanIds,
+                    documentVersionIds = representativeMember.documentVersionIds,
+                    representativeMember.provenanceStatus,
                     identityNotice = merged
-                        ? "User-confirmed identity merge collapsed duplicate participant records; cited aliases remain visible for review."
-                        : fieldsSourceBacked
-                            ? "Extracted participant record from cited documentary evidence; identity and role labels still require review."
-                            : activeCandidates.Length == 0
-                                ? "Participant record has no active documentary provenance; verify the displayed name and role labels before relying on it."
-                                : "Active extraction no longer exactly supports the stored participant name and role labels; verify these fields before relying on them."
+                        ? "User-confirmed identity merge collapsed current participant records; each current member's recorded roles and exact provenance are listed separately for review."
+                        : representativeMember.provenanceNotice
                 };
             })
             .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
@@ -337,6 +354,8 @@ internal static class MeetingPreparationProjection
             .Concat(unresolvedDisputes.SelectMany(item => item.sourceSpanIds))
             .Concat(gaps.SelectMany(item => item.SourceSpanIds))
             .Concat(participants.SelectMany(item => item.sourceSpanIds))
+            .Concat(participants.SelectMany(item => item.identityMembers)
+                .SelectMany(member => member.sourceSpanIds))
             .Concat(participants.SelectMany(item => item.identityAliases)
                 .Where(alias => alias.SourceSpanId.HasValue)
                 .Select(alias => alias.SourceSpanId!.Value))
