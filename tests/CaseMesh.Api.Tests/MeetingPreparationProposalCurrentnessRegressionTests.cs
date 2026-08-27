@@ -57,8 +57,8 @@ public sealed class MeetingPreparationProposalCurrentnessRegressionTests
     {
         var graph = new MatterEvidenceGraph(new Matter(Guid.NewGuid(), new TenantId(Guid.NewGuid()),
             "workplace-dispute", "Synthetic proposal-currentness Matter", "active", now, now));
-        var firstVersion = graph.RegisterDocumentVersion(Guid.NewGuid(), Guid.NewGuid(), new string('O', 64), Guid.NewGuid());
-        var secondVersion = graph.RegisterDocumentVersion(Guid.NewGuid(), Guid.NewGuid(), new string('P', 64), Guid.NewGuid());
+        var firstVersion = graph.RegisterDocumentVersion(Guid.NewGuid(), Guid.NewGuid(), new string('A', 64), Guid.NewGuid());
+        var secondVersion = graph.RegisterDocumentVersion(Guid.NewGuid(), Guid.NewGuid(), new string('B', 64), Guid.NewGuid());
         const string firstText = "Synthetic first source names Jordan Lee.";
         const string secondText = "Synthetic second source names Jordon Lee.";
         var first = graph.AddSourceSpan(Guid.NewGuid(), firstVersion, firstText, "synthetic-parser/1", 0.99m,
