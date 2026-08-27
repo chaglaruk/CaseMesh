@@ -66,8 +66,8 @@ public sealed class MeetingPreparationChronologyDisputeRegressionTests
     {
         var graph = new MatterEvidenceGraph(new Matter(Guid.NewGuid(), new TenantId(Guid.NewGuid()),
             "workplace-dispute", "Synthetic chronology Matter", "active", now, now));
-        firstSpan = AddSource(graph, 'J', "Synthetic first attributed event-time statement.");
-        secondSpan = AddSource(graph, 'K', "Synthetic second attributed event-time statement.");
+        firstSpan = AddSource(graph, 'C', "Synthetic first attributed event-time statement.");
+        secondSpan = AddSource(graph, 'D', "Synthetic second attributed event-time statement.");
         return graph;
     }
 
