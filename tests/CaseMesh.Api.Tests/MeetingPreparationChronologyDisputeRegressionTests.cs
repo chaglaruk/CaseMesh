@@ -4,6 +4,7 @@ using CaseMesh.Core.Services;
 using CaseMesh.Core.Workplace;
 using CaseMesh.MatterBrain;
 using CaseMesh.Persistence.Postgres;
+using CaseMesh.Qa;
 
 namespace CaseMesh.Api.Tests;
 
@@ -57,6 +58,37 @@ public sealed class MeetingPreparationChronologyDisputeRegressionTests
                                            item.GetProperty("EventTime").GetDateTimeOffset() == firstTime);
         Assert.Contains(assertions, item => item.GetProperty("Id").GetGuid() == second.Id &&
                                            item.GetProperty("EventTime").GetDateTimeOffset() == secondTime);
+    }
+
+    [Fact]
+    public void Superseded_correction_does_not_create_a_stale_chronology_date_conflict()
+    {
+        var now = new DateTimeOffset(2026, 5, 8, 9, 0, 0, TimeSpan.Zero);
+        var graph = CreateGraph(now, out var sourceSpan, out _);
+        var eventTime = new DateTimeOffset(2026, 4, 12, 9, 0, 0, TimeSpan.Zero);
+        var original = AddAssertion(graph, sourceSpan, "Original date", eventTime, now);
+        var matterEvent = graph.AddEvent(Guid.NewGuid(), "meeting", "Synthetic corrected meeting",
+            EventStatus.Candidate, VerificationState.NotReviewed, eventTime);
+        graph.AddAssertionEventLink(Guid.NewGuid(), original.Id, matterEvent.Id, AssertionEventRelation.Supports);
+        var workplace = new WorkplaceMatter(graph);
+        var brain = new MatterBrainState(graph);
+        var firstCorrectionId = Guid.NewGuid();
+        var finalCorrectionId = Guid.NewGuid();
+
+        brain.CorrectAssertion(original.Id, firstCorrectionId, original.Value, eventTime.AddDays(1),
+            Guid.NewGuid(), "synthetic-reviewer", now.AddHours(1));
+        brain.CorrectAssertion(firstCorrectionId, finalCorrectionId, original.Value, eventTime,
+            Guid.NewGuid(), "synthetic-reviewer", now.AddHours(2));
+
+        var gaps = FactualGapAnalyzer.Analyze(graph, workplace, brain);
+
+        Assert.DoesNotContain(gaps, item => item.Code == "chronology-date-conflict" &&
+                                            item.RelatedRecordIds.Contains(matterEvent.Id));
+        Assert.Contains(gaps, item => item.Code == "corrected-history-review" &&
+                                     item.RelatedRecordIds.Contains(firstCorrectionId));
+        Assert.Contains(graph.Assertions, item => item.Id == firstCorrectionId &&
+                                                  item.DisputeState == DisputeState.Superseded &&
+                                                  item.SupersededByAssertionId == finalCorrectionId);
     }
 
     private static MatterEvidenceGraph CreateGraph(
