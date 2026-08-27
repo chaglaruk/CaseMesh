@@ -14,9 +14,9 @@ public sealed class MeetingPreparationFinalReviewRegressionTests
     {
         var now = new DateTimeOffset(2026, 6, 2, 9, 0, 0, TimeSpan.Zero);
         var graph = CreateGraph(now);
-        var supportSpan = AddSource(graph, 'G', "Synthetic source supports the event date.");
-        var qualifyingSpan = AddSource(graph, 'H', "Synthetic source qualifies the event context.");
-        var mismatchedSpan = AddSource(graph, 'I', "Synthetic source alleges a different event date.");
+        var supportSpan = AddSource(graph, 'A', "Synthetic source supports the event date.");
+        var qualifyingSpan = AddSource(graph, 'B', "Synthetic source qualifies the event context.");
+        var mismatchedSpan = AddSource(graph, 'C', "Synthetic source alleges a different event date.");
         var eventTime = new DateTimeOffset(2026, 5, 12, 10, 0, 0, TimeSpan.Zero);
         var support = AddAssertion(graph, supportSpan, "support", now, eventTime, 0.91m);
         var qualifying = AddAssertion(graph, qualifyingSpan, "qualifying", now.AddMinutes(1), eventTime, 0.82m);
@@ -49,8 +49,8 @@ public sealed class MeetingPreparationFinalReviewRegressionTests
     {
         var now = new DateTimeOffset(2026, 6, 2, 10, 0, 0, TimeSpan.Zero);
         var graph = CreateGraph(now);
-        var correctedSpan = AddSource(graph, 'J', "Synthetic statement has no alleged event date.");
-        var stableSpan = AddSource(graph, 'K', "Synthetic statement supports the dated event.");
+        var correctedSpan = AddSource(graph, 'A', "Synthetic statement has no alleged event date.");
+        var stableSpan = AddSource(graph, 'B', "Synthetic statement supports the dated event.");
         var eventTime = new DateTimeOffset(2026, 5, 13, 10, 0, 0, TimeSpan.Zero);
         var original = AddAssertion(graph, correctedSpan, "old value", now, null, 0.88m);
         var stable = AddAssertion(graph, stableSpan, "stable support", now.AddMinutes(1), eventTime, 0.94m);
@@ -76,8 +76,8 @@ public sealed class MeetingPreparationFinalReviewRegressionTests
     {
         var now = new DateTimeOffset(2026, 6, 2, 11, 0, 0, TimeSpan.Zero);
         var graph = CreateGraph(now);
-        var firstSpan = AddSource(graph, 'L', "Synthetic first conflicting account.");
-        var secondSpan = AddSource(graph, 'M', "Synthetic second conflicting account.");
+        var firstSpan = AddSource(graph, 'A', "Synthetic first conflicting account.");
+        var secondSpan = AddSource(graph, 'B', "Synthetic second conflicting account.");
         var first = graph.AddAssertion(Guid.NewGuid(), "synthetic-subject", "count", "10", "source one", now,
             EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
             DisputeState.Contradicted, IntegrityState.OriginalHashVerified, VerificationState.NeedsContext,
@@ -114,7 +114,7 @@ public sealed class MeetingPreparationFinalReviewRegressionTests
     {
         var now = new DateTimeOffset(2026, 6, 2, 12, 0, 0, TimeSpan.Zero);
         var graph = CreateGraph(now);
-        var span = AddSource(graph, 'N', "Synthetic statement requiring correction.");
+        var span = AddSource(graph, 'A', "Synthetic statement requiring correction.");
         var original = graph.AddAssertion(Guid.NewGuid(), "synthetic-subject", "status", "old", "synthetic source", now,
             EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
             DisputeState.Contradicted, IntegrityState.OriginalHashVerified, VerificationState.Confirmed,
