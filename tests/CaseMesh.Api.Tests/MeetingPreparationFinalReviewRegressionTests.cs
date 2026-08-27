@@ -72,6 +72,103 @@ public sealed class MeetingPreparationFinalReviewRegressionTests
     }
 
     [Fact]
+    public void Undated_support_for_dated_event_is_contextual_not_primary_date_provenance()
+    {
+        var now = new DateTimeOffset(2026, 6, 2, 10, 30, 0, TimeSpan.Zero);
+        var graph = CreateGraph(now);
+        var exactSpan = AddSource(graph, 'C', "Synthetic source explicitly dates the event.");
+        var undatedSpan = AddSource(graph, 'D', "Synthetic source supports the event without alleging a date.");
+        var eventTime = new DateTimeOffset(2026, 5, 14, 10, 0, 0, TimeSpan.Zero);
+        var exact = AddAssertion(graph, exactSpan, "dated support", now, eventTime, 0.96m);
+        var undated = AddAssertion(graph, undatedSpan, "undated support", now.AddMinutes(1), null, 0.90m);
+        var matterEvent = graph.AddEvent(Guid.NewGuid(), "meeting", "Synthetic dated chronology event",
+            EventStatus.Candidate, VerificationState.NotReviewed, eventTime);
+        graph.AddAssertionEventLink(Guid.NewGuid(), exact.Id, matterEvent.Id, AssertionEventRelation.Supports);
+        graph.AddAssertionEventLink(Guid.NewGuid(), undated.Id, matterEvent.Id, AssertionEventRelation.Supports);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(Load(graph), false)));
+        var projected = Assert.Single(json.RootElement.GetProperty("chronology").EnumerateArray(),
+            item => item.GetProperty("Id").GetGuid() == matterEvent.Id);
+        var primary = projected.GetProperty("sourceSpanIds").EnumerateArray().Select(item => item.GetGuid()).ToArray();
+        var qualifying = projected.GetProperty("qualifyingSourceSpanIds").EnumerateArray().Select(item => item.GetGuid()).ToArray();
+
+        Assert.Contains(exactSpan.Id, primary);
+        Assert.DoesNotContain(undatedSpan.Id, primary);
+        Assert.Contains(undatedSpan.Id, qualifying);
+    }
+
+    [Fact]
+    public async Task Partially_invalidated_multi_source_event_is_suppressed_without_field_level_provenance()
+    {
+        var now = new DateTimeOffset(2026, 6, 2, 10, 45, 0, TimeSpan.Zero);
+        var graph = CreateGraph(now);
+        var firstSpan = AddSource(graph, 'E', "Synthetic first source contributes to one extracted event.");
+        var secondSpan = AddSource(graph, 'F', "Synthetic second source contributes to the same extracted event.");
+        var brain = new MatterBrainState(graph);
+        var eventTime = new DateTimeOffset(2026, 5, 15, 10, 0, 0, TimeSpan.Zero);
+        var service = new MatterBrainMergeService(new SteppingTimeProvider(now));
+        var initial = new FixedExtractionProvider(new StructuredExtractionOutput(
+            "{\"multiSourceEvent\":true}",
+            new StructuredCandidateBatch([], [], [],
+                [new EventCandidate("event-1", "meeting", "Synthetic multi-source event", eventTime, null,
+                    [], [firstSpan.Id, secondSpan.Id], 0.95m)],
+                [], [], [])), "event-model-v1");
+
+        await service.ExtractAndMergeAsync(brain, [firstSpan.Id, secondSpan.Id], initial);
+        var matterEvent = Assert.Single(graph.Events);
+        using (var before = JsonDocument.Parse(JsonSerializer.Serialize(
+                   MeetingPreparationProjection.Create(new PersistedMatterBrain(graph, new WorkplaceMatter(graph), brain), false))))
+        {
+            Assert.Contains(before.RootElement.GetProperty("chronology").EnumerateArray(),
+                item => item.GetProperty("Id").GetGuid() == matterEvent.Id);
+        }
+
+        var replacement = new FixedExtractionProvider(new StructuredExtractionOutput(
+            "{\"firstSourceReextracted\":true}", new StructuredCandidateBatch([], [], [], [], [], [], [])),
+            "event-model-v2");
+        await service.ExtractAndMergeAsync(brain, [firstSpan.Id], replacement);
+
+        Assert.Contains(brain.ActiveDependencies, dependency =>
+            dependency.CanonicalKind == CanonicalRecordKind.Event &&
+            dependency.CanonicalId == matterEvent.Id &&
+            dependency.SourceSpanId == secondSpan.Id);
+        Assert.DoesNotContain(brain.ActiveDependencies, dependency =>
+            dependency.CanonicalKind == CanonicalRecordKind.Event &&
+            dependency.CanonicalId == matterEvent.Id &&
+            dependency.SourceSpanId == firstSpan.Id);
+
+        using var after = JsonDocument.Parse(JsonSerializer.Serialize(
+            MeetingPreparationProjection.Create(new PersistedMatterBrain(graph, new WorkplaceMatter(graph), brain), false)));
+        Assert.DoesNotContain(after.RootElement.GetProperty("chronology").EnumerateArray(),
+            item => item.GetProperty("Id").GetGuid() == matterEvent.Id);
+    }
+
+    [Fact]
+    public void Current_supersedes_assertion_explicitly_suppresses_old_event_without_mutating_event_status()
+    {
+        var now = new DateTimeOffset(2026, 6, 2, 10, 50, 0, TimeSpan.Zero);
+        var graph = CreateGraph(now);
+        var supportSpan = AddSource(graph, 'A', "Synthetic source supports the old event date.");
+        var supersedingSpan = AddSource(graph, 'B', "Synthetic source supersedes the old event account.");
+        var eventTime = new DateTimeOffset(2026, 5, 16, 10, 0, 0, TimeSpan.Zero);
+        var support = AddAssertion(graph, supportSpan, "old event support", now, eventTime, 0.94m);
+        var superseding = AddAssertion(graph, supersedingSpan, "superseding account", now.AddMinutes(1), eventTime.AddDays(1), 0.92m);
+        var matterEvent = graph.AddEvent(Guid.NewGuid(), "meeting", "Synthetic old event",
+            EventStatus.Candidate, VerificationState.NotReviewed, eventTime);
+        graph.AddAssertionEventLink(Guid.NewGuid(), support.Id, matterEvent.Id, AssertionEventRelation.Supports);
+        graph.AddAssertionEventLink(Guid.NewGuid(), superseding.Id, matterEvent.Id, AssertionEventRelation.Supersedes);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(Load(graph), false)));
+
+        Assert.DoesNotContain(json.RootElement.GetProperty("chronology").EnumerateArray(),
+            item => item.GetProperty("Id").GetGuid() == matterEvent.Id);
+        Assert.Contains(json.RootElement.GetProperty("evidencePoints").EnumerateArray(),
+            item => item.GetProperty("Id").GetGuid() == superseding.Id);
+        Assert.Equal(EventStatus.Candidate, matterEvent.Status);
+        Assert.Null(superseding.SupersededByAssertionId);
+    }
+
+    [Fact]
     public void Unresolved_dispute_preserves_assertion_time_integrity_confidence_and_review_state()
     {
         var now = new DateTimeOffset(2026, 6, 2, 11, 0, 0, TimeSpan.Zero);
@@ -159,4 +256,27 @@ public sealed class MeetingPreparationFinalReviewRegressionTests
         EvidenceOriginClass.OriginalContemporaneousRecord, AssertionClass.AttributedAssertion,
         DisputeState.Unverified, IntegrityState.OriginalHashVerified, VerificationState.NotReviewed,
         span.Id, eventTime, confidence);
+
+    private sealed class FixedExtractionProvider(StructuredExtractionOutput output, string model)
+        : IStructuredExtractionProvider
+    {
+        public StructuredExtractionProviderDescriptor Descriptor { get; } =
+            new("synthetic-provider", model, "1", "1", "1");
+
+        public Task<StructuredExtractionOutput> ExtractAsync(
+            StructuredExtractionInput input,
+            CancellationToken cancellationToken = default) => Task.FromResult(output);
+    }
+
+    private sealed class SteppingTimeProvider(DateTimeOffset initial) : TimeProvider
+    {
+        private DateTimeOffset _current = initial;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var value = _current;
+            _current = _current.AddSeconds(1);
+            return value;
+        }
+    }
 }
