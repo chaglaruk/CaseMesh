@@ -88,7 +88,10 @@ public static class FactualGapAnalyzer
         var completedProposals = brain.EntityResolutionActions.Where(item =>
                 item.Kind is EntityResolutionActionKind.Accepted or EntityResolutionActionKind.Rejected or EntityResolutionActionKind.Reversed)
             .Select(item => item.ProposalId).ToHashSet();
-        var runsById = brain.Runs.ToDictionary(item => item.Id);
+        var orderedRuns = brain.Runs.OrderBy(item => item.GeneratedAt).ThenBy(item => item.Id).ToArray();
+        var runsById = orderedRuns.ToDictionary(item => item.Id);
+        var runOrderById = orderedRuns.Select((run, index) => (run.Id, index))
+            .ToDictionary(item => item.Id, item => item.index);
         var entityMatchCandidates = brain.Candidates
             .Where(item => item.Kind == ExtractionCandidateKind.EntityMatch &&
                            item.Disposition == CandidateDisposition.Validated)
@@ -102,9 +105,9 @@ public static class FactualGapAnalyzer
                 !runsById.TryGetValue(candidate.RunId, out var candidateRun)) return true;
 
             var candidateSources = candidate.SourceSpanIds.ToHashSet();
-            return !brain.Runs.Any(run =>
-                run.Id != candidateRun.Id &&
-                run.GeneratedAt > candidateRun.GeneratedAt &&
+            var candidateRunOrder = runOrderById[candidateRun.Id];
+            return !orderedRuns.Any(run =>
+                runOrderById[run.Id] > candidateRunOrder &&
                 run.SourceSpanIds.Any(candidateSources.Contains));
         }
 
