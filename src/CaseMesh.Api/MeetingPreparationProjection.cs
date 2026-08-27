@@ -28,6 +28,38 @@ internal static class MeetingPreparationProjection
             .ToHashSet();
         bool IsCurrentCanonical(CanonicalRecordKind kind, Guid id) =>
             !extractedCanonicalRecords.Contains((kind, id)) || activeCanonicalRecords.Contains((kind, id));
+        bool HasCompleteCurrentEventProvenance(Guid eventId)
+        {
+            var eventDependencies = loaded.Brain.Dependencies
+                .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Event &&
+                                     dependency.CanonicalId == eventId)
+                .ToArray();
+            if (eventDependencies.Length == 0) return true;
+
+            var activeEventDependencies = activeDependencies
+                .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Event &&
+                                     dependency.CanonicalId == eventId)
+                .ToArray();
+            return eventDependencies
+                .GroupBy(dependency => dependency.CandidateId)
+                .Any(group =>
+                {
+                    if (!candidatesById.TryGetValue(group.Key, out var candidate) ||
+                        candidate.Kind != ExtractionCandidateKind.Event ||
+                        candidate.Disposition != CandidateDisposition.Validated)
+                    {
+                        return false;
+                    }
+
+                    var candidateSources = candidate.SourceSpanIds.Distinct().ToArray();
+                    if (candidateSources.Length == 0) return false;
+                    var activeSources = activeEventDependencies
+                        .Where(dependency => dependency.CandidateId == group.Key)
+                        .Select(dependency => dependency.SourceSpanId)
+                        .ToHashSet();
+                    return candidateSources.All(activeSources.Contains);
+                });
+        }
 
         var correctedAssertionIds = loaded.Evidence.AuditEvents
             .Where(item => item.Kind == AuditEventKind.AssertionCorrected && item.ReplacementEntityId.HasValue)
@@ -60,6 +92,10 @@ internal static class MeetingPreparationProjection
             .ThenBy(item => item.Id)
             .ToArray();
         var currentAssertionIds = currentAssertions.Select(item => item.Id).ToHashSet();
+        bool HasCurrentSupersedingEvidence(Guid eventId) => loaded.Evidence.AssertionEventLinks.Any(link =>
+            link.EventId == eventId &&
+            link.Relation == AssertionEventRelation.Supersedes &&
+            currentAssertionIds.Contains(link.AssertionId));
 
         Guid[] CurrentLinkedSources(MatterEvent matterEvent, params AssertionEventRelation[] relations)
         {
@@ -72,9 +108,26 @@ internal static class MeetingPreparationProjection
                     (link, assertion) => new { link, assertion })
                 .Where(item => item.link.Relation != AssertionEventRelation.Supports ||
                                !matterEvent.StartTime.HasValue ||
-                               !item.assertion.EventTime.HasValue ||
-                               item.assertion.EventTime == matterEvent.StartTime)
+                               (item.assertion.EventTime.HasValue &&
+                                item.assertion.EventTime == matterEvent.StartTime))
                 .Select(item => item.assertion.SourceSpanId!.Value)
+                .Where(sourceSpansById.ContainsKey)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+        }
+
+        Guid[] UndatedSupportingSources(MatterEvent matterEvent)
+        {
+            if (!matterEvent.StartTime.HasValue) return [];
+            return loaded.Evidence.AssertionEventLinks
+                .Where(link => link.EventId == matterEvent.Id &&
+                               link.Relation == AssertionEventRelation.Supports &&
+                               currentAssertionIds.Contains(link.AssertionId))
+                .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
+                    (_, assertion) => assertion)
+                .Where(assertion => !assertion.EventTime.HasValue)
+                .Select(assertion => assertion.SourceSpanId!.Value)
                 .Where(sourceSpansById.ContainsKey)
                 .Distinct()
                 .OrderBy(id => id)
@@ -118,8 +171,8 @@ internal static class MeetingPreparationProjection
             var supporting = linked
                 .Where(item => item.Relation == AssertionEventRelation.Supports &&
                                (!matterEvent.StartTime.HasValue ||
-                                !item.Assertion!.EventTime.HasValue ||
-                                item.Assertion.EventTime == matterEvent.StartTime))
+                                (item.Assertion!.EventTime.HasValue &&
+                                 item.Assertion.EventTime == matterEvent.StartTime)))
                 .Select(item => item.Assertion!.SourceSpanId!.Value)
                 .Concat(directEventSources)
                 .Where(sourceSpansById.ContainsKey)
@@ -127,7 +180,10 @@ internal static class MeetingPreparationProjection
                 .OrderBy(id => id)
                 .ToArray();
             var qualifying = linked
-                .Where(item => item.Relation is AssertionEventRelation.Qualifies or AssertionEventRelation.Contextualizes)
+                .Where(item => item.Relation is AssertionEventRelation.Qualifies or AssertionEventRelation.Contextualizes ||
+                               (item.Relation == AssertionEventRelation.Supports &&
+                                matterEvent.StartTime.HasValue &&
+                                !item.Assertion!.EventTime.HasValue))
                 .Select(item => item.Assertion!.SourceSpanId!.Value)
                 .Distinct()
                 .OrderBy(id => id)
@@ -170,12 +226,18 @@ internal static class MeetingPreparationProjection
             .Where(item => item.Status is not (EventStatus.Superseded or EventStatus.Rejected) &&
                            !correctedEventIds.Contains(item.Id) &&
                            IsCurrentCanonical(CanonicalRecordKind.Event, item.Id) &&
+                           HasCompleteCurrentEventProvenance(item.Id) &&
+                           !HasCurrentSupersedingEvidence(item.Id) &&
                            !HasCurrentCorrectionDateConflict(item))
             .Select(item =>
             {
                 var supportingAssertionSourceIds = CurrentLinkedSources(item, AssertionEventRelation.Supports);
                 var qualifyingSourceSpanIds = CurrentLinkedSources(item,
-                    AssertionEventRelation.Qualifies, AssertionEventRelation.Contextualizes);
+                        AssertionEventRelation.Qualifies, AssertionEventRelation.Contextualizes)
+                    .Concat(UndatedSupportingSources(item))
+                    .Distinct()
+                    .OrderBy(id => id)
+                    .ToArray();
                 var contradictingSourceSpanIds = CurrentLinkedSources(item, AssertionEventRelation.Contradicts)
                     .Concat(MismatchedSupportingSources(item))
                     .Distinct()
@@ -203,7 +265,7 @@ internal static class MeetingPreparationProjection
                     sourceSpanIds,
                     qualifyingSourceSpanIds,
                     contradictingSourceSpanIds,
-                    provenanceNotice = "Primary chronology citations are direct event extraction or supporting statements whose alleged event time does not conflict with the displayed event date; qualifying/context and contradicting or date-mismatched evidence are labelled separately."
+                    provenanceNotice = "Primary chronology citations are complete direct event extraction or supporting statements with explicit alleged time agreeing with a displayed event date; undated supporting statements are contextual, and qualifying/context plus contradicting or date-mismatched evidence are labelled separately."
                 };
             })
             .Where(item => item.sourceSpanIds.Length > 0)
