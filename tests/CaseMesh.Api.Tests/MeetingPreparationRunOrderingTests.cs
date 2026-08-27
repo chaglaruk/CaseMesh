@@ -9,7 +9,7 @@ namespace CaseMesh.Api.Tests;
 public sealed class MeetingPreparationRunOrderingTests
 {
     [Fact]
-    public async Task Reextraction_remains_strictly_ordered_when_clock_returns_the_same_instant()
+    public async Task Fixed_clock_keeps_truthful_run_time_and_allows_immediate_entity_decision()
     {
         var now = new DateTimeOffset(2026, 5, 4, 9, 0, 0, TimeSpan.Zero);
         var graph = new MatterEvidenceGraph(new Matter(Guid.NewGuid(), new TenantId(Guid.NewGuid()),
@@ -38,14 +38,18 @@ public sealed class MeetingPreparationRunOrderingTests
             "fixed-clock-model-v2");
 
         var first = await service.ExtractAndMergeAsync(brain, [span.Id], initial);
-        Assert.Contains(FactualGapAnalyzer.Analyze(graph, workplace, brain), item => item.Code == "entity-ambiguity");
+        var proposal = Assert.Single(brain.EntityResolutionActions,
+            item => item.Kind == EntityResolutionActionKind.Proposed);
+        Assert.Equal(now, first.Run.GeneratedAt);
+        Assert.Equal(now, proposal.OccurredAt);
+
+        var accepted = brain.AcceptEntityMerge(Guid.NewGuid(), proposal.Id, "synthetic-reviewer", now);
+        Assert.Equal(now, accepted.OccurredAt);
+        Assert.DoesNotContain(FactualGapAnalyzer.Analyze(graph, workplace, brain), item => item.Code == "entity-ambiguity");
 
         var second = await service.ExtractAndMergeAsync(brain, [span.Id], replacement);
-
-        Assert.True(second.Run.GeneratedAt > first.Run.GeneratedAt);
-        Assert.Equal(first.Run.GeneratedAt.AddMilliseconds(1), second.Run.GeneratedAt);
-        Assert.DoesNotContain(FactualGapAnalyzer.Analyze(graph, workplace, brain),
-            item => item.Code == "entity-ambiguity");
+        Assert.Equal(now, second.Run.GeneratedAt);
+        Assert.All(brain.Runs, run => Assert.Equal(now, run.GeneratedAt));
     }
 
     private sealed class FixedExtractionProvider(StructuredExtractionOutput output, string model)
