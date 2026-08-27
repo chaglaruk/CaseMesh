@@ -54,6 +54,10 @@ public sealed class MeetingPreparationCorrectionHistoryTests
         Assert.Equal("synthetic-reviewer", history.GetProperty("Actor").GetString());
         Assert.Equal("12", history.GetProperty("Original").GetProperty("Value").GetString());
         Assert.Equal("10", history.GetProperty("Replacement").GetProperty("Value").GetString());
+        Assert.Equal("OriginalContemporaneousRecord", history.GetProperty("Original").GetProperty("Origin").GetString());
+        Assert.Equal("AttributedAssertion", history.GetProperty("Original").GetProperty("AssertionClass").GetString());
+        Assert.Equal("RetrospectiveNote", history.GetProperty("Replacement").GetProperty("Origin").GetString());
+        Assert.Equal("AttributedAssertion", history.GetProperty("Replacement").GetProperty("AssertionClass").GetString());
         Assert.Contains(source.Id, history.GetProperty("HistoricalSourceSpanIds").EnumerateArray()
             .Select(item => item.GetGuid()));
         Assert.Contains("original attributed statement", history.GetProperty("Notice").GetString(),
@@ -61,6 +65,34 @@ public sealed class MeetingPreparationCorrectionHistoryTests
         Assert.Contains(json.RootElement.GetProperty("questionsToClarify").EnumerateArray(), item =>
             item.GetProperty("Code").GetString() == "corrected-history-review" &&
             item.GetProperty("route").GetString() == "prepare");
+    }
+
+    [Fact]
+    public void Corrected_ai_inference_remains_labelled_as_historical_ai_and_never_gains_documentary_provenance()
+    {
+        var now = new DateTimeOffset(2026, 3, 12, 10, 0, 0, TimeSpan.Zero);
+        var graph = CreateGraph(now);
+        var original = graph.AddAssertion(
+            Guid.NewGuid(), "synthetic-model", "suggested-framing", "Synthetic inference", "synthetic-model", now,
+            EvidenceOriginClass.AiGeneratedInference, AssertionClass.AiInference,
+            DisputeState.Unverified, IntegrityState.DerivedCopy, VerificationState.NotReviewed,
+            sourceSpanId: null, eventTime: null, extractionConfidence: null, createdByModel: "synthetic-model/1");
+        var loaded = Load(graph);
+
+        loaded.Brain.CorrectAssertion(original.Id, Guid.NewGuid(), "Human correction", null,
+            Guid.NewGuid(), "synthetic-reviewer", now.AddMinutes(1));
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(MeetingPreparationProjection.Create(loaded, false)));
+        var history = Assert.Single(json.RootElement.GetProperty("correctionHistory").EnumerateArray());
+        var originalSnapshot = history.GetProperty("Original");
+        var replacementSnapshot = history.GetProperty("Replacement");
+
+        Assert.Equal("AiGeneratedInference", originalSnapshot.GetProperty("Origin").GetString());
+        Assert.Equal("AiInference", originalSnapshot.GetProperty("AssertionClass").GetString());
+        Assert.Equal("RetrospectiveNote", replacementSnapshot.GetProperty("Origin").GetString());
+        Assert.Equal("AttributedAssertion", replacementSnapshot.GetProperty("AssertionClass").GetString());
+        Assert.Empty(history.GetProperty("HistoricalSourceSpanIds").EnumerateArray());
+        Assert.Contains("AI inference", history.GetProperty("Notice").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
