@@ -112,10 +112,10 @@ public sealed class MeetingPreparationPostFinalReviewRegressionTests
         var now = new DateTimeOffset(2026, 6, 4, 11, 0, 0, TimeSpan.Zero);
         var graph = CreateGraph(now);
         var assertionSpans = Enumerable.Range(0, 13)
-            .Select(index => AddSource(graph, (char)('A' + index), $"Synthetic assertion source {index + 1}."))
+            .Select(index => AddSource(graph, (char)('A' + (index % 6)), $"Synthetic assertion source {index + 1}."))
             .ToArray();
-        var eventSpan = AddSource(graph, 'N', "Synthetic old event source.");
-        var linkSpan = AddSource(graph, 'O', "Synthetic superseding relationship source.");
+        var eventSpan = AddSource(graph, 'E', "Synthetic old event source.");
+        var linkSpan = AddSource(graph, 'F', "Synthetic superseding relationship source.");
         var state = new MatterBrainState(graph);
         var service = new MatterBrainMergeService(new SteppingTimeProvider(now));
         var assertionCandidates = assertionSpans
