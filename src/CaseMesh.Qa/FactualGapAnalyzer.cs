@@ -21,83 +21,31 @@ public static class FactualGapAnalyzer
         var gaps = new List<FactualGap>();
         var assertions = evidence.Assertions.ToDictionary(item => item.Id);
         var events = evidence.Events.ToDictionary(item => item.Id);
-        var candidatesById = brain.Candidates.ToDictionary(item => item.Id);
-        var activeDependencies = brain.ActiveDependencies.ToArray();
-        var extractedCanonicalRecords = brain.Dependencies
-            .Select(item => (item.CanonicalKind, item.CanonicalId))
-            .ToHashSet();
-        var activeCanonicalRecords = activeDependencies
-            .Select(item => (item.CanonicalKind, item.CanonicalId))
-            .ToHashSet();
-        bool IsCurrentCanonical(CanonicalRecordKind kind, Guid id) =>
-            !extractedCanonicalRecords.Contains((kind, id)) || activeCanonicalRecords.Contains((kind, id));
-        bool HasCompleteCurrentCandidateProvenance(
-            CanonicalRecordKind canonicalKind,
-            Guid canonicalId,
-            ExtractionCandidateKind candidateKind)
-        {
-            var dependencies = brain.Dependencies
-                .Where(dependency => dependency.CanonicalKind == canonicalKind &&
-                                     dependency.CanonicalId == canonicalId)
-                .ToArray();
-            if (dependencies.Length == 0) return true;
-
-            return dependencies
-                .GroupBy(dependency => dependency.CandidateId)
-                .Any(group =>
-                {
-                    if (!candidatesById.TryGetValue(group.Key, out var candidate) ||
-                        candidate.Kind != candidateKind ||
-                        candidate.Disposition != CandidateDisposition.Validated)
-                    {
-                        return false;
-                    }
-
-                    var candidateSources = candidate.SourceSpanIds.Distinct().ToArray();
-                    if (candidateSources.Length == 0) return false;
-                    var activeSources = activeDependencies
-                        .Where(dependency => dependency.CanonicalKind == canonicalKind &&
-                                             dependency.CanonicalId == canonicalId &&
-                                             dependency.CandidateId == candidate.Id)
-                        .Select(dependency => dependency.SourceSpanId)
-                        .ToHashSet();
-                    return candidateSources.All(activeSources.Contains);
-                });
-        }
-        bool IsCurrentAssertionEventLink(Guid id) =>
-            IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, id) &&
-            HasCompleteCurrentCandidateProvenance(
-                CanonicalRecordKind.AssertionEventLink,
-                id,
-                ExtractionCandidateKind.AssertionEventLink);
-        bool IsCurrentEvent(MatterEvent matterEvent) =>
-            matterEvent.Status is not (EventStatus.Superseded or EventStatus.Rejected) &&
-            IsCurrentCanonical(CanonicalRecordKind.Event, matterEvent.Id) &&
-            HasCompleteCurrentCandidateProvenance(
-                CanonicalRecordKind.Event,
-                matterEvent.Id,
-                ExtractionCandidateKind.Event);
+        var policy = new CanonicalEvidencePolicy(brain);
 
         foreach (var contradiction in evidence.Contradictions
                      .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved &&
-                                    IsCurrentCanonical(CanonicalRecordKind.Contradiction, item.Id) &&
-                                    IsCurrentCanonical(CanonicalRecordKind.Assertion, item.AssertionAId) &&
-                                    IsCurrentCanonical(CanonicalRecordKind.Assertion, item.AssertionBId))
+                                    policy.IsCurrentContradiction(item) &&
+                                    assertions.TryGetValue(item.AssertionAId, out var first) &&
+                                    policy.IsCurrentAttributedAssertion(first, requireDocumentarySource: false) &&
+                                    assertions.TryGetValue(item.AssertionBId, out var second) &&
+                                    policy.IsCurrentAttributedAssertion(second, requireDocumentarySource: false))
                      .OrderBy(item => item.Id))
         {
+            var origin = policy.GetContradictionDetectionOrigin(contradiction);
+            var summary = origin == ContradictionDetectionOrigin.StructuredExtractionAnalysis
+                ? "AI analysis flagged a possible conflict between current attributed statements; review the underlying evidence before relying on the analysis."
+                : origin == ContradictionDetectionOrigin.DeterministicRule
+                    ? "A deterministic evidence rule detected conflicting current attributed statements; further source evidence may clarify the record."
+                    : "Conflicting attributed statements remain unresolved; further source evidence may clarify the record.";
             gaps.Add(new FactualGap("unresolved-contradiction",
-                "Conflicting attributed statements remain unresolved; further source evidence may clarify the record.",
+                summary,
                 "disputed", [contradiction.Id, contradiction.AssertionAId, contradiction.AssertionBId],
                 SourceIds(assertions, contradiction.AssertionAId, contradiction.AssertionBId)));
         }
 
         foreach (var assertion in evidence.Assertions.Where(item => item.SourceSpanId is null &&
-                     item.SupersededByAssertionId is null &&
-                     item.DisputeState != DisputeState.Superseded &&
-                     item.VerificationState != VerificationState.Rejected &&
-                     item.OriginClass != EvidenceOriginClass.AiGeneratedInference &&
-                     item.AssertionClass != AssertionClass.AiInference &&
-                     IsCurrentCanonical(CanonicalRecordKind.Assertion, item.Id)).OrderBy(item => item.Id))
+                     policy.IsCurrentAttributedAssertion(item, requireDocumentarySource: false)).OrderBy(item => item.Id))
         {
             gaps.Add(new FactualGap("assertion-without-documentary-source",
                 "An attributed statement has no linked documentary source and requires supporting evidence or review.",
@@ -124,22 +72,23 @@ public static class FactualGapAnalyzer
                 "timeline", [audit.EntityId, audit.ReplacementEntityId!.Value, audit.Id], []));
 
         var linksByEvent = evidence.AssertionEventLinks
-            .Where(item => IsCurrentAssertionEventLink(item.Id) &&
+            .Where(item => item.Relation == AssertionEventRelation.Supports &&
+                           policy.IsCurrentAssertionEventLink(item.Id) &&
                            events.TryGetValue(item.EventId, out var matterEvent) &&
-                           IsCurrentEvent(matterEvent))
+                           policy.IsCurrentEvent(matterEvent))
             .GroupBy(item => item.EventId);
         foreach (var links in linksByEvent)
         {
-            var linked = links.Select(item => assertions[item.AssertionId])
-                .Where(item => item.EventTime.HasValue &&
-                               item.SupersededByAssertionId is null &&
-                               item.DisputeState != DisputeState.Superseded &&
-                               item.VerificationState != VerificationState.Rejected &&
-                               IsCurrentCanonical(CanonicalRecordKind.Assertion, item.Id))
+            var linked = links
+                .Select(item => assertions.TryGetValue(item.AssertionId, out var assertion) ? assertion : null)
+                .Where(item => item is not null &&
+                               item.EventTime.HasValue &&
+                               policy.IsCurrentAttributedAssertion(item, requireDocumentarySource: false))
+                .Select(item => item!)
                 .ToArray();
             if (linked.Select(item => item.EventTime).Distinct().Skip(1).Any())
                 gaps.Add(new FactualGap("chronology-date-conflict",
-                    "Linked attributed statements contain different dates for the same chronology item.",
+                    "Current supporting attributed statements contain different alleged dates for the same chronology item.",
                     "timeline", [links.Key, .. linked.Select(item => item.Id)],
                     linked.Where(item => item.SourceSpanId.HasValue).Select(item => item.SourceSpanId!.Value).Distinct().ToArray()));
         }
