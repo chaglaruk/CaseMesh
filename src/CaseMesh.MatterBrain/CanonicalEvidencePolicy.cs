@@ -39,6 +39,44 @@ public sealed class CanonicalEvidencePolicy
         _activeCanonicalRecords.Contains((kind, id));
 
     public bool HasCompleteValidatedCandidateProvenance(
+        ExtractionCandidateRecord candidate,
+        CanonicalRecordKind canonicalKind,
+        Guid canonicalId)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        if (candidate.Disposition != CandidateDisposition.Validated ||
+            candidate.CanonicalKind != canonicalKind ||
+            candidate.CanonicalId != canonicalId)
+        {
+            return false;
+        }
+
+        var candidateSources = candidate.SourceSpanIds.Distinct().ToArray();
+        if (candidateSources.Length == 0)
+        {
+            return false;
+        }
+
+        var exactDependencies = _state.Dependencies
+            .Where(dependency => dependency.CanonicalKind == canonicalKind &&
+                                 dependency.CanonicalId == canonicalId &&
+                                 dependency.CandidateId == candidate.Id)
+            .ToArray();
+        if (exactDependencies.Length == 0)
+        {
+            return false;
+        }
+
+        var activeSources = _activeDependencies
+            .Where(dependency => dependency.CanonicalKind == canonicalKind &&
+                                 dependency.CanonicalId == canonicalId &&
+                                 dependency.CandidateId == candidate.Id)
+            .Select(dependency => dependency.SourceSpanId)
+            .ToHashSet();
+        return candidateSources.All(activeSources.Contains);
+    }
+
+    public bool HasCompleteValidatedCandidateProvenance(
         CanonicalRecordKind canonicalKind,
         Guid canonicalId,
         ExtractionCandidateKind candidateKind)
@@ -53,30 +91,12 @@ public sealed class CanonicalEvidencePolicy
         }
 
         return dependencies
-            .GroupBy(dependency => dependency.CandidateId)
-            .Any(group =>
-            {
-                if (!_candidatesById.TryGetValue(group.Key, out var candidate) ||
-                    candidate.Kind != candidateKind ||
-                    candidate.Disposition != CandidateDisposition.Validated)
-                {
-                    return false;
-                }
-
-                var candidateSources = candidate.SourceSpanIds.Distinct().ToArray();
-                if (candidateSources.Length == 0)
-                {
-                    return false;
-                }
-
-                var activeSources = _activeDependencies
-                    .Where(dependency => dependency.CanonicalKind == canonicalKind &&
-                                         dependency.CanonicalId == canonicalId &&
-                                         dependency.CandidateId == candidate.Id)
-                    .Select(dependency => dependency.SourceSpanId)
-                    .ToHashSet();
-                return candidateSources.All(activeSources.Contains);
-            });
+            .Select(dependency => dependency.CandidateId)
+            .Distinct()
+            .Where(_candidatesById.ContainsKey)
+            .Select(candidateId => _candidatesById[candidateId])
+            .Where(candidate => candidate.Kind == candidateKind)
+            .Any(candidate => HasCompleteValidatedCandidateProvenance(candidate, canonicalKind, canonicalId));
     }
 
     public bool IsCurrentExtractedRecord(
