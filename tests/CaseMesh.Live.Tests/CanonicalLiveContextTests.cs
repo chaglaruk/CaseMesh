@@ -103,13 +103,6 @@ public sealed class CanonicalLiveContextTests
             Guid.Parse("90000000-0000-0000-0000-000000000001"),
             [
                 new LiveConversationItem(
-                    Guid.Parse("91000000-0000-0000-0000-000000000003"),
-                    LiveConversationOrigin.AiSuggested,
-                    "  Ask which record supports that date.  ",
-                    start.AddSeconds(4),
-                    start.AddSeconds(5),
-                    [fixture.CurrentSourceSpanId]),
-                new LiveConversationItem(
                     Guid.Parse("91000000-0000-0000-0000-000000000001"),
                     LiveConversationOrigin.HrSaid,
                     "The meeting was on Monday.",
@@ -122,13 +115,20 @@ public sealed class CanonicalLiveContextTests
                     "I need to check the email.",
                     start.AddSeconds(2),
                     start.AddSeconds(3),
+                    [fixture.CurrentSourceSpanId]),
+                new LiveConversationItem(
+                    Guid.Parse("91000000-0000-0000-0000-000000000003"),
+                    LiveConversationOrigin.AiSuggested,
+                    "  Ask which record supports that date.  ",
+                    start.AddSeconds(4),
+                    start.AddSeconds(5),
                     [fixture.CurrentSourceSpanId])
             ]);
 
         Assert.Equal(
             [LiveConversationOrigin.HrSaid, LiveConversationOrigin.UserActuallySaid, LiveConversationOrigin.AiSuggested],
             review.Items.Select(item => item.Origin));
-        Assert.Equal("Ask which record supports that date.", review.Items[2].Text);
+        Assert.Equal("  Ask which record supports that date.  ", review.Items[2].Text);
         Assert.Equal(fixture.CurrentSourceSpanId, Assert.Single(review.Items[2].ContextCitationSourceSpanIds));
     }
 
