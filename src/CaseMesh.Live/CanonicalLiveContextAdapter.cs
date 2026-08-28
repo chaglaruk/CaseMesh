@@ -127,6 +127,9 @@ public sealed class CanonicalLiveContextAdapter
             assertion.VerificationState,
             isCurrent ? LiveEvidenceRecordStatus.Current : LiveEvidenceRecordStatus.Historical,
             isCurrent ? null : HistoricalReason(assertion, policy),
+            isCurrent
+                ? "Current attributed documentary evidence; not automatically an established fact."
+                : "Historical documentary evidence retained for correction/audit context; not current and not automatically an established fact.",
             new LiveSourceCitation(
                 sourceSpan.Id,
                 sourceSpan.DocumentVersion.DocumentId,

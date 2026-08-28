@@ -47,6 +47,7 @@ public sealed record CanonicalLiveEvidenceItem(
     VerificationState VerificationState,
     LiveEvidenceRecordStatus RecordStatus,
     string? HistoricalReason,
+    string EvidenceNotice,
     LiveSourceCitation Citation);
 
 public sealed record CanonicalLiveUnsupportedStatement(
