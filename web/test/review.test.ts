@@ -32,7 +32,23 @@ describe("uploaded transcript Review parser", () => {
     expect(reviewOriginLabel(items[1].origin)).toBe("AI suggested");
   });
 
-  it("rejects invalid origin, time order, duplicate citations, and oversized text", () => {
+  it("accepts canonical deterministic .NET Guid identifiers without RFC version or variant bits", () => {
+    const sourceSpanId = "20000000-0000-0000-0000-000000000001";
+    const itemId = "10000000-0000-0000-0000-000000000001";
+    const items = parseReviewTranscriptJson(JSON.stringify([{
+      id: itemId,
+      origin: "HR_SAID",
+      text: "Synthetic canonical Guid statement.",
+      startedAt: "2026-08-28T09:00:00Z",
+      endedAt: "2026-08-28T09:00:01Z",
+      contextCitationSourceSpanIds: [sourceSpanId],
+    }]));
+
+    expect(items[0].id).toBe(itemId);
+    expect(items[0].contextCitationSourceSpanIds).toEqual([sourceSpanId]);
+  });
+
+  it("rejects invalid origin, time order, duplicate citations, malformed Guid, and oversized text", () => {
     expect(() => parseReviewTranscriptJson(JSON.stringify([{
       origin: "UNKNOWN",
       text: "Statement",
@@ -55,6 +71,14 @@ describe("uploaded transcript Review parser", () => {
       endedAt: "2026-08-28T09:00:01Z",
       contextCitationSourceSpanIds: [citation, citation],
     }]), () => ids[0])).toThrow(/distinct/);
+
+    expect(() => parseReviewTranscriptJson(JSON.stringify([{
+      origin: "HR_SAID",
+      text: "Statement",
+      startedAt: "2026-08-28T09:00:00Z",
+      endedAt: "2026-08-28T09:00:01Z",
+      contextCitationSourceSpanIds: ["not-a-guid"],
+    }]), () => ids[0])).toThrow(/Guid/);
 
     expect(() => parseReviewTranscriptJson(JSON.stringify([{
       origin: "HR_SAID",
