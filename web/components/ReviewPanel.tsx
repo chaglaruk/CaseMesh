@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { request } from "../lib/api";
 import { parseReviewTranscriptJson, reviewOriginLabel } from "../lib/review";
@@ -76,6 +76,7 @@ export default function ReviewPanel() {
   const search = useSearchParams();
   const tenant = search.get("workspace") ?? "";
   const base = useMemo(() => `/workspaces/${tenant}/matters/${params.matterId}/review`, [tenant, params.matterId]);
+  const scopeRef = useRef(base);
   const [sessions, setSessions] = useState<ReviewSummary[]>([]);
   const [active, setActive] = useState<ReviewView>();
   const [draft, setDraft] = useState(sampleTranscript);
@@ -83,59 +84,85 @@ export default function ReviewPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  async function refreshSessions() {
+  async function refreshSessions(requestBase = base, signal?: AbortSignal) {
     if (!tenant) return;
-    setSessions(await request<ReviewSummary[]>(`${base}/sessions`));
+    const loaded = await request<ReviewSummary[]>(`${requestBase}/sessions`, { signal });
+    if (scopeRef.current === requestBase) setSessions(loaded);
   }
 
   useEffect(() => {
-    void refreshSessions().catch(error => setError((error as Error).message));
-  }, [base]);
+    scopeRef.current = base;
+    setSessions([]);
+    setActive(undefined);
+    setSource(undefined);
+    setDraft(sampleTranscript);
+    setBusy(false);
+    setError("");
+    if (!tenant) return;
+
+    const controller = new AbortController();
+    void refreshSessions(base, controller.signal).catch(error => {
+      if (!controller.signal.aborted && scopeRef.current === base) {
+        setError((error as Error).message);
+      }
+    });
+    return () => controller.abort();
+  }, [base, tenant]);
 
   async function createReview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const requestBase = base;
     setBusy(true);
     try {
       const items = parseReviewTranscriptJson(draft);
-      const created = await request<ReviewView>(`${base}/sessions`, {
+      const created = await request<ReviewView>(`${requestBase}/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items }),
       });
+      if (scopeRef.current !== requestBase) return;
       setActive(created);
       setSource(undefined);
-      await refreshSessions();
-      setError("");
+      await refreshSessions(requestBase);
+      if (scopeRef.current === requestBase) setError("");
     } catch (error) {
-      setError((error as Error).message);
+      if (scopeRef.current === requestBase) setError((error as Error).message);
     } finally {
-      setBusy(false);
+      if (scopeRef.current === requestBase) setBusy(false);
     }
   }
 
   async function openReview(meetingId: string) {
+    const requestBase = base;
     setBusy(true);
     try {
-      setActive(await request<ReviewView>(`${base}/sessions/${meetingId}`));
+      const opened = await request<ReviewView>(`${requestBase}/sessions/${meetingId}`);
+      if (scopeRef.current !== requestBase) return;
+      setActive(opened);
       setSource(undefined);
       setError("");
     } catch (error) {
-      setError((error as Error).message);
+      if (scopeRef.current === requestBase) setError((error as Error).message);
     } finally {
-      setBusy(false);
+      if (scopeRef.current === requestBase) setBusy(false);
     }
   }
 
   async function inspectSource(sourceSpanId: string) {
+    const requestBase = base;
     setBusy(true);
     try {
-      setSource(await request<SourceDetail>(`${base}/sources/${sourceSpanId}`));
+      const detail = await request<SourceDetail>(`${requestBase}/sources/${sourceSpanId}`);
+      if (scopeRef.current !== requestBase) return;
+      setSource(detail);
       setError("");
     } catch (error) {
-      setSource(undefined);
-      setError((error as Error).message);
+      if (scopeRef.current === requestBase) {
+        setSource(undefined);
+        setError((error as Error).message);
+      }
     } finally {
-      setBusy(false);
+      if (scopeRef.current === requestBase) setBusy(false);
     }
   }
 
