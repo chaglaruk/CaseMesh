@@ -304,9 +304,9 @@ internal static class MeetingPreparationProjection
             .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved &&
                            policy.IsCurrentContradiction(item) &&
                            assertionsById.TryGetValue(item.AssertionAId, out var first) &&
-                           policy.IsCurrentAttributedAssertion(first, requireDocumentarySource: false) &&
+                           policy.IsCurrentAssertionRecord(first) &&
                            assertionsById.TryGetValue(item.AssertionBId, out var second) &&
-                           policy.IsCurrentAttributedAssertion(second, requireDocumentarySource: false))
+                           policy.IsCurrentAssertionRecord(second))
             .OrderBy(item => item.Id)
             .Select(item =>
             {
