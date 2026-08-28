@@ -23,6 +23,9 @@ public static class MeetingReviewEndpoints
         PostgresMatterBrainStore brains,
         CancellationToken token)
     {
+        ApplyPrivateNoStore(context);
+        if (tenantId == Guid.Empty || matterId == Guid.Empty) return Results.NotFound();
+
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
         if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
@@ -52,6 +55,9 @@ public static class MeetingReviewEndpoints
         PostgresMatterBrainStore brains,
         CancellationToken token)
     {
+        ApplyPrivateNoStore(context);
+        if (tenantId == Guid.Empty || matterId == Guid.Empty || sourceSpanId == Guid.Empty) return Results.NotFound();
+
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
         if (!await repository.HasMembershipAsync(user.Id, tenant, token)) return Results.NotFound();
@@ -72,5 +78,12 @@ public static class MeetingReviewEndpoints
         {
             return Results.NotFound();
         }
+    }
+
+    private static void ApplyPrivateNoStore(HttpContext context)
+    {
+        context.Response.Headers["Cache-Control"] = "no-store, private";
+        context.Response.Headers["Pragma"] = "no-cache";
+        context.Response.Headers["Expires"] = "0";
     }
 }
