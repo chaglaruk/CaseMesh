@@ -43,7 +43,7 @@ export function parseReviewTranscriptJson(
     }
     const value = entry as Record<string, unknown>;
     const id = typeof value.id === "string" && value.id.trim() ? value.id.trim() : newId();
-    if (!isUuid(id) || ids.has(id)) throw new Error(`Transcript item ${index + 1} requires a distinct valid UUID.`);
+    if (!isGuid(id) || ids.has(id)) throw new Error(`Transcript item ${index + 1} requires a distinct valid Guid.`);
     ids.add(id);
 
     const origin = parseOrigin(value.origin, index);
@@ -62,11 +62,11 @@ export function parseReviewTranscriptJson(
 
     const citationsRaw = value.contextCitationSourceSpanIds ?? [];
     if (!Array.isArray(citationsRaw) || citationsRaw.length > 16) {
-      throw new Error(`Transcript item ${index + 1} context citations must be an array of at most 16 UUIDs.`);
+      throw new Error(`Transcript item ${index + 1} context citations must be an array of at most 16 Guids.`);
     }
     const citations = citationsRaw.map((citation, citationIndex) => {
-      if (typeof citation !== "string" || !isUuid(citation)) {
-        throw new Error(`Transcript item ${index + 1} context citation ${citationIndex + 1} must be a UUID.`);
+      if (typeof citation !== "string" || !isGuid(citation)) {
+        throw new Error(`Transcript item ${index + 1} context citation ${citationIndex + 1} must be a Guid.`);
       }
       return citation;
     });
@@ -102,6 +102,9 @@ function parseTimestamp(value: unknown, label: string): string {
   return new Date(value).toISOString();
 }
 
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+function isGuid(value: string): boolean {
+  // Match the .NET Guid "D" textual contract used by the API. CaseMesh canonical
+  // deterministic identifiers are valid Guids even when their version/variant bits
+  // do not describe an RFC 4122 randomly generated UUID.
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
