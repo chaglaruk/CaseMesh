@@ -25,11 +25,15 @@ public sealed class CanonicalLiveContextTests
 
         var current = Assert.Single(context.Evidence, item => item.RecordStatus == LiveEvidenceRecordStatus.Current);
         Assert.Equal(fixture.CurrentAssertionId, current.AssertionId);
-        Assert.Equal(fixture.CurrentSourceSpanId, current.Citation.SourceSpanId);
-        Assert.Equal(fixture.DocumentVersionId, current.Citation.DocumentVersionId);
-        Assert.Equal(fixture.OriginalObjectId, current.Citation.OriginalObjectId);
-        Assert.Equal(new string('A', 64), current.Citation.ContentSha256);
+        Assert.Equal(fixture.CurrentSourceSpanId, current.SourceSpanId);
+        Assert.Equal(IntegrityState.OcrUncertain, current.IntegrityState);
+        Assert.Equal(0.73m, current.ExtractionConfidence);
         Assert.Null(current.HistoricalReason);
+
+        var currentSource = Assert.Single(context.SourceSpans, item => item.SourceSpanId == fixture.CurrentSourceSpanId);
+        Assert.Equal(fixture.DocumentVersionId, currentSource.DocumentVersionId);
+        Assert.Equal(fixture.OriginalObjectId, currentSource.OriginalObjectId);
+        Assert.Equal(new string('A', 64), currentSource.ContentSha256);
 
         var historical = Assert.Single(context.Evidence, item => item.RecordStatus == LiveEvidenceRecordStatus.Historical);
         Assert.Equal(fixture.RejectedAssertionId, historical.AssertionId);
@@ -38,7 +42,37 @@ public sealed class CanonicalLiveContextTests
         var ai = Assert.Single(context.AiAnalysis);
         Assert.Equal(fixture.AiAssertionId, ai.AssertionId);
         Assert.Equal("synthetic-test-model", ai.CreatedByModel);
+        Assert.Equal(fixture.AiEventTime, ai.EventTime);
+        Assert.Equal(IntegrityState.DerivedCopy, ai.IntegrityState);
         Assert.DoesNotContain(context.Evidence, item => item.AssertionId == fixture.AiAssertionId);
+    }
+
+    [Fact]
+    public void Adapter_emits_each_exact_source_span_once_even_when_multiple_assertions_reference_it()
+    {
+        var fixture = CreateFixture();
+        fixture.State.Evidence.AddAssertion(
+            Guid.Parse("50000000-0000-0000-0000-000000000004"),
+            "meeting",
+            "location",
+            "Room 4",
+            "Employer",
+            DateTimeOffset.Parse("2026-08-28T08:03:00Z"),
+            EvidenceOriginClass.EmployerAuthoredDocument,
+            AssertionClass.EmployerAssertion,
+            DisputeState.Unverified,
+            IntegrityState.OcrUncertain,
+            VerificationState.NotReviewed,
+            sourceSpanId: fixture.CurrentSourceSpanId,
+            extractionConfidence: 0.61m);
+
+        var context = new CanonicalLiveContextAdapter().Build(fixture.TenantId, fixture.MatterId, fixture.State);
+
+        Assert.Equal(2, context.Evidence.Count(item => item.SourceSpanId == fixture.CurrentSourceSpanId));
+        Assert.Equal(2, context.SourceSpans.Count);
+        Assert.Equal(
+            context.Evidence.Select(item => item.SourceSpanId).Distinct().OrderBy(id => id),
+            context.SourceSpans.Select(item => item.SourceSpanId));
     }
 
     [Fact]
@@ -117,6 +151,101 @@ public sealed class CanonicalLiveContextTests
             [new LiveConversationItem(Guid.NewGuid(), LiveConversationOrigin.AiSuggested, "Suggestion", start, start, [Guid.NewGuid()])]));
     }
 
+    [Fact]
+    public async Task Structured_extraction_contradiction_retains_auditable_model_run_and_input_provenance()
+    {
+        var tenantId = new TenantId(Guid.Parse("12000000-0000-0000-0000-000000000001"));
+        var matterId = Guid.Parse("22000000-0000-0000-0000-000000000001");
+        var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
+        var graph = new MatterEvidenceGraph(new Matter(
+            matterId,
+            tenantId,
+            "workplace-dispute",
+            "Synthetic contradiction Matter",
+            "open",
+            now,
+            now));
+        var version = graph.RegisterDocumentVersion(
+            Guid.Parse("32000000-0000-0000-0000-000000000101"),
+            Guid.Parse("33000000-0000-0000-0000-000000000101"),
+            new string('B', 64),
+            Guid.Parse("34000000-0000-0000-0000-000000000101"));
+        var sourceA = Guid.Parse("42000000-0000-0000-0000-000000000101");
+        var sourceB = Guid.Parse("42000000-0000-0000-0000-000000000102");
+        graph.AddSourceSpan(sourceA, version, "Employer says the request was approved.", "synthetic-parser/1", pageNumber: 1);
+        graph.AddSourceSpan(sourceB, version, "Employer says the request was not approved.", "synthetic-parser/1", pageNumber: 2);
+
+        var output = new StructuredExtractionOutput(
+            "{\"result\":\"synthetic-conflict\"}",
+            new StructuredCandidateBatch(
+                [],
+                [],
+                [
+                    new AssertionCandidate(
+                        "assertion-a",
+                        "request",
+                        "approval",
+                        "approved",
+                        "Employer",
+                        now,
+                        null,
+                        sourceA,
+                        EvidenceOriginClass.EmployerAuthoredDocument,
+                        AssertionClass.EmployerAssertion,
+                        IntegrityState.OriginalHashVerified,
+                        [sourceA],
+                        0.93m),
+                    new AssertionCandidate(
+                        "assertion-b",
+                        "request",
+                        "approval",
+                        "not-approved",
+                        "Employer",
+                        now.AddMinutes(1),
+                        null,
+                        sourceB,
+                        EvidenceOriginClass.EmployerAuthoredDocument,
+                        AssertionClass.EmployerAssertion,
+                        IntegrityState.OcrUncertain,
+                        [sourceB],
+                        0.81m)
+                ],
+                [],
+                [],
+                [],
+                [
+                    new ContradictionCandidate(
+                        "contradiction-a-b",
+                        "assertion-a",
+                        "assertion-b",
+                        ContradictionType.DirectConflict,
+                        "synthetic-model-detector",
+                        [sourceA, sourceB],
+                        0.88m)
+                ]));
+        var provider = new StaticStructuredProvider(output);
+        var state = new MatterBrainState(graph);
+
+        await new MatterBrainMergeService(new FixedTimeProvider(now.AddMinutes(5)))
+            .ExtractAndMergeAsync(state, [sourceA, sourceB], provider);
+
+        var context = new CanonicalLiveContextAdapter().Build(tenantId, matterId, state);
+        var contradiction = Assert.Single(context.UnresolvedContradictions);
+        Assert.Equal(ContradictionDetectionOrigin.StructuredExtractionAnalysis.ToString(), contradiction.DetectionOrigin);
+        var provenance = Assert.Single(contradiction.AnalysisProvenance);
+        Assert.Equal([sourceA, sourceB], provenance.SourceSpanIds);
+        Assert.Equal(0.88m, provenance.ExtractionConfidence);
+        Assert.Equal(provider.Descriptor.Provider, provenance.Provider);
+        Assert.Equal(provider.Descriptor.Model, provenance.Model);
+        Assert.Equal(provider.Descriptor.ExtractionVersion, provenance.ExtractionVersion);
+        Assert.Equal(provider.Descriptor.PromptVersion, provenance.PromptVersion);
+        Assert.Equal(provider.Descriptor.SchemaVersion, provenance.SchemaVersion);
+        Assert.Equal(now.AddMinutes(5), provenance.GeneratedAt);
+        Assert.Equal(64, provenance.RawResultDigest.Length);
+        Assert.Equal(64, provenance.CandidatePayloadDigest.Length);
+        Assert.All(provenance.SourceSpanIds, id => Assert.Contains(context.SourceSpans, span => span.SourceSpanId == id));
+    }
+
     private static Fixture CreateFixture()
     {
         var tenantId = new TenantId(Guid.Parse("10000000-0000-0000-0000-000000000001"));
@@ -149,9 +278,10 @@ public sealed class CanonicalLiveContextTests
             EvidenceOriginClass.EmployerAuthoredDocument,
             AssertionClass.EmployerAssertion,
             DisputeState.Unverified,
-            IntegrityState.OriginalHashVerified,
+            IntegrityState.OcrUncertain,
             VerificationState.NotReviewed,
-            currentSourceSpanId);
+            sourceSpanId: currentSourceSpanId,
+            extractionConfidence: 0.73m);
 
         var rejectedAssertionId = Guid.Parse("50000000-0000-0000-0000-000000000002");
         graph.AddAssertion(
@@ -166,9 +296,11 @@ public sealed class CanonicalLiveContextTests
             DisputeState.Unverified,
             IntegrityState.OriginalHashVerified,
             VerificationState.Rejected,
-            rejectedSourceSpanId);
+            sourceSpanId: rejectedSourceSpanId,
+            extractionConfidence: 0.96m);
 
         var aiAssertionId = Guid.Parse("50000000-0000-0000-0000-000000000003");
+        var aiEventTime = createdAt.AddDays(1);
         graph.AddAssertion(
             aiAssertionId,
             "meeting",
@@ -181,6 +313,7 @@ public sealed class CanonicalLiveContextTests
             DisputeState.Unverified,
             IntegrityState.DerivedCopy,
             VerificationState.NotReviewed,
+            eventTime: aiEventTime,
             createdByModel: "synthetic-test-model");
 
         return new Fixture(
@@ -193,7 +326,29 @@ public sealed class CanonicalLiveContextTests
             rejectedSourceSpanId,
             currentAssertionId,
             rejectedAssertionId,
-            aiAssertionId);
+            aiAssertionId,
+            aiEventTime);
+    }
+
+    private sealed class StaticStructuredProvider(StructuredExtractionOutput output) : IStructuredExtractionProvider
+    {
+        private readonly StructuredExtractionOutput _output = output;
+
+        public StructuredExtractionProviderDescriptor Descriptor { get; } = new(
+            "synthetic-provider",
+            "synthetic-contradiction-model",
+            "extract-v1",
+            "prompt-v2",
+            "schema-v3");
+
+        public Task<StructuredExtractionOutput> ExtractAsync(
+            StructuredExtractionInput input,
+            CancellationToken cancellationToken = default) => Task.FromResult(_output);
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     private sealed record Fixture(
@@ -206,5 +361,6 @@ public sealed class CanonicalLiveContextTests
         Guid RejectedSourceSpanId,
         Guid CurrentAssertionId,
         Guid RejectedAssertionId,
-        Guid AiAssertionId);
+        Guid AiAssertionId,
+        DateTimeOffset AiEventTime);
 }

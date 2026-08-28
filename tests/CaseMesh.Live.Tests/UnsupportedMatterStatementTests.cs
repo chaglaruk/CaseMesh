@@ -42,10 +42,13 @@ public sealed class UnsupportedMatterStatementTests
             matterId,
             new MatterBrainState(graph));
 
+        Assert.Empty(context.SourceSpans);
         Assert.Empty(context.Evidence);
         Assert.Empty(context.AiAnalysis);
         var statement = Assert.Single(context.UnsupportedStatements);
         Assert.Equal(assertionId, statement.AssertionId);
+        Assert.Equal(IntegrityState.Incomplete, statement.IntegrityState);
+        Assert.Null(statement.ExtractionConfidence);
         Assert.Contains("without documentary SourceSpan provenance", statement.EvidenceNotice, StringComparison.Ordinal);
     }
 }

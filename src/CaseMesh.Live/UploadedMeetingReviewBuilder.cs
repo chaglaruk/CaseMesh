@@ -16,7 +16,7 @@ public sealed class UploadedMeetingReviewBuilder
 
         var currentSourceSpanIds = context.Evidence
             .Where(item => item.RecordStatus == LiveEvidenceRecordStatus.Current)
-            .Select(item => item.Citation.SourceSpanId)
+            .Select(item => item.SourceSpanId)
             .ToHashSet();
 
         var ids = new HashSet<Guid>();

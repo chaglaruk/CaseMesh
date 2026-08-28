@@ -44,11 +44,13 @@ public sealed record CanonicalLiveEvidenceItem(
     EvidenceOriginClass OriginClass,
     AssertionClass AssertionClass,
     DisputeState DisputeState,
+    IntegrityState IntegrityState,
     VerificationState VerificationState,
+    decimal? ExtractionConfidence,
     LiveEvidenceRecordStatus RecordStatus,
     string? HistoricalReason,
     string EvidenceNotice,
-    LiveSourceCitation Citation);
+    Guid SourceSpanId);
 
 public sealed record CanonicalLiveUnsupportedStatement(
     Guid AssertionId,
@@ -61,7 +63,9 @@ public sealed record CanonicalLiveUnsupportedStatement(
     EvidenceOriginClass OriginClass,
     AssertionClass AssertionClass,
     DisputeState DisputeState,
+    IntegrityState IntegrityState,
     VerificationState VerificationState,
+    decimal? ExtractionConfidence,
     string EvidenceNotice);
 
 public sealed record CanonicalLiveAnalysisItem(
@@ -70,21 +74,43 @@ public sealed record CanonicalLiveAnalysisItem(
     string Predicate,
     string Value,
     string AssertedBy,
+    DateTimeOffset? EventTime,
     DateTimeOffset AssertedAt,
+    EvidenceOriginClass OriginClass,
+    AssertionClass AssertionClass,
+    DisputeState DisputeState,
+    IntegrityState IntegrityState,
+    VerificationState VerificationState,
     string CreatedByModel);
+
+public sealed record LiveAnalysisRunProvenance(
+    Guid CandidateId,
+    IReadOnlyList<Guid> SourceSpanIds,
+    decimal? ExtractionConfidence,
+    string CandidatePayloadDigest,
+    Guid ExtractionRunId,
+    string Provider,
+    string Model,
+    string ExtractionVersion,
+    string PromptVersion,
+    string SchemaVersion,
+    DateTimeOffset GeneratedAt,
+    string RawResultDigest);
 
 public sealed record CanonicalLiveContradiction(
     Guid ContradictionId,
     Guid AssertionAId,
     Guid AssertionBId,
     ContradictionType Type,
-    string DetectionOrigin);
+    string DetectionOrigin,
+    IReadOnlyList<LiveAnalysisRunProvenance> AnalysisProvenance);
 
 public sealed record CanonicalLiveContext(
     TenantId TenantId,
     Guid MatterId,
     string MatterTitle,
     CanonicalLiveCurrentness Currentness,
+    IReadOnlyList<LiveSourceCitation> SourceSpans,
     IReadOnlyList<CanonicalLiveEvidenceItem> Evidence,
     IReadOnlyList<CanonicalLiveUnsupportedStatement> UnsupportedStatements,
     IReadOnlyList<CanonicalLiveAnalysisItem> AiAnalysis,
