@@ -47,8 +47,8 @@ export function parseReviewTranscriptJson(
     ids.add(id);
 
     const origin = parseOrigin(value.origin, index);
-    const text = typeof value.text === "string" ? value.text.trim() : "";
-    if (!text || text.length > 8000) {
+    const text = typeof value.text === "string" ? value.text : "";
+    if (!text.trim() || text.length > 8000) {
       throw new Error(`Transcript item ${index + 1} text must contain between 1 and 8000 characters.`);
     }
     totalCharacters += text.length;
