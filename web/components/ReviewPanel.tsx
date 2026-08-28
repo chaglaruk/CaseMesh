@@ -193,7 +193,7 @@ export default function ReviewPanel() {
       <p className="muted">Created {new Date(active.createdAt).toLocaleString()}. Current Matter context: {currentnessLabel(active.currentContextCurrentness)}.</p>
       <ol className="list">{active.review.items.map(item => <li className="card" key={item.id}>
         <p><span className="badge">{reviewOriginLabel(item.origin)}</span> <strong>{new Date(item.startedAt).toLocaleTimeString()}</strong></p>
-        <p>{item.text}</p>
+        <p data-review-transcript-text style={{ whiteSpace: "pre-wrap" }}>{item.text}</p>
         <p className="muted">This wording is attributed conversation material, not documentary fact.</p>
         <div className="row">{item.contextCitationSourceSpanIds.map(id => <button type="button" className="citation" key={id} onClick={() => void inspectSource(id)} disabled={busy}>Inspect Matter context</button>)}</div>
       </li>)}</ol>
