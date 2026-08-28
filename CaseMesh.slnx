@@ -4,6 +4,7 @@
     <Project Path="src/CaseMesh.Core/CaseMesh.Core.csproj" />
     <Project Path="src/CaseMesh.Infrastructure/CaseMesh.Infrastructure.csproj" />
     <Project Path="src/CaseMesh.Ingestion/CaseMesh.Ingestion.csproj" />
+    <Project Path="src/CaseMesh.Live/CaseMesh.Live.csproj" />
     <Project Path="src/CaseMesh.MatterBrain/CaseMesh.MatterBrain.csproj" />
     <Project Path="src/CaseMesh.Persistence.Postgres/CaseMesh.Persistence.Postgres.csproj" />
     <Project Path="src/CaseMesh.ProfessionalExport/CaseMesh.ProfessionalExport.csproj" />
@@ -19,6 +20,7 @@
     <Project Path="tests/CaseMesh.Audio.Windows.Tests/CaseMesh.Audio.Windows.Tests.csproj" />
     <Project Path="tests/CaseMesh.Infrastructure.Tests/CaseMesh.Infrastructure.Tests.csproj" />
     <Project Path="tests/CaseMesh.Ingestion.Tests/CaseMesh.Ingestion.Tests.csproj" />
+    <Project Path="tests/CaseMesh.Live.Tests/CaseMesh.Live.Tests.csproj" />
     <Project Path="tests/CaseMesh.MatterBrain.Tests/CaseMesh.MatterBrain.Tests.csproj" />
     <Project Path="tests/CaseMesh.Persistence.Postgres.Tests/CaseMesh.Persistence.Postgres.Tests.csproj" />
     <Project Path="tests/CaseMesh.ProfessionalExport.Tests/CaseMesh.ProfessionalExport.Tests.csproj" />
