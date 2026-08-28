@@ -36,6 +36,7 @@ export function parseReviewTranscriptJson(
   }
 
   let totalCharacters = 0;
+  let previousStartedAt: number | undefined;
   const ids = new Set<string>();
   return raw.map((entry, index) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -47,8 +48,8 @@ export function parseReviewTranscriptJson(
     ids.add(id);
 
     const origin = parseOrigin(value.origin, index);
-    const text = typeof value.text === "string" ? value.text : "";
-    if (!text.trim() || text.length > 8000) {
+    const text = typeof value.text === "string" ? value.text.trim() : "";
+    if (!text || text.length > 8000) {
       throw new Error(`Transcript item ${index + 1} text must contain between 1 and 8000 characters.`);
     }
     totalCharacters += text.length;
@@ -56,9 +57,14 @@ export function parseReviewTranscriptJson(
 
     const startedAt = parseTimestamp(value.startedAt, `Transcript item ${index + 1} startedAt`);
     const endedAt = parseTimestamp(value.endedAt, `Transcript item ${index + 1} endedAt`);
-    if (Date.parse(endedAt) < Date.parse(startedAt)) {
+    const startedAtMilliseconds = Date.parse(startedAt);
+    if (Date.parse(endedAt) < startedAtMilliseconds) {
       throw new Error(`Transcript item ${index + 1} endedAt cannot precede startedAt.`);
     }
+    if (previousStartedAt !== undefined && startedAtMilliseconds < previousStartedAt) {
+      throw new Error(`Transcript item ${index + 1} startedAt cannot precede the previous transcript item.`);
+    }
+    previousStartedAt = startedAtMilliseconds;
 
     const citationsRaw = value.contextCitationSourceSpanIds ?? [];
     if (!Array.isArray(citationsRaw) || citationsRaw.length > 16) {
