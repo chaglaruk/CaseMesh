@@ -13,23 +13,42 @@ public enum ContradictionDetectionOrigin
 public sealed class CanonicalEvidencePolicy
 {
     private const string NumericMismatchRuleDetector = "rule:same-subject-predicate-time-numeric-mismatch:v1";
+    private const string HumanCorrectionNumericMismatchRuleDetector = "rule:human-correction-numeric-mismatch:v1";
 
-    private readonly MatterBrainState _state;
+    private readonly Guid _matterId;
     private readonly IReadOnlyDictionary<Guid, ExtractionCandidateRecord> _candidatesById;
-    private readonly MatterBrainDependency[] _activeDependencies;
+    private readonly IReadOnlyDictionary<(CanonicalRecordKind Kind, Guid Id), Guid[]> _candidateIdsByCanonicalRecord;
+    private readonly HashSet<(CanonicalRecordKind Kind, Guid Id, Guid CandidateId)> _dependencyCandidateKeys;
+    private readonly IReadOnlyDictionary<(CanonicalRecordKind Kind, Guid Id, Guid CandidateId), HashSet<Guid>>
+        _activeSourceIdsByCanonicalCandidate;
     private readonly HashSet<(CanonicalRecordKind Kind, Guid Id)> _extractedCanonicalRecords;
     private readonly HashSet<(CanonicalRecordKind Kind, Guid Id)> _activeCanonicalRecords;
 
     public CanonicalEvidencePolicy(MatterBrainState state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        _state = state;
+        _matterId = state.MatterId;
         _candidatesById = state.Candidates.ToDictionary(item => item.Id);
-        _activeDependencies = state.ActiveDependencies.ToArray();
-        _extractedCanonicalRecords = state.Dependencies
+
+        var dependencies = state.Dependencies.ToArray();
+        var activeDependencies = state.ActiveDependencies.ToArray();
+        _candidateIdsByCanonicalRecord = dependencies
+            .GroupBy(item => (item.CanonicalKind, item.CanonicalId))
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(item => item.CandidateId).Distinct().ToArray());
+        _dependencyCandidateKeys = dependencies
+            .Select(item => (item.CanonicalKind, item.CanonicalId, item.CandidateId))
+            .ToHashSet();
+        _activeSourceIdsByCanonicalCandidate = activeDependencies
+            .GroupBy(item => (item.CanonicalKind, item.CanonicalId, item.CandidateId))
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(item => item.SourceSpanId).ToHashSet());
+        _extractedCanonicalRecords = dependencies
             .Select(item => (item.CanonicalKind, item.CanonicalId))
             .ToHashSet();
-        _activeCanonicalRecords = _activeDependencies
+        _activeCanonicalRecords = activeDependencies
             .Select(item => (item.CanonicalKind, item.CanonicalId))
             .ToHashSet();
     }
@@ -57,22 +76,13 @@ public sealed class CanonicalEvidencePolicy
             return false;
         }
 
-        var exactDependencies = _state.Dependencies
-            .Where(dependency => dependency.CanonicalKind == canonicalKind &&
-                                 dependency.CanonicalId == canonicalId &&
-                                 dependency.CandidateId == candidate.Id)
-            .ToArray();
-        if (exactDependencies.Length == 0)
+        var key = (canonicalKind, canonicalId, candidate.Id);
+        if (!_dependencyCandidateKeys.Contains(key) ||
+            !_activeSourceIdsByCanonicalCandidate.TryGetValue(key, out var activeSources))
         {
             return false;
         }
 
-        var activeSources = _activeDependencies
-            .Where(dependency => dependency.CanonicalKind == canonicalKind &&
-                                 dependency.CanonicalId == canonicalId &&
-                                 dependency.CandidateId == candidate.Id)
-            .Select(dependency => dependency.SourceSpanId)
-            .ToHashSet();
         return candidateSources.All(activeSources.Contains);
     }
 
@@ -81,11 +91,7 @@ public sealed class CanonicalEvidencePolicy
         Guid canonicalId,
         ExtractionCandidateKind candidateKind)
     {
-        var dependencies = _state.Dependencies
-            .Where(dependency => dependency.CanonicalKind == canonicalKind &&
-                                 dependency.CanonicalId == canonicalId)
-            .ToArray();
-        if (dependencies.Length == 0)
+        if (!_candidateIdsByCanonicalRecord.ContainsKey((canonicalKind, canonicalId)))
         {
             return true;
         }
@@ -164,11 +170,12 @@ public sealed class CanonicalEvidencePolicy
     public ContradictionDetectionOrigin GetContradictionDetectionOrigin(Contradiction contradiction)
     {
         ArgumentNullException.ThrowIfNull(contradiction);
-        var contradictionDependencies = _state.Dependencies
-            .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Contradiction &&
-                                 dependency.CanonicalId == contradiction.Id)
-            .ToArray();
-        if (contradictionDependencies.Length == 0)
+        if (IsTrustedHumanCorrectionRuleContradiction(contradiction))
+        {
+            return ContradictionDetectionOrigin.DeterministicRule;
+        }
+
+        if (!_candidateIdsByCanonicalRecord.ContainsKey((CanonicalRecordKind.Contradiction, contradiction.Id)))
         {
             return ContradictionDetectionOrigin.CanonicalRecord;
         }
@@ -190,16 +197,41 @@ public sealed class CanonicalEvidencePolicy
     private IEnumerable<ExtractionCandidateRecord> CompleteCandidates(
         CanonicalRecordKind canonicalKind,
         Guid canonicalId,
-        ExtractionCandidateKind candidateKind) =>
-        _state.Dependencies
-            .Where(dependency => dependency.CanonicalKind == canonicalKind &&
-                                 dependency.CanonicalId == canonicalId)
-            .Select(dependency => dependency.CandidateId)
-            .Distinct()
+        ExtractionCandidateKind candidateKind)
+    {
+        if (!_candidateIdsByCanonicalRecord.TryGetValue((canonicalKind, canonicalId), out var candidateIds))
+        {
+            return [];
+        }
+
+        return candidateIds
             .Where(_candidatesById.ContainsKey)
             .Select(candidateId => _candidatesById[candidateId])
             .Where(candidate => candidate.Kind == candidateKind &&
                                 HasCompleteValidatedCandidateProvenance(candidate, canonicalKind, canonicalId));
+    }
+
+    private bool IsTrustedHumanCorrectionRuleContradiction(Contradiction contradiction)
+    {
+        if (contradiction.Type != ContradictionType.NumericMismatch ||
+            !string.Equals(contradiction.DetectedBy, HumanCorrectionNumericMismatchRuleDetector, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var first = contradiction.AssertionAId.CompareTo(contradiction.AssertionBId) <= 0
+            ? contradiction.AssertionAId
+            : contradiction.AssertionBId;
+        var second = first == contradiction.AssertionAId
+            ? contradiction.AssertionBId
+            : contradiction.AssertionAId;
+        var expectedId = MatterBrainState.DeterministicId(
+            "correction-numeric-contradiction",
+            _matterId,
+            first,
+            second);
+        return contradiction.Id == expectedId;
+    }
 
     private static bool IsTrustedDeterministicRuleCandidate(
         ExtractionCandidateRecord candidate,

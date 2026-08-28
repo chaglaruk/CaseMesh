@@ -30,8 +30,14 @@ public sealed record LiveSourceCitation(
     int? PageNumber,
     int? TextStart,
     int? TextEnd,
-    string ExactText,
-    string ExactTextDigest);
+    string ExactTextDigest,
+    int ExactTextLength,
+    string ParserVersion,
+    decimal? ExtractionConfidence);
+
+public sealed record LiveSourceDetail(
+    LiveSourceCitation Citation,
+    string ExactText);
 
 public sealed record CanonicalLiveEvidenceItem(
     Guid AssertionId,
@@ -66,6 +72,8 @@ public sealed record CanonicalLiveUnsupportedStatement(
     IntegrityState IntegrityState,
     VerificationState VerificationState,
     decimal? ExtractionConfidence,
+    LiveEvidenceRecordStatus RecordStatus,
+    string? HistoricalReason,
     string EvidenceNotice);
 
 public sealed record CanonicalLiveAnalysisItem(
@@ -81,6 +89,7 @@ public sealed record CanonicalLiveAnalysisItem(
     DisputeState DisputeState,
     IntegrityState IntegrityState,
     VerificationState VerificationState,
+    decimal? ExtractionConfidence,
     string CreatedByModel);
 
 public sealed record LiveAnalysisRunProvenance(

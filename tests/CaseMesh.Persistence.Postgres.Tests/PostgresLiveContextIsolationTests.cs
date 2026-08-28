@@ -9,7 +9,7 @@ namespace CaseMesh.Persistence.Postgres.Tests;
 public sealed class PostgresLiveContextIsolationTests(PostgresFixture database)
 {
     [PostgresFact]
-    public async Task Review_context_is_tenant_scoped_and_cross_tenant_requests_fail_closed()
+    public async Task Review_context_and_source_detail_are_tenant_scoped_and_fail_closed()
     {
         using var factory = new PostgresApiFactory(database.AppConnectionString);
         using var alice = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -34,6 +34,18 @@ public sealed class PostgresLiveContextIsolationTests(PostgresFixture database)
         await AssertEmptyNotFoundAsync(ownMissing);
         Assert.Equal(await ownMissing.Content.ReadAsByteArrayAsync(), await cross.Content.ReadAsByteArrayAsync());
         Assert.Equal(ownMissing.Content.Headers.ContentType, cross.Content.Headers.ContentType);
+
+        var missingSourceId = Guid.NewGuid();
+        using var ownMissingSource = await alice.GetAsync(
+            $"/api/workspaces/{tenantA:D}/matters/{matterA:D}/review/sources/{missingSourceId:D}");
+        using var crossMissingSource = await bob.GetAsync(
+            $"/api/workspaces/{tenantA:D}/matters/{matterA:D}/review/sources/{missingSourceId:D}");
+        await AssertEmptyNotFoundAsync(ownMissingSource);
+        await AssertEmptyNotFoundAsync(crossMissingSource);
+        Assert.Equal(
+            await ownMissingSource.Content.ReadAsByteArrayAsync(),
+            await crossMissingSource.Content.ReadAsByteArrayAsync());
+        Assert.Equal(ownMissingSource.Content.Headers.ContentType, crossMissingSource.Content.Headers.ContentType);
     }
 
     private static async Task SignInAsync(HttpClient client, string subject)
