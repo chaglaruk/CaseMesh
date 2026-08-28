@@ -6,6 +6,7 @@ using CaseMesh.Core.Models;
 using CaseMesh.Live;
 using CaseMesh.MatterBrain;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Npgsql;
 
 namespace CaseMesh.Persistence.Postgres.Tests;
 
@@ -102,6 +103,12 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
             Assert.Equal(2, listJson.RootElement[0].GetProperty("itemCount").GetInt32());
         }
 
+        using var nullItem = await SendJsonAsync(alice, aliceCsrf, HttpMethod.Post,
+            $"/api/workspaces/{tenantA:D}/matters/{matterA:D}/review/sessions",
+            new { items = new object?[] { null } });
+        Assert.Equal(HttpStatusCode.BadRequest, nullItem.StatusCode);
+        AssertPrivateNoStore(nullItem);
+
         using var cross = await bob.GetAsync(
             $"/api/workspaces/{tenantA:D}/matters/{matterA:D}/review/sessions/{meetingId:D}");
         using var ownMissing = await bob.GetAsync(
@@ -153,12 +160,101 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
             AssertPrivateNoStore(historicalCitation);
         }
 
+        await SetReviewLimitsAsync(tenantA, matterSessionLimit: 1, matterBytesLimit: 16_777_216);
+        using (var sessionQuota = await SendJsonAsync(alice, aliceCsrf, HttpMethod.Post,
+                   $"/api/workspaces/{tenantA:D}/matters/{matterA:D}/review/sessions",
+                   SingleItemReview(startedAt, "Session quota must reject this Review.")))
+        {
+            Assert.Equal(HttpStatusCode.TooManyRequests, sessionQuota.StatusCode);
+            AssertPrivateNoStore(sessionQuota);
+            using var problem = JsonDocument.Parse(await sessionQuota.Content.ReadAsStringAsync());
+            Assert.Equal("matter-review-session-limit", problem.RootElement.GetProperty("code").GetString());
+        }
+
+        await SetReviewLimitsAsync(tenantA, matterSessionLimit: 100, matterBytesLimit: 1);
+        using (var byteQuota = await SendJsonAsync(alice, aliceCsrf, HttpMethod.Post,
+                   $"/api/workspaces/{tenantA:D}/matters/{matterA:D}/review/sessions",
+                   SingleItemReview(startedAt, "Byte quota must reject this Review.")))
+        {
+            Assert.Equal(HttpStatusCode.TooManyRequests, byteQuota.StatusCode);
+            AssertPrivateNoStore(byteQuota);
+            using var problem = JsonDocument.Parse(await byteQuota.Content.ReadAsStringAsync());
+            Assert.Equal("matter-review-bytes-limit", problem.RootElement.GetProperty("code").GetString());
+        }
+
+        var removedSourceId = Guid.NewGuid();
+        var sourceTemplate = canonicalContext.SourceSpans.First();
+        await using (var admin = new NpgsqlConnection(database.AdminConnectionString))
+        {
+            await admin.OpenAsync();
+            await using var command = new NpgsqlCommand("""
+                INSERT INTO casemesh.source_spans
+                    (tenant_id,matter_id,source_span_id,document_version_id,page_number,
+                     extracted_text,extracted_text_digest,parser_version)
+                VALUES ($1,$2,$3,$4,99,$5,$6,$7);
+                INSERT INTO casemesh.uploaded_meeting_review_context_citations
+                    (tenant_id,matter_id,meeting_id,item_id,source_span_id,ordinal)
+                VALUES ($1,$2,$8,$9,$3,1);
+                DELETE FROM casemesh.source_spans
+                WHERE tenant_id=$1 AND matter_id=$2 AND source_span_id=$3;
+                """, admin);
+            PostgresMatterStore.AddParameters(command,
+                tenantA,
+                matterA,
+                removedSourceId,
+                sourceTemplate.DocumentVersionId,
+                "Synthetic source removed after Review attachment.",
+                new string('E', 64),
+                "synthetic-parser/1",
+                meetingId,
+                itemId);
+            await command.ExecuteNonQueryAsync();
+        }
+
         await using var matterStore = new PostgresMatterStore(database.AppConnectionString);
         var reviews = new PostgresUploadedMeetingReviewRepository(matterStore);
-        Assert.NotNull(await reviews.LoadAsync(new TenantId(tenantA), matterA, meetingId));
+        var reopened = await reviews.LoadAsync(new TenantId(tenantA), matterA, meetingId);
+        Assert.NotNull(reopened);
+        Assert.Contains(removedSourceId,
+            reopened.Review.Items.Single(item => item.Id == itemId).ContextCitationSourceSpanIds);
+        var reopenedAnalysis = new UploadedMeetingReviewAnalyzer().Analyze(reopened.Review, canonicalContext);
+        Assert.Contains(reopenedAnalysis.ContextReferences,
+            reference => reference.SourceSpanId == removedSourceId &&
+                         reference.Status == UploadedMeetingContextReferenceStatus.Missing);
+
         Assert.True(await matterStore.DeleteMatterAsync(new TenantId(tenantA), matterA));
         Assert.Null(await reviews.LoadAsync(new TenantId(tenantA), matterA, meetingId));
     }
+
+    private async Task SetReviewLimitsAsync(Guid tenantId, int matterSessionLimit, long matterBytesLimit)
+    {
+        await using var connection = new NpgsqlConnection(database.AdminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand("""
+            UPDATE casemesh.pilot_entitlements
+            SET matter_review_session_limit=$2,
+                matter_review_bytes_limit=$3
+            WHERE tenant_id=$1;
+            """, connection);
+        PostgresMatterStore.AddParameters(command, tenantId, matterSessionLimit, matterBytesLimit);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    private static object SingleItemReview(DateTimeOffset startedAt, string text) => new
+    {
+        items = new[]
+        {
+            new
+            {
+                id = Guid.NewGuid(),
+                origin = (int)LiveConversationOrigin.HrSaid,
+                text,
+                startedAt,
+                endedAt = startedAt.AddSeconds(1),
+                contextCitationSourceSpanIds = Array.Empty<Guid>()
+            }
+        }
+    };
 
     private static async Task SignInAsync(HttpClient client, string subject)
     {
