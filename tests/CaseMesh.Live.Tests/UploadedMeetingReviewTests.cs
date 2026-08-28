@@ -45,10 +45,18 @@ public sealed class UploadedMeetingReviewTests
                 Enumerable.Range(0, UploadedMeetingReviewBuilder.MaximumContextCitationsPerItem + 1)
                     .Select(_ => Guid.NewGuid())
                     .ToArray())]));
+
+        Assert.Throws<InvalidOperationException>(() => builder.Build(
+            fixture.Context,
+            Guid.NewGuid(),
+            [
+                new LiveConversationItem(Guid.NewGuid(), LiveConversationOrigin.HrSaid, "Later first.", now.AddSeconds(2), now.AddSeconds(3), []),
+                new LiveConversationItem(Guid.NewGuid(), LiveConversationOrigin.UserActuallySaid, "Earlier second.", now, now.AddSeconds(1), [])
+            ]));
     }
 
     [Fact]
-    public void Builder_preserves_input_order_when_transcript_timestamps_tie()
+    public void Builder_preserves_input_order_and_wording_when_transcript_timestamps_tie()
     {
         var fixture = CreateContext();
         var builder = new UploadedMeetingReviewBuilder();
@@ -60,12 +68,12 @@ public sealed class UploadedMeetingReviewTests
             fixture.Context,
             Guid.NewGuid(),
             [
-                new LiveConversationItem(firstId, LiveConversationOrigin.HrSaid, "First at tied timestamp.", now, now, []),
+                new LiveConversationItem(firstId, LiveConversationOrigin.HrSaid, "  First at tied timestamp.  ", now, now, []),
                 new LiveConversationItem(secondId, LiveConversationOrigin.UserActuallySaid, "Second at tied timestamp.", now, now, [])
             ]);
 
         Assert.Equal([firstId, secondId], review.Items.Select(item => item.Id));
-        Assert.Equal(["First at tied timestamp.", "Second at tied timestamp."], review.Items.Select(item => item.Text));
+        Assert.Equal(["  First at tied timestamp.  ", "Second at tied timestamp."], review.Items.Select(item => item.Text));
     }
 
     [Fact]
