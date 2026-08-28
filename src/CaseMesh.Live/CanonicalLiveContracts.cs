@@ -49,6 +49,20 @@ public sealed record CanonicalLiveEvidenceItem(
     string? HistoricalReason,
     LiveSourceCitation Citation);
 
+public sealed record CanonicalLiveUnsupportedStatement(
+    Guid AssertionId,
+    string SubjectReference,
+    string Predicate,
+    string Value,
+    string AssertedBy,
+    DateTimeOffset? EventTime,
+    DateTimeOffset AssertedAt,
+    EvidenceOriginClass OriginClass,
+    AssertionClass AssertionClass,
+    DisputeState DisputeState,
+    VerificationState VerificationState,
+    string EvidenceNotice);
+
 public sealed record CanonicalLiveAnalysisItem(
     Guid AssertionId,
     string SubjectReference,
@@ -71,6 +85,7 @@ public sealed record CanonicalLiveContext(
     string MatterTitle,
     CanonicalLiveCurrentness Currentness,
     IReadOnlyList<CanonicalLiveEvidenceItem> Evidence,
+    IReadOnlyList<CanonicalLiveUnsupportedStatement> UnsupportedStatements,
     IReadOnlyList<CanonicalLiveAnalysisItem> AiAnalysis,
     IReadOnlyList<CanonicalLiveContradiction> UnresolvedContradictions);
 

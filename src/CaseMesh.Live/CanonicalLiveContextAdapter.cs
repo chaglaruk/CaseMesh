@@ -36,6 +36,28 @@ public sealed class CanonicalLiveContextAdapter
             .ThenBy(item => item.AssertionId)
             .ToArray();
 
+        var unsupportedStatements = state.Evidence.Assertions
+            .Where(assertion => !assertion.SourceSpanId.HasValue &&
+                                assertion.OriginClass != EvidenceOriginClass.AiGeneratedInference &&
+                                assertion.AssertionClass != AssertionClass.AiInference &&
+                                policy.IsCurrentAttributedAssertion(assertion, requireDocumentarySource: false))
+            .OrderBy(item => item.EventTime ?? item.AssertedAt)
+            .ThenBy(item => item.Id)
+            .Select(assertion => new CanonicalLiveUnsupportedStatement(
+                assertion.Id,
+                assertion.SubjectReference,
+                assertion.Predicate,
+                assertion.Value,
+                assertion.AssertedBy,
+                assertion.EventTime,
+                assertion.AssertedAt,
+                assertion.OriginClass,
+                assertion.AssertionClass,
+                assertion.DisputeState,
+                assertion.VerificationState,
+                "Current attributed Matter statement without documentary SourceSpan provenance; do not present it as source-backed evidence."))
+            .ToArray();
+
         var aiAnalysis = state.Evidence.Assertions
             .Where(assertion => assertion.OriginClass == EvidenceOriginClass.AiGeneratedInference &&
                                 assertion.AssertionClass == AssertionClass.AiInference &&
@@ -73,6 +95,7 @@ public sealed class CanonicalLiveContextAdapter
             matter.Title,
             evidenceProcessingActive ? CanonicalLiveCurrentness.Processing : CanonicalLiveCurrentness.Current,
             evidence,
+            unsupportedStatements,
             aiAnalysis,
             contradictions);
     }
