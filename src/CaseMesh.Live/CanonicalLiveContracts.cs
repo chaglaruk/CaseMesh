@@ -21,6 +21,13 @@ public enum LiveConversationOrigin
     AiSuggested = 2
 }
 
+public enum UploadedMeetingContextReferenceStatus
+{
+    Current = 0,
+    Historical = 1,
+    Missing = 2
+}
+
 public sealed record LiveSourceCitation(
     Guid SourceSpanId,
     Guid DocumentId,
@@ -139,3 +146,31 @@ public sealed record UploadedMeetingReview(
     Guid MeetingId,
     CanonicalLiveCurrentness ContextCurrentness,
     IReadOnlyList<LiveConversationItem> Items);
+
+public sealed record UploadedMeetingReviewRecord(
+    UploadedMeetingReview Review,
+    DateTimeOffset CreatedAt);
+
+public sealed record UploadedMeetingReviewSummary(
+    Guid MeetingId,
+    CanonicalLiveCurrentness ContextCurrentness,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset StartedAt,
+    DateTimeOffset EndedAt,
+    int ItemCount);
+
+public sealed record UploadedMeetingContextReference(
+    Guid SourceSpanId,
+    UploadedMeetingContextReferenceStatus Status,
+    string Notice);
+
+public sealed record UploadedMeetingReviewAnalysis(
+    IReadOnlyList<UploadedMeetingContextReference> ContextReferences,
+    IReadOnlyList<CanonicalLiveContradiction> RelevantUnresolvedContradictions,
+    IReadOnlyList<string> FollowUpPrompts);
+
+public sealed record UploadedMeetingReviewView(
+    UploadedMeetingReview Review,
+    DateTimeOffset CreatedAt,
+    CanonicalLiveCurrentness CurrentContextCurrentness,
+    UploadedMeetingReviewAnalysis Analysis);

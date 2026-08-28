@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\CaseMesh.Core\CaseMesh.Core.csproj" />
+    <ProjectReference Include="..\..\src\CaseMesh.Live\CaseMesh.Live.csproj" />
     <ProjectReference Include="..\..\src\CaseMesh.Persistence.Postgres\CaseMesh.Persistence.Postgres.csproj" />
     <ProjectReference Include="..\..\src\CaseMesh.MatterBrain\CaseMesh.MatterBrain.csproj" />
     <ProjectReference Include="..\..\src\CaseMesh.ProfessionalExport\CaseMesh.ProfessionalExport.csproj" />
