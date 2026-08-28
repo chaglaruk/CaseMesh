@@ -106,6 +106,7 @@ public sealed class UploadedMeetingReviewBuilder
         var normalized = items
             .Select(item => item with
             {
+                Text = item.Text.Trim(),
                 ContextCitationSourceSpanIds = item.ContextCitationSourceSpanIds.OrderBy(id => id).ToArray()
             })
             .ToArray();
