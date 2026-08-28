@@ -30,11 +30,6 @@ public sealed class ApiExceptionHandler(
             exception.GetType().Name, status);
         context.Response.StatusCode = status;
         ApplyPrivateNoStore(context.Response);
-        context.Response.OnStarting(static state =>
-        {
-            ApplyPrivateNoStore((HttpResponse)state);
-            return Task.CompletedTask;
-        }, context.Response);
         if (status == StatusCodes.Status404NotFound)
             return true;
         var problem = new Microsoft.AspNetCore.Mvc.ProblemDetails
@@ -46,11 +41,13 @@ public sealed class ApiExceptionHandler(
         if (exception is PilotQuotaExceededException)
             PilotOperationsTelemetry.QuotaRejections.Add(1);
         if (exception is PilotQuotaExceededException quota) problem.Extensions["code"] = quota.Code;
-        return await problemDetails.TryWriteAsync(new ProblemDetailsContext
+        var handled = await problemDetails.TryWriteAsync(new ProblemDetailsContext
         {
             HttpContext = context,
             ProblemDetails = problem
         });
+        if (!context.Response.HasStarted) ApplyPrivateNoStore(context.Response);
+        return handled;
     }
 
     private static void ApplyPrivateNoStore(HttpResponse response)
