@@ -108,6 +108,12 @@ internal static class MeetingPreparationProjection
             .ThenBy(item => item.Id)
             .ToArray();
         var currentAssertionIds = currentAssertions.Select(item => item.Id).ToHashSet();
+        var currentSupersedingAssertionIds = loaded.Evidence.AssertionEventLinks
+            .Where(link => IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
+                           link.Relation == AssertionEventRelation.Supersedes &&
+                           currentAssertionIds.Contains(link.AssertionId))
+            .Select(link => link.AssertionId)
+            .ToHashSet();
         bool HasCurrentSupersedingEvidence(Guid eventId) => loaded.Evidence.AssertionEventLinks.Any(link =>
             link.EventId == eventId &&
             IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
@@ -221,8 +227,12 @@ internal static class MeetingPreparationProjection
             return new HistoricalEventProvenance(supporting, qualifying, contradicting);
         }
 
-        var evidencePoints = currentAssertions
+        var priorityAssertionIds = currentAssertions
             .Take(MaximumPriorityItems)
+            .Select(item => item.Id)
+            .ToHashSet();
+        var evidencePoints = currentAssertions
+            .Where(item => priorityAssertionIds.Contains(item.Id) || currentSupersedingAssertionIds.Contains(item.Id))
             .Select(item => new
             {
                 item.Id,
@@ -239,7 +249,9 @@ internal static class MeetingPreparationProjection
                 item.ExtractionConfidence,
                 dispute = item.DisputeState.ToString(),
                 verification = item.VerificationState.ToString(),
-                epistemicNotice = "Attributed evidence point; not automatically an established fact."
+                epistemicNotice = currentSupersedingAssertionIds.Contains(item.Id)
+                    ? "Attributed superseding evidence kept visible even when it falls outside the capped priority list; not automatically an established fact."
+                    : "Attributed evidence point; not automatically an established fact."
             }).ToArray();
 
         var chronology = loaded.Evidence.Events
@@ -642,8 +654,14 @@ internal static class MeetingPreparationProjection
                 return false;
             }
 
-            var candidateRoles = entity.RoleLabels.OrderBy(value => value, StringComparer.Ordinal).ToArray();
-            var participantRoles = participant.RoleLabels.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+            var candidateRoles = entity.RoleLabels
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray();
+            var participantRoles = participant.RoleLabels
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray();
             return candidateRoles.SequenceEqual(participantRoles, StringComparer.Ordinal);
         }
         catch (JsonException)
