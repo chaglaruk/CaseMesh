@@ -28,11 +28,14 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
         var tenantA = await CreateWorkspaceAsync(alice, aliceCsrf, "Synthetic Review workspace A");
         var tenantB = await CreateWorkspaceAsync(bob, bobCsrf, "Synthetic Review workspace B");
         var matterA = Guid.NewGuid();
+        var siblingMatter = Guid.NewGuid();
 
         var persisted = SyntheticPersistedMatterFactory.Create(new TenantId(tenantA), matterA, 940);
+        var siblingPersisted = SyntheticPersistedMatterFactory.Create(new TenantId(tenantA), siblingMatter, 941);
         await using (var brainStore = new PostgresMatterBrainStore(database.AppConnectionString))
         {
             await brainStore.SaveAsync(new MatterBrainState(persisted.Evidence), persisted.Workplace);
+            await brainStore.SaveAsync(new MatterBrainState(siblingPersisted.Evidence), siblingPersisted.Workplace);
         }
         var canonicalContext = new CanonicalLiveContextAdapter().Build(
             new TenantId(tenantA), matterA, new MatterBrainState(persisted.Evidence));
@@ -101,6 +104,18 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
             Assert.Equal(1, listJson.RootElement.GetArrayLength());
             Assert.Equal(meetingId, listJson.RootElement[0].GetProperty("meetingId").GetGuid());
             Assert.Equal(2, listJson.RootElement[0].GetProperty("itemCount").GetInt32());
+        }
+
+        using var siblingRead = await alice.GetAsync(
+            $"/api/workspaces/{tenantA:D}/matters/{siblingMatter:D}/review/sessions/{meetingId:D}");
+        await AssertPrivateEmptyNotFoundAsync(siblingRead);
+        using var siblingList = await alice.GetAsync(
+            $"/api/workspaces/{tenantA:D}/matters/{siblingMatter:D}/review/sessions");
+        Assert.Equal(HttpStatusCode.OK, siblingList.StatusCode);
+        AssertPrivateNoStore(siblingList);
+        using (var siblingListJson = JsonDocument.Parse(await siblingList.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal(0, siblingListJson.RootElement.GetArrayLength());
         }
 
         using var nullItem = await SendJsonAsync(alice, aliceCsrf, HttpMethod.Post,
