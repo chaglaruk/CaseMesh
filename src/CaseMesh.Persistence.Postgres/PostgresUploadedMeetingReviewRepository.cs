@@ -1,3 +1,4 @@
+using System.Text;
 using CaseMesh.Core.Models;
 using CaseMesh.Live;
 using Npgsql;
@@ -26,6 +27,8 @@ public sealed class PostgresUploadedMeetingReviewRepository
 
         return _matterStore.InTenantTransactionAsync(review.TenantId, async (connection, transaction) =>
         {
+            await EnsureQuotaAsync(connection, transaction, review, cancellationToken);
+
             await PostgresMatterStore.ExecuteAsync(connection, transaction, """
                 INSERT INTO casemesh.uploaded_meeting_reviews
                     (tenant_id, matter_id, meeting_id, created_by_user_id, context_currentness, created_at)
@@ -173,6 +176,67 @@ public sealed class PostgresUploadedMeetingReviewRepository
                     item.Citations.ToArray())).ToArray());
             return new UploadedMeetingReviewRecord(review, createdAt);
         }, cancellationToken);
+    }
+
+    private static async Task EnsureQuotaAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        UploadedMeetingReview review,
+        CancellationToken cancellationToken)
+    {
+        long additionalBytes = 0;
+        foreach (var item in review.Items)
+            additionalBytes = checked(additionalBytes + Encoding.UTF8.GetByteCount(item.Text));
+
+        await using (var quotaLock = new NpgsqlCommand(
+                         "SELECT pg_advisory_xact_lock(hashtextextended($1,0));",
+                         connection,
+                         transaction))
+        {
+            quotaLock.Parameters.AddWithValue($"casemesh-review-quota:{review.TenantId.Value:D}");
+            await quotaLock.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var command = new NpgsqlCommand("""
+            SELECT entitlement.matter_review_session_limit,
+                   entitlement.tenant_review_session_limit,
+                   entitlement.matter_review_bytes_limit,
+                   entitlement.tenant_review_bytes_limit,
+                   (SELECT count(*) FROM casemesh.uploaded_meeting_reviews
+                    WHERE tenant_id=$1 AND matter_id=$2),
+                   (SELECT count(*) FROM casemesh.uploaded_meeting_reviews
+                    WHERE tenant_id=$1),
+                   (SELECT COALESCE(sum(octet_length(item.transcript_text)),0)
+                    FROM casemesh.uploaded_meeting_review_items item
+                    WHERE item.tenant_id=$1 AND item.matter_id=$2),
+                   (SELECT COALESCE(sum(octet_length(item.transcript_text)),0)
+                    FROM casemesh.uploaded_meeting_review_items item
+                    WHERE item.tenant_id=$1)
+            FROM casemesh.pilot_entitlements entitlement
+            WHERE entitlement.tenant_id=$1;
+            """, connection, transaction);
+        PostgresMatterStore.AddParameters(command, review.TenantId.Value, review.MatterId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            throw new InvalidOperationException("The tenant has no configured pilot entitlement.");
+
+        var matterSessionLimit = reader.GetInt32(0);
+        var tenantSessionLimit = reader.GetInt32(1);
+        var matterBytesLimit = reader.GetInt64(2);
+        var tenantBytesLimit = reader.GetInt64(3);
+        var matterSessions = reader.GetInt64(4);
+        var tenantSessions = reader.GetInt64(5);
+        var matterBytes = reader.GetInt64(6);
+        var tenantBytes = reader.GetInt64(7);
+
+        if (matterSessions + 1 > matterSessionLimit)
+            throw new PilotQuotaExceededException("matter-review-session-limit");
+        if (tenantSessions + 1 > tenantSessionLimit)
+            throw new PilotQuotaExceededException("tenant-review-session-limit");
+        if (checked(matterBytes + additionalBytes) > matterBytesLimit)
+            throw new PilotQuotaExceededException("matter-review-bytes-limit");
+        if (checked(tenantBytes + additionalBytes) > tenantBytesLimit)
+            throw new PilotQuotaExceededException("tenant-review-bytes-limit");
     }
 
     private static CanonicalLiveCurrentness ReadCurrentness(short value) =>
