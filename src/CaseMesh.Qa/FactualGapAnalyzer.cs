@@ -20,14 +20,63 @@ public static class FactualGapAnalyzer
 
         var gaps = new List<FactualGap>();
         var assertions = evidence.Assertions.ToDictionary(item => item.Id);
+        var events = evidence.Events.ToDictionary(item => item.Id);
+        var candidatesById = brain.Candidates.ToDictionary(item => item.Id);
+        var activeDependencies = brain.ActiveDependencies.ToArray();
         var extractedCanonicalRecords = brain.Dependencies
             .Select(item => (item.CanonicalKind, item.CanonicalId))
             .ToHashSet();
-        var activeCanonicalRecords = brain.ActiveDependencies
+        var activeCanonicalRecords = activeDependencies
             .Select(item => (item.CanonicalKind, item.CanonicalId))
             .ToHashSet();
         bool IsCurrentCanonical(CanonicalRecordKind kind, Guid id) =>
             !extractedCanonicalRecords.Contains((kind, id)) || activeCanonicalRecords.Contains((kind, id));
+        bool HasCompleteCurrentCandidateProvenance(
+            CanonicalRecordKind canonicalKind,
+            Guid canonicalId,
+            ExtractionCandidateKind candidateKind)
+        {
+            var dependencies = brain.Dependencies
+                .Where(dependency => dependency.CanonicalKind == canonicalKind &&
+                                     dependency.CanonicalId == canonicalId)
+                .ToArray();
+            if (dependencies.Length == 0) return true;
+
+            return dependencies
+                .GroupBy(dependency => dependency.CandidateId)
+                .Any(group =>
+                {
+                    if (!candidatesById.TryGetValue(group.Key, out var candidate) ||
+                        candidate.Kind != candidateKind ||
+                        candidate.Disposition != CandidateDisposition.Validated)
+                    {
+                        return false;
+                    }
+
+                    var candidateSources = candidate.SourceSpanIds.Distinct().ToArray();
+                    if (candidateSources.Length == 0) return false;
+                    var activeSources = activeDependencies
+                        .Where(dependency => dependency.CanonicalKind == canonicalKind &&
+                                             dependency.CanonicalId == canonicalId &&
+                                             dependency.CandidateId == candidate.Id)
+                        .Select(dependency => dependency.SourceSpanId)
+                        .ToHashSet();
+                    return candidateSources.All(activeSources.Contains);
+                });
+        }
+        bool IsCurrentAssertionEventLink(Guid id) =>
+            IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, id) &&
+            HasCompleteCurrentCandidateProvenance(
+                CanonicalRecordKind.AssertionEventLink,
+                id,
+                ExtractionCandidateKind.AssertionEventLink);
+        bool IsCurrentEvent(MatterEvent matterEvent) =>
+            matterEvent.Status is not (EventStatus.Superseded or EventStatus.Rejected) &&
+            IsCurrentCanonical(CanonicalRecordKind.Event, matterEvent.Id) &&
+            HasCompleteCurrentCandidateProvenance(
+                CanonicalRecordKind.Event,
+                matterEvent.Id,
+                ExtractionCandidateKind.Event);
 
         foreach (var contradiction in evidence.Contradictions
                      .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved &&
@@ -43,6 +92,8 @@ public static class FactualGapAnalyzer
         }
 
         foreach (var assertion in evidence.Assertions.Where(item => item.SourceSpanId is null &&
+                     item.SupersededByAssertionId is null &&
+                     item.DisputeState != DisputeState.Superseded &&
                      item.VerificationState != VerificationState.Rejected &&
                      item.OriginClass != EvidenceOriginClass.AiGeneratedInference &&
                      item.AssertionClass != AssertionClass.AiInference &&
@@ -73,7 +124,9 @@ public static class FactualGapAnalyzer
                 "timeline", [audit.EntityId, audit.ReplacementEntityId!.Value, audit.Id], []));
 
         var linksByEvent = evidence.AssertionEventLinks
-            .Where(item => IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, item.Id))
+            .Where(item => IsCurrentAssertionEventLink(item.Id) &&
+                           events.TryGetValue(item.EventId, out var matterEvent) &&
+                           IsCurrentEvent(matterEvent))
             .GroupBy(item => item.EventId);
         foreach (var links in linksByEvent)
         {
