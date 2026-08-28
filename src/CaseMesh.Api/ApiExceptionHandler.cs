@@ -29,7 +29,6 @@ public sealed class ApiExceptionHandler(
         logger.LogWarning("API request failed with type {ExceptionType} and status {StatusCode}.",
             exception.GetType().Name, status);
         context.Response.StatusCode = status;
-        ApplyPrivateNoStore(context.Response);
         if (status == StatusCodes.Status404NotFound)
             return true;
         var problem = new Microsoft.AspNetCore.Mvc.ProblemDetails
@@ -41,19 +40,10 @@ public sealed class ApiExceptionHandler(
         if (exception is PilotQuotaExceededException)
             PilotOperationsTelemetry.QuotaRejections.Add(1);
         if (exception is PilotQuotaExceededException quota) problem.Extensions["code"] = quota.Code;
-        var handled = await problemDetails.TryWriteAsync(new ProblemDetailsContext
+        return await problemDetails.TryWriteAsync(new ProblemDetailsContext
         {
             HttpContext = context,
             ProblemDetails = problem
         });
-        if (!context.Response.HasStarted) ApplyPrivateNoStore(context.Response);
-        return handled;
-    }
-
-    private static void ApplyPrivateNoStore(HttpResponse response)
-    {
-        response.Headers["Cache-Control"] = "no-store, private";
-        response.Headers["Pragma"] = "no-cache";
-        response.Headers["Expires"] = "0";
     }
 }
