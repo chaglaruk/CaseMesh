@@ -161,7 +161,8 @@ public sealed record ExtractionRun(
     StructuredExtractionProviderDescriptor Provider,
     IReadOnlyList<Guid> SourceSpanIds,
     DateTimeOffset GeneratedAt,
-    string RawResultDigest);
+    string RawResultDigest,
+    long? Sequence = null);
 
 public sealed record ExtractionCandidateRecord(
     Guid Id,

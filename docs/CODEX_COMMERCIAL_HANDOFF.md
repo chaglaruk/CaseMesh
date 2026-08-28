@@ -4,7 +4,7 @@ Date: 2026-08-22
 
 ## Current state
 
-The foundational evidence MVP backend is now substantially implemented and merged.
+The foundational evidence MVP and controlled commercial-pilot platform are substantially implemented.
 
 Completed commercial milestones:
 
@@ -14,12 +14,13 @@ Completed commercial milestones:
 4. private immutable S3-compatible original evidence storage;
 5. secure ingestion with type detection, malware scanning boundary, native parsing, OCR fallback and exact SourceSpan persistence;
 6. structured extraction candidates, conservative entity resolution, incremental Matter Brain merge, contradictions and correction/audit propagation;
-7. deterministic professional handover/export in DOCX, CSV, JSON and ZIP with tenant-scoped export audit metadata.
-8. authenticated employee Web MVP with citation-gated Matter Q&A.
+7. deterministic professional handover/export in DOCX, CSV, JSON and ZIP with tenant-scoped export audit metadata;
+8. authenticated employee Web MVP;
+9. provenance-gated Matter Q&A and factual-gap analysis;
+10. commercial-pilot hardening: persisted quotas and retention, private verified export delivery, durable privacy deletion, readiness/telemetry, operator diagnostics, accessibility and deployment controls;
+11. canonical Matter meeting preparation as a deterministic, tenant-scoped read projection with currentness state, attributed evidence points, chronology, participants, unresolved disputes, factual clarification prompts and exact SourceSpan inspection.
 
-Milestone 10 commercial-pilot hardening is being completed on Issue #23: persisted quotas and retention, private verified export delivery, durable privacy deletion, readiness/telemetry, operator diagnostics, accessibility and deployment controls.
-
-Current `main` after Milestone 7 is expected to contain PR #20 / merge commit `389f78ee724fe4968d1b596b9e44fd3244292af8` or a later documented main commit.
+Milestones 8-10 were completed through Issues #22/#23 and merged PRs #25/#26. Milestone 11 is defined by Issue #27 and ADR 0011; its implementation belongs on the dedicated review branch/PR until the normal CI, security and independent-review gates are complete.
 
 The HRCompanion -> CaseMesh rename is complete. Do not create another rename batch.
 
@@ -40,19 +41,19 @@ When an older planning document conflicts with this handoff or a newer explicit 
 
 ## Current commercial critical path
 
-The implemented backend chain is now:
+The commercial evidence chain is now:
 
-`private original evidence -> secure ingestion -> exact SourceSpan -> structured candidates -> canonical Matter Brain -> contradiction/correction state -> professional handover export`
-
-The next critical product gap is no longer the evidence engine. It is turning that engine into a usable commercial product surface.
+`private original evidence -> secure ingestion -> exact SourceSpan -> structured candidates -> canonical Matter Brain -> contradiction/correction state -> Matter-grounded Q&A -> professional handover -> meeting preparation`
 
 Proceed in this order unless a newer approved issue changes it:
 
-1. Web MVP: ASP.NET Core API + authenticated tenant/user boundary + Matters + secure upload/processing + timeline/evidence/people/disputed/correction/export UI.
-2. Matter-grounded Q&A and retrieval/gap analysis with strict citation/provenance gates.
-3. Commercial pilot hardening: privacy deletion/export delivery/quotas/operational support/observability/accessibility and deployment-ready security controls.
-4. Meeting preparation using canonical Matter state.
+1. Web MVP: ASP.NET Core API + authenticated tenant/user boundary + Matters + secure upload/processing + timeline/evidence/people/disputed/correction/export UI. **Completed.**
+2. Matter-grounded Q&A and retrieval/gap analysis with strict citation/provenance gates. **Completed.**
+3. Commercial pilot hardening: privacy deletion/export delivery/quotas/operational support/observability/accessibility and deployment-ready security controls. **Completed.**
+4. Meeting preparation using canonical Matter state. **Implemented in Milestone 11; merge only after its full gates pass.**
 5. CaseMesh Live only after its separate real-world safety/privacy/latency gates.
+
+Meeting preparation does not unblock claims of Live readiness by itself. The legacy local `MeetingState` remains a compatibility prototype, not a second commercial source of truth. Any future Live work must consume canonical Matter context through an explicit adapter/gate and must not create a parallel evidence store.
 
 ## Non-negotiable invariants
 
@@ -63,7 +64,7 @@ Proceed in this order unless a newer approved issue changes it:
 - Employer, employee, third-party and AI statements remain distinct.
 - Model output is never promoted to established fact merely because a model produced it.
 - Contradictions and uncertainty remain visible until explicitly resolved.
-- Corrections preserve history and append-only audit semantics.
+- Corrections preserve history and append-only audit semantics. A user correction without documentary provenance must not inherit the corrected record's old source span as if it supported the new wording.
 - Do not expose raw object-storage keys/credentials in public API/UI/domain surfaces.
 - Do not introduce legal merits, liability, win-probability, compensation prediction or autonomous filing.
 - Keep legacy WPF/SQLite/CaseMesh Live projects buildable; do not claim real Teams/audio verification without real gates.
@@ -93,10 +94,13 @@ Every commercial milestone must preserve the complete applicable regression set,
 - ingestion real-service integration;
 - Matter Brain deterministic and persistence tests;
 - professional export tests;
-- existing Infrastructure and Audio.Windows automated tests.
+- existing Infrastructure and Audio.Windows automated tests;
+- Web contract tests and the real-browser Playwright/axe journey for commercial surfaces.
 
 Run package vulnerability checks for new dependencies, `git diff --check`, diff/fixture secret and personal-data inspection, and Codex Security/security diff review when available.
 
 ## Definition of next success
 
-The next stage succeeds when a real authenticated user can create a private Matter, upload synthetic evidence through the commercial path, see processing state, navigate source-backed timeline/evidence/people/contradictions, correct extracted state, and obtain a private professional export without accessing another tenant's data or bypassing provenance.
+Milestone 11 succeeds when an authenticated user can open Prepare for their own Matter, review deterministic source-backed evidence points and chronology, inspect exact immutable source spans, see unresolved contradictions and factual gaps without silent resolution, receive an explicit currentness warning while ingestion is active, and preserve the distinction between documentary evidence, corrected history and unsupported or AI-derived statements without accessing another tenant's data.
+
+After Milestone 11 is merged, the next product gate is CaseMesh Live. Do not advance Live status beyond the evidence recorded in `docs/GATES.md` and `docs/STATUS.md`; real Teams/audio/privacy/latency validation remains evidence-gated rather than inferred from automated tests.

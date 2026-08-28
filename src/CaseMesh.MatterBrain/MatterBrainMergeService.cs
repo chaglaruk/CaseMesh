@@ -70,6 +70,7 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
         var allCandidates = PrepareCandidates(output.Candidates);
         var generatedAt = _timeProvider.GetUtcNow();
         var runId = MatterBrainState.DeterministicId("extraction-run", state.MatterId, fingerprint);
+        var runSequence = checked(state.Runs.Select(item => item.Sequence ?? 0L).DefaultIfEmpty(0L).Max() + 1L);
         var run = new ExtractionRun(
             runId,
             state.MatterId,
@@ -77,7 +78,8 @@ public sealed class MatterBrainMergeService(TimeProvider timeProvider)
             descriptor,
             Array.AsReadOnly(selectedIds),
             generatedAt,
-            MatterBrainIntegrity.Digest(output.RawStructuredResult));
+            MatterBrainIntegrity.Digest(output.RawStructuredResult),
+            runSequence);
         state.AddRun(run);
         state.InvalidateDependencies(selectedIds, runId, generatedAt);
 

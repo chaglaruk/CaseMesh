@@ -55,7 +55,7 @@ public sealed class PostgresApiIsolationTests(PostgresFixture database)
         using var ownMissing = await bob.GetAsync($"/api/workspaces/{tenantB}/matters/{Guid.NewGuid():D}");
         await AssertSameEmptyNotFoundAsync(crossMatter, ownMissing);
 
-        foreach (var projection in new[] { "overview", "timeline", "evidence", "people", "disputed", "workplace", "questions" })
+        foreach (var projection in new[] { "overview", "timeline", "evidence", "people", "disputed", "workplace", "questions", "prepare" })
         {
             using var ownResponse = await alice.GetAsync($"/api/workspaces/{tenantA}/matters/{matterA}/{projection}");
             Assert.Equal(HttpStatusCode.OK, ownResponse.StatusCode);
