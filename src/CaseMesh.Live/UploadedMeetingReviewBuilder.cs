@@ -54,6 +54,11 @@ public sealed class UploadedMeetingReviewBuilder
                     $"Meeting review item text must contain between 1 and {MaximumItemTextCharacters} characters.");
             }
 
+            if (text.Contains('\0'))
+            {
+                throw new InvalidOperationException("Meeting review item text cannot contain NUL characters.");
+            }
+
             totalCharacters = checked(totalCharacters + text.Length);
             if (totalCharacters > MaximumTranscriptCharacters)
             {

@@ -53,6 +53,21 @@ public sealed class UploadedMeetingReviewTests
                 new LiveConversationItem(Guid.NewGuid(), LiveConversationOrigin.HrSaid, "Later first.", now.AddSeconds(2), now.AddSeconds(3), []),
                 new LiveConversationItem(Guid.NewGuid(), LiveConversationOrigin.UserActuallySaid, "Earlier second.", now, now.AddSeconds(1), [])
             ]));
+
+        var nul = Assert.Throws<InvalidOperationException>(() => builder.Build(
+            fixture.Context,
+            Guid.NewGuid(),
+            [new LiveConversationItem(Guid.NewGuid(), LiveConversationOrigin.HrSaid, "Synthetic\0statement", now, now.AddSeconds(1), [])]));
+        Assert.Contains("NUL", nul.Message, StringComparison.Ordinal);
+
+        var duration = Assert.Throws<InvalidOperationException>(() => builder.Build(
+            fixture.Context,
+            Guid.NewGuid(),
+            [
+                new LiveConversationItem(Guid.NewGuid(), LiveConversationOrigin.HrSaid, "First statement.", now, now.AddSeconds(1), []),
+                new LiveConversationItem(Guid.NewGuid(), LiveConversationOrigin.UserActuallySaid, "Second statement.", now.AddHours(24), now.AddHours(24).AddSeconds(1), [])
+            ]));
+        Assert.Contains("24 hours", duration.Message, StringComparison.Ordinal);
     }
 
     [Fact]

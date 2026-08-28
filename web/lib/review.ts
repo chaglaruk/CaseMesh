@@ -9,6 +9,8 @@ export type ReviewImportItem = {
   contextCitationSourceSpanIds: string[];
 };
 
+const maximumReviewDurationMilliseconds = 24 * 60 * 60 * 1000;
+
 const originMap: Record<string, ReviewOrigin> = {
   HR_SAID: 0,
   HRSAID: 0,
@@ -37,8 +39,10 @@ export function parseReviewTranscriptJson(
 
   let totalCharacters = 0;
   let previousStartedAt: number | undefined;
+  let earliestStartedAt: number | undefined;
+  let latestEndedAt: number | undefined;
   const ids = new Set<string>();
-  return raw.map((entry, index) => {
+  const items = raw.map((entry, index) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       throw new Error(`Transcript item ${index + 1} must be an object.`);
     }
@@ -52,19 +56,29 @@ export function parseReviewTranscriptJson(
     if (!text.trim() || text.length > 8000) {
       throw new Error(`Transcript item ${index + 1} text must contain between 1 and 8000 characters.`);
     }
+    if (text.includes("\0")) {
+      throw new Error(`Transcript item ${index + 1} text cannot contain NUL characters.`);
+    }
     totalCharacters += text.length;
     if (totalCharacters > 1_000_000) throw new Error("Transcript text exceeds the 1,000,000 character limit.");
 
     const startedAt = parseTimestamp(value.startedAt, `Transcript item ${index + 1} startedAt`);
     const endedAt = parseTimestamp(value.endedAt, `Transcript item ${index + 1} endedAt`);
     const startedAtMilliseconds = Date.parse(startedAt);
-    if (Date.parse(endedAt) < startedAtMilliseconds) {
+    const endedAtMilliseconds = Date.parse(endedAt);
+    if (endedAtMilliseconds < startedAtMilliseconds) {
       throw new Error(`Transcript item ${index + 1} endedAt cannot precede startedAt.`);
     }
     if (previousStartedAt !== undefined && startedAtMilliseconds < previousStartedAt) {
       throw new Error(`Transcript item ${index + 1} startedAt cannot precede the previous transcript item.`);
     }
     previousStartedAt = startedAtMilliseconds;
+    earliestStartedAt = earliestStartedAt === undefined
+      ? startedAtMilliseconds
+      : Math.min(earliestStartedAt, startedAtMilliseconds);
+    latestEndedAt = latestEndedAt === undefined
+      ? endedAtMilliseconds
+      : Math.max(latestEndedAt, endedAtMilliseconds);
 
     const citationsRaw = value.contextCitationSourceSpanIds ?? [];
     if (!Array.isArray(citationsRaw) || citationsRaw.length > 16) {
@@ -82,6 +96,13 @@ export function parseReviewTranscriptJson(
 
     return { id, origin, text, startedAt, endedAt, contextCitationSourceSpanIds: citations };
   });
+
+  if (earliestStartedAt !== undefined && latestEndedAt !== undefined &&
+      latestEndedAt - earliestStartedAt > maximumReviewDurationMilliseconds) {
+    throw new Error("Transcript Review cannot span more than 24 hours.");
+  }
+
+  return items;
 }
 
 export function reviewOriginLabel(origin: number): string {

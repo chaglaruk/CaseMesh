@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const page=readFileSync(join(process.cwd(),"app/matters/[matterId]/page.tsx"),"utf8");
+const reviewPanel=readFileSync(join(process.cwd(),"components/ReviewPanel.tsx"),"utf8");
 const proxy=readFileSync(join(process.cwd(),"proxy.ts"),"utf8");
 const layout=readFileSync(join(process.cwd(),"app/layout.tsx"),"utf8");
 const signIn=readFileSync(join(process.cwd(),"app/sign-in/page.tsx"),"utf8");
@@ -18,6 +19,7 @@ describe("Matter workspace contract",()=>{
   it("supports bounded Matter Q&A and invalidates stale threads",()=>{expect(page).toContain("/questions/ask");expect(page).toContain("maxLength={1000}");expect(page).toContain("New thread");expect(page).toContain("What your evidence shows");expect(page).toContain("currentnessNotice");expect(page).toContain("AbortController");expect(page).toContain("qaRequest.current?.abort()");expect(page).toContain('if(next==="questions")setQa(undefined)');});
   it("keeps external guidance separate and factual gaps navigable",()=>{expect(page).toContain("External legal guidance is a separate future surface");expect(page).toContain("Factual gaps");expect(page).toContain("Open {gap.route} view");});
   it("provides canonical evidence-grounded meeting preparation",()=>{expect(page).toContain("Prepare for a meeting");expect(page).toContain("Evidence points to review");expect(page).toContain("Unresolved conflicts");expect(page).toContain("Questions to clarify");expect(page).toContain("Evidence to have ready");expect(page).toContain("does not predict a legal outcome");});
+  it("preserves uploaded transcript whitespace in Review rendering",()=>{expect(reviewPanel).toContain("data-review-transcript-text");expect(reviewPanel).toContain('whiteSpace: "pre-wrap"');expect(reviewPanel).toContain("{item.text}");expect(reviewPanel).not.toContain("dangerouslySetInnerHTML");});
   it("renders temporal disputes and alias provenance explicitly",()=>{expect(page).toContain("alleged event time:");expect(page).toContain("alias.provenanceStatus");expect(page).toContain("alias.sourceSpanIds");expect(page).toContain("View source for alias");});
   it("renders full Prepare evidence and correction metadata",()=>{expect(page).toContain("Asserted at:");expect(page).toContain("point.integrity");expect(page).toContain("point.extractionConfidence");expect(page).toContain('event.endTime?` – ${event.endTime}`');expect(page).toContain("record.origin");expect(page).toContain("record.assertionClass");expect(page).toContain("record.extractionConfidence");expect(page).toContain("record.status");expect(page).toContain("record.verification");});
   it("renders full unresolved-dispute assertion metadata",()=>{expect(page).toContain("assertion.assertedAt");expect(page).toContain("assertion.integrity");expect(page).toContain("assertion.extractionConfidence");expect(page).toContain("assertion.dispute");expect(page).toContain("assertion.verification");});
