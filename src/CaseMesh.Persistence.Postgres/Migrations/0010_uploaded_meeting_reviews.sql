@@ -1,3 +1,13 @@
+ALTER TABLE casemesh.pilot_entitlements
+    ADD COLUMN matter_review_session_limit integer NOT NULL DEFAULT 100 CHECK (matter_review_session_limit > 0),
+    ADD COLUMN tenant_review_session_limit integer NOT NULL DEFAULT 500 CHECK (tenant_review_session_limit > 0),
+    ADD COLUMN matter_review_bytes_limit bigint NOT NULL DEFAULT 16777216 CHECK (matter_review_bytes_limit > 0),
+    ADD COLUMN tenant_review_bytes_limit bigint NOT NULL DEFAULT 67108864 CHECK (tenant_review_bytes_limit > 0),
+    ADD CONSTRAINT pilot_entitlements_review_session_scope_check
+        CHECK (tenant_review_session_limit >= matter_review_session_limit),
+    ADD CONSTRAINT pilot_entitlements_review_bytes_scope_check
+        CHECK (tenant_review_bytes_limit >= matter_review_bytes_limit);
+
 CREATE TABLE casemesh.uploaded_meeting_reviews (
     tenant_id uuid NOT NULL,
     matter_id uuid NOT NULL,
@@ -40,9 +50,10 @@ CREATE TABLE casemesh.uploaded_meeting_review_context_citations (
     UNIQUE (tenant_id, matter_id, meeting_id, item_id, ordinal),
     FOREIGN KEY (tenant_id, matter_id, meeting_id, item_id)
         REFERENCES casemesh.uploaded_meeting_review_items
-            (tenant_id, matter_id, meeting_id, item_id) ON DELETE CASCADE,
-    FOREIGN KEY (tenant_id, matter_id, source_span_id)
-        REFERENCES casemesh.source_spans (tenant_id, matter_id, source_span_id) ON DELETE CASCADE
+            (tenant_id, matter_id, meeting_id, item_id) ON DELETE CASCADE
+    -- Deliberately no source_spans foreign key: the saved citation id is a historical
+    -- Review reference and must survive source/version deletion so reopening can
+    -- classify it as Missing instead of silently erasing that prior association.
 );
 
 CREATE INDEX uploaded_meeting_reviews_recent_ix
