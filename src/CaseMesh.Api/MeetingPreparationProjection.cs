@@ -26,8 +26,27 @@ internal static class MeetingPreparationProjection
         var activeCanonicalRecords = activeDependencies
             .Select(item => (item.CanonicalKind, item.CanonicalId))
             .ToHashSet();
-        bool IsCurrentCanonical(CanonicalRecordKind kind, Guid id) =>
-            !extractedCanonicalRecords.Contains((kind, id)) || activeCanonicalRecords.Contains((kind, id));
+        bool IsCurrentCanonical(CanonicalRecordKind kind, Guid id)
+        {
+            if (extractedCanonicalRecords.Contains((kind, id)) &&
+                !activeCanonicalRecords.Contains((kind, id)))
+            {
+                return false;
+            }
+
+            if (kind != CanonicalRecordKind.AssertionEventLink) return true;
+            var linkDependencies = loaded.Brain.Dependencies
+                .Where(dependency => dependency.CanonicalKind == kind && dependency.CanonicalId == id)
+                .ToArray();
+            if (linkDependencies.Length == 0) return true;
+
+            return linkDependencies
+                .GroupBy(dependency => dependency.CandidateId)
+                .Any(group => candidatesById.TryGetValue(group.Key, out var candidate) &&
+                              candidate.Kind == ExtractionCandidateKind.AssertionEventLink &&
+                              candidate.Disposition == CandidateDisposition.Validated &&
+                              HasCompleteCurrentCandidateProvenance(candidate, kind, id));
+        }
         bool HasCompleteCurrentCandidateProvenance(
             ExtractionCandidateRecord candidate,
             CanonicalRecordKind canonicalKind,
