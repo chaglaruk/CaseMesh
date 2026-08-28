@@ -136,6 +136,15 @@ public sealed class CanonicalEvidencePolicy
                    ExtractionCandidateKind.Event);
     }
 
+    public bool IsCurrentAssertionRecord(Assertion assertion)
+    {
+        ArgumentNullException.ThrowIfNull(assertion);
+        return IsCurrentExtractedRecord(
+            CanonicalRecordKind.Assertion,
+            assertion.Id,
+            ExtractionCandidateKind.Assertion);
+    }
+
     public bool IsCurrentAttributedAssertion(Assertion assertion, bool requireDocumentarySource)
     {
         ArgumentNullException.ThrowIfNull(assertion);
@@ -149,10 +158,7 @@ public sealed class CanonicalEvidencePolicy
                assertion.VerificationState != VerificationState.Rejected &&
                assertion.OriginClass != EvidenceOriginClass.AiGeneratedInference &&
                assertion.AssertionClass != AssertionClass.AiInference &&
-               IsCurrentExtractedRecord(
-                   CanonicalRecordKind.Assertion,
-                   assertion.Id,
-                   ExtractionCandidateKind.Assertion);
+               IsCurrentAssertionRecord(assertion);
     }
 
     public ContradictionDetectionOrigin GetContradictionDetectionOrigin(Contradiction contradiction)
