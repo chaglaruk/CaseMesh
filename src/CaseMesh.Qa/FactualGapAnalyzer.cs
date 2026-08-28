@@ -72,7 +72,9 @@ public static class FactualGapAnalyzer
                 "A corrected or superseded record has historical evidence that should remain visible during review.",
                 "timeline", [audit.EntityId, audit.ReplacementEntityId!.Value, audit.Id], []));
 
-        var linksByEvent = evidence.AssertionEventLinks.GroupBy(item => item.EventId);
+        var linksByEvent = evidence.AssertionEventLinks
+            .Where(item => IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, item.Id))
+            .GroupBy(item => item.EventId);
         foreach (var links in linksByEvent)
         {
             var linked = links.Select(item => assertions[item.AssertionId])
