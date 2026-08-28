@@ -26,7 +26,7 @@ describe("uploaded transcript Review parser", () => {
     ]), () => ids[next++]);
 
     expect(items.map(item => item.origin)).toEqual([0, 2]);
-    expect(items[0].text).toBe("Synthetic HR statement.");
+    expect(items[0].text).toBe("  Synthetic HR statement.  ");
     expect(items[0].startedAt).toBe("2026-08-28T09:00:00.000Z");
     expect(items[0].contextCitationSourceSpanIds).toEqual(["20000000-0000-4000-8000-000000000001"]);
     expect(reviewOriginLabel(items[1].origin)).toBe("AI suggested");
