@@ -211,10 +211,8 @@ internal static class MeetingPreparationProjection
                     .Distinct()
                     .OrderBy(id => id)
                     .ToArray();
-                var eventDependencySourceIds = activeDependencies
-                    .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Event &&
-                                         dependency.CanonicalId == item.Id)
-                    .Select(dependency => dependency.SourceSpanId);
+                var eventDependencySourceIds = policy.CompleteCandidateSourceIds(
+                    CanonicalRecordKind.Event, item.Id, ExtractionCandidateKind.Event);
                 var sourceSpanIds = supportingAssertionSourceIds
                     .Concat(eventDependencySourceIds)
                     .Where(sourceSpansById.ContainsKey)
@@ -322,6 +320,10 @@ internal static class MeetingPreparationProjection
                     .ToArray();
                 var detectionOrigin = policy.GetContradictionDetectionOrigin(item);
                 var aiAnalysis = detectionOrigin == ContradictionDetectionOrigin.StructuredExtractionAnalysis;
+                var analysisSourceSpanIds = aiAnalysis
+                    ? policy.CompleteCandidateSourceIds(
+                        CanonicalRecordKind.Contradiction, item.Id, ExtractionCandidateKind.Contradiction)
+                    : [];
                 return new
                 {
                     item.Id,
@@ -329,6 +331,7 @@ internal static class MeetingPreparationProjection
                     resolutionState = item.ResolutionState.ToString(),
                     detectionOrigin = detectionOrigin.ToString(),
                     aiAnalysis,
+                    analysisSourceSpanIds,
                     assertions = new[]
                     {
                         DisputedAssertion(first),
@@ -336,7 +339,7 @@ internal static class MeetingPreparationProjection
                     }.Where(assertion => assertion is not null).ToArray(),
                     sourceSpanIds,
                     notice = aiAnalysis
-                        ? "AI analysis detected a possible conflict between current attributed statements. Review the cited documentary evidence; the analysis is not itself documentary fact."
+                        ? "AI analysis detected a possible conflict between current attributed statements. Review the cited documentary evidence and the separately labelled analysis inputs; the analysis is not itself documentary fact."
                         : detectionOrigin == ContradictionDetectionOrigin.DeterministicRule
                             ? "A deterministic evidence rule detected conflicting current attributed statements. The rule does not decide which account is true."
                             : "Conflicting attributed statements remain unresolved."
@@ -499,6 +502,7 @@ internal static class MeetingPreparationProjection
             .Concat(correctionHistory.SelectMany(item => item.HistoricalQualifyingSourceSpanIds))
             .Concat(correctionHistory.SelectMany(item => item.HistoricalContradictingSourceSpanIds))
             .Concat(unresolvedDisputes.SelectMany(item => item.sourceSpanIds))
+            .Concat(unresolvedDisputes.SelectMany(item => item.analysisSourceSpanIds))
             .Concat(gaps.SelectMany(item => item.SourceSpanIds))
             .Concat(participants.SelectMany(item => item.sourceSpanIds))
             .Concat(participants.SelectMany(item => item.identityMembers)
