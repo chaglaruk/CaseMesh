@@ -46,8 +46,8 @@ public sealed class UploadedMeetingReviewBuilder
                 throw new InvalidOperationException("Meeting review item origin is invalid.");
             }
 
-            var text = item.Text?.Trim() ?? string.Empty;
-            if (text.Length == 0 || text.Length > MaximumItemTextCharacters)
+            var text = item.Text ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(text) || text.Length > MaximumItemTextCharacters)
             {
                 throw new InvalidOperationException(
                     $"Meeting review item text must contain between 1 and {MaximumItemTextCharacters} characters.");
@@ -103,7 +103,6 @@ public sealed class UploadedMeetingReviewBuilder
             .ThenBy(entry => entry.InputOrdinal)
             .Select(entry => entry.Item with
             {
-                Text = entry.Item.Text.Trim(),
                 ContextCitationSourceSpanIds = entry.Item.ContextCitationSourceSpanIds.OrderBy(id => id).ToArray()
             })
             .ToArray();
