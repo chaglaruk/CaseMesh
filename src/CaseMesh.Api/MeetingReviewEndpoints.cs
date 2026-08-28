@@ -123,7 +123,8 @@ public static class MeetingReviewEndpoints
     {
         ApplyPrivateNoStore(context);
         if (tenantId == Guid.Empty || matterId == Guid.Empty) return Results.NotFound();
-        if (request.Items is null) throw new BadHttpRequestException("Meeting review items are required.");
+        if (request.Items is null || request.Items.Any(item => item is null))
+            throw new BadHttpRequestException("Meeting review items are required and cannot contain null entries.");
 
         var user = await users.RequireAsync(context.User, token);
         var tenant = new TenantId(tenantId);
@@ -142,7 +143,7 @@ public static class MeetingReviewEndpoints
                 canonicalContext,
                 Guid.NewGuid(),
                 request.Items.Select(item => new LiveConversationItem(
-                    item.Id,
+                    item!.Id,
                     item.Origin,
                     item.Text ?? string.Empty,
                     item.StartedAt,
@@ -209,7 +210,7 @@ public static class MeetingReviewEndpoints
 }
 
 public sealed record CreateUploadedMeetingReviewRequest(
-    IReadOnlyList<CreateUploadedMeetingReviewItemRequest> Items);
+    IReadOnlyList<CreateUploadedMeetingReviewItemRequest?> Items);
 
 public sealed record CreateUploadedMeetingReviewItemRequest(
     Guid Id,
