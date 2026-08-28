@@ -384,7 +384,7 @@ internal static class MeetingPreparationProjection
                             .ToArray();
                         var completeActiveCandidates = activeCandidates
                             .Where(candidate => policy.HasCompleteValidatedCandidateProvenance(
-                                CanonicalRecordKind.Person, member.Id, ExtractionCandidateKind.Person))
+                                candidate, CanonicalRecordKind.Person, member.Id))
                             .ToArray();
                         var fieldsSourceBacked = completeActiveCandidates.Length > 0 &&
                                                  completeActiveCandidates.All(candidate => CandidateSupportsParticipant(candidate, member));
@@ -439,7 +439,7 @@ internal static class MeetingPreparationProjection
                             .Where(item => candidatesById.ContainsKey(item.CandidateId))
                             .Where(item => CandidateSupportsAlias(candidatesById[item.CandidateId], alias.NormalizedValue))
                             .Where(item => policy.HasCompleteValidatedCandidateProvenance(
-                                CanonicalRecordKind.Person, item.CanonicalId, ExtractionCandidateKind.Person))
+                                candidatesById[item.CandidateId], CanonicalRecordKind.Person, item.CanonicalId))
                             .Select(item => item.CandidateId)
                             .ToHashSet();
                         var sourceSpanIds = activeDependencies
