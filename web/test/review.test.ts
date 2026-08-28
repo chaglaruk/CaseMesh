@@ -63,6 +63,22 @@ describe("uploaded transcript Review parser", () => {
       endedAt: "2026-08-28T09:00:01Z",
     }]), () => ids[0])).toThrow(/precede/);
 
+    let next = 0;
+    expect(() => parseReviewTranscriptJson(JSON.stringify([
+      {
+        origin: "HR_SAID",
+        text: "Later statement first.",
+        startedAt: "2026-08-28T09:00:05Z",
+        endedAt: "2026-08-28T09:00:06Z",
+      },
+      {
+        origin: "USER_ACTUALLY_SAID",
+        text: "Earlier statement second.",
+        startedAt: "2026-08-28T09:00:04Z",
+        endedAt: "2026-08-28T09:00:05Z",
+      },
+    ]), () => ids[next++])).toThrow(/previous transcript item/);
+
     const citation = "20000000-0000-4000-8000-000000000001";
     expect(() => parseReviewTranscriptJson(JSON.stringify([{
       origin: "HR_SAID",
