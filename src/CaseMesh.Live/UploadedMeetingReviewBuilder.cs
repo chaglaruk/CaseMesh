@@ -97,13 +97,14 @@ public sealed class UploadedMeetingReviewBuilder
         }
 
         var normalized = items
-            .OrderBy(item => item.StartedAt)
-            .ThenBy(item => item.EndedAt)
-            .ThenBy(item => item.Id)
-            .Select(item => item with
+            .Select((item, inputOrdinal) => new { Item = item, InputOrdinal = inputOrdinal })
+            .OrderBy(entry => entry.Item.StartedAt)
+            .ThenBy(entry => entry.Item.EndedAt)
+            .ThenBy(entry => entry.InputOrdinal)
+            .Select(entry => entry.Item with
             {
-                Text = item.Text.Trim(),
-                ContextCitationSourceSpanIds = item.ContextCitationSourceSpanIds.OrderBy(id => id).ToArray()
+                Text = entry.Item.Text.Trim(),
+                ContextCitationSourceSpanIds = entry.Item.ContextCitationSourceSpanIds.OrderBy(id => id).ToArray()
             })
             .ToArray();
 
