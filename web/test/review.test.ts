@@ -48,7 +48,7 @@ describe("uploaded transcript Review parser", () => {
     expect(items[0].contextCitationSourceSpanIds).toEqual([sourceSpanId]);
   });
 
-  it("rejects invalid origin, time order, duplicate citations, malformed Guid, and oversized text", () => {
+  it("rejects invalid origin, time order, duplicate citations, malformed Guid, oversized text, and NUL text", () => {
     expect(() => parseReviewTranscriptJson(JSON.stringify([{
       origin: "UNKNOWN",
       text: "Statement",
@@ -102,5 +102,31 @@ describe("uploaded transcript Review parser", () => {
       startedAt: "2026-08-28T09:00:00Z",
       endedAt: "2026-08-28T09:00:01Z",
     }]), () => ids[0])).toThrow(/8000/);
+
+    expect(() => parseReviewTranscriptJson(JSON.stringify([{
+      origin: "HR_SAID",
+      text: "Synthetic\u0000statement",
+      startedAt: "2026-08-28T09:00:00Z",
+      endedAt: "2026-08-28T09:00:01Z",
+    }]), () => ids[0])).toThrow(/NUL/);
+  });
+
+  it("rejects a Review whose total duration exceeds 24 hours", () => {
+    expect(() => parseReviewTranscriptJson(JSON.stringify([
+      {
+        id: "10000000-0000-4000-8000-000000000011",
+        origin: "HR_SAID",
+        text: "First statement.",
+        startedAt: "2026-08-28T09:00:00Z",
+        endedAt: "2026-08-28T09:00:01Z",
+      },
+      {
+        id: "10000000-0000-4000-8000-000000000012",
+        origin: "USER_ACTUALLY_SAID",
+        text: "Second statement.",
+        startedAt: "2026-08-29T09:00:00Z",
+        endedAt: "2026-08-29T09:00:01Z",
+      },
+    ]))).toThrow(/24 hours/);
   });
 });
