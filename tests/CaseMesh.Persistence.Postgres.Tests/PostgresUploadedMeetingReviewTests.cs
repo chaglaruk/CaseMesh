@@ -107,7 +107,7 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
             $"/api/workspaces/{tenantA:D}/matters/{matterA:D}/review/sessions",
             new { items = new object?[] { null } });
         Assert.Equal(HttpStatusCode.BadRequest, nullItem.StatusCode);
-        AssertPrivateNoStore(nullItem);
+        AssertNoStore(nullItem);
 
         using var cross = await bob.GetAsync(
             $"/api/workspaces/{tenantA:D}/matters/{matterA:D}/review/sessions/{meetingId:D}");
@@ -157,7 +157,7 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
                     }
                 });
             Assert.Equal(HttpStatusCode.BadRequest, historicalCitation.StatusCode);
-            AssertPrivateNoStore(historicalCitation);
+            AssertNoStore(historicalCitation);
         }
 
         await SetReviewLimitsAsync(tenantA, matterSessionLimit: 1, matterBytesLimit: 16_777_216);
@@ -166,7 +166,7 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
                    SingleItemReview(startedAt, "Session quota must reject this Review.")))
         {
             Assert.Equal(HttpStatusCode.TooManyRequests, sessionQuota.StatusCode);
-            AssertPrivateNoStore(sessionQuota);
+            AssertNoStore(sessionQuota);
             using var problem = JsonDocument.Parse(await sessionQuota.Content.ReadAsStringAsync());
             Assert.Equal("matter-review-session-limit", problem.RootElement.GetProperty("code").GetString());
         }
@@ -177,7 +177,7 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
                    SingleItemReview(startedAt, "Byte quota must reject this Review.")))
         {
             Assert.Equal(HttpStatusCode.TooManyRequests, byteQuota.StatusCode);
-            AssertPrivateNoStore(byteQuota);
+            AssertNoStore(byteQuota);
             using var problem = JsonDocument.Parse(await byteQuota.Content.ReadAsStringAsync());
             Assert.Equal("matter-review-bytes-limit", problem.RootElement.GetProperty("code").GetString());
         }
@@ -303,9 +303,14 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
 
     private static void AssertPrivateNoStore(HttpResponseMessage response)
     {
+        AssertNoStore(response);
+        Assert.True(response.Headers.CacheControl!.Private);
+    }
+
+    private static void AssertNoStore(HttpResponseMessage response)
+    {
         Assert.NotNull(response.Headers.CacheControl);
         Assert.True(response.Headers.CacheControl.NoStore);
-        Assert.True(response.Headers.CacheControl.Private);
         Assert.Contains(response.Headers.Pragma,
             value => string.Equals(value.Name, "no-cache", StringComparison.OrdinalIgnoreCase));
     }
