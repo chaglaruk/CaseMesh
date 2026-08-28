@@ -17,7 +17,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
         var before = await migrator.GetAppliedMigrationsAsync(database.AdminConnectionString);
         var after = await migrator.MigrateAsync(database.AdminConnectionString);
 
-        Assert.Equal(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009"], after.Select(migration => migration.Version));
+        Assert.Equal(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010"], after.Select(migration => migration.Version));
         Assert.Equal(before, after);
     }
 
@@ -54,7 +54,7 @@ public sealed class PostgresMatterStoreTests(PostgresFixture database)
                     """, admin).ExecuteNonQueryAsync();
             }
             var applied = await migrator.MigrateAsync(emptyBuilder.ConnectionString);
-            Assert.Equal(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009"], applied.Select(migration => migration.Version));
+            Assert.Equal(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010"], applied.Select(migration => migration.Version));
         }
         finally
         {
