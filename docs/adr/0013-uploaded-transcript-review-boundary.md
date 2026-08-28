@@ -66,7 +66,7 @@ The first commercial Review import is structured JSON rather than audio/provider
 
 The Web parser additionally rejects transcript arrays whose start timestamps move backwards so the user is not shown an apparently reordered conversation. The server keeps deterministic ordering for direct API clients and preserves input order as the final tie-breaker when timestamps are identical.
 
-Leading and trailing whitespace is normalized at the import boundary; the attributed wording itself is otherwise retained. The Web parser mirrors the server bounds for early feedback but cannot weaken API validation.
+Valid transcript wording is preserved exactly after validation. Leading and trailing whitespace, internal spacing and line breaks are retained; the import boundary does not trim, collapse or otherwise normalize accepted transcript text. Invalid blank, oversized, NUL-containing or over-duration input is rejected before PostgreSQL persistence. The Web parser mirrors the server bounds for early feedback but cannot weaken API validation.
 
 ### Cumulative pilot quotas
 
