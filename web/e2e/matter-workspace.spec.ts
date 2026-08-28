@@ -32,6 +32,45 @@ test("authenticated synthetic Matter journey preserves provenance and correction
   const prepareAccessibility=await new AxeBuilder({page}).analyze();
   expect(prepareAccessibility.violations).toEqual([]);
 
+  const currentUrl=new URL(page.url());
+  const matterId=currentUrl.pathname.split("/").filter(Boolean).at(-1)!;
+  const workspace=currentUrl.searchParams.get("workspace")!;
+  const reviewContext=await page.evaluate(async({workspace,matterId})=>{
+    const response=await fetch(`/api/workspaces/${workspace}/matters/${matterId}/review/context`,{credentials:"include"});
+    if(!response.ok)throw new Error(`Review context failed: ${response.status}`);
+    return response.json() as Promise<{evidence:{sourceSpanId:string}[]}>;
+  },{workspace,matterId});
+  const reviewSourceId=reviewContext.evidence[0].sourceSpanId;
+
+  await page.getByRole("button",{name:"Review"}).click();
+  await expect(page.getByRole("heading",{name:"Review a past meeting"})).toBeVisible();
+  await page.getByLabel("Transcript JSON").fill(JSON.stringify([
+    {
+      origin:"HR_SAID",
+      text:"Synthetic HR meeting statement about the absence-day record.",
+      startedAt:"2026-08-28T09:00:00Z",
+      endedAt:"2026-08-28T09:00:04Z",
+      contextCitationSourceSpanIds:[reviewSourceId]
+    },
+    {
+      origin:"AI_SUGGESTED",
+      text:"Verify the supporting Matter source before relying on the statement.",
+      startedAt:"2026-08-28T09:00:05Z",
+      endedAt:"2026-08-28T09:00:08Z",
+      contextCitationSourceSpanIds:[reviewSourceId]
+    }
+  ],null,2));
+  await page.getByRole("button",{name:"Create private Review"}).click();
+  await expect(page.getByLabel("Meeting Review result")).toContainText("HR said");
+  await expect(page.getByLabel("Meeting Review result")).toContainText("AI suggested");
+  await expect(page.getByLabel("Meeting Review result")).toContainText("attributed conversation material");
+  await expect(page.getByLabel("Meeting Review result")).toContainText("Current context");
+  await page.getByLabel("Meeting Review result").getByRole("button",{name:"Inspect Matter context"}).first().click();
+  await expect(page.getByLabel("Review exact source detail")).toContainText("twelve absence days");
+  await expect(page.getByText(/2 transcript items/)).toBeVisible();
+  const reviewAccessibility=await new AxeBuilder({page}).analyze();
+  expect(reviewAccessibility.violations).toEqual([]);
+
   await page.getByRole("button",{name:"Evidence",exact:true}).click();
   page.on("dialog",dialog=>dialog.accept("ten absence days were recorded"));
   await page.getByRole("button",{name:"Correct with audit trail"}).click();
