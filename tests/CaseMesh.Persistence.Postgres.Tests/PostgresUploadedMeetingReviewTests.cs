@@ -26,7 +26,7 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
         var bobCsrf = await AttachAntiforgeryAsync(bob);
         var tenantA = await CreateWorkspaceAsync(alice, aliceCsrf, "Synthetic Review workspace A");
         var tenantB = await CreateWorkspaceAsync(bob, bobCsrf, "Synthetic Review workspace B");
-        var matterA = await CreateMatterAsync(alice, aliceCsrf, tenantA, "Synthetic Review Matter A");
+        var matterA = Guid.NewGuid();
 
         var persisted = SyntheticPersistedMatterFactory.Create(new TenantId(tenantA), matterA, 940);
         await using (var brainStore = new PostgresMatterBrainStore(database.AppConnectionString))
@@ -186,14 +186,6 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
         return (await response.Content.ReadFromJsonAsync<WorkspaceResponse>())!.TenantId;
     }
 
-    private static async Task<Guid> CreateMatterAsync(HttpClient client, string csrf, Guid tenantId, string title)
-    {
-        using var response = await SendJsonAsync(client, csrf, HttpMethod.Post,
-            $"/api/workspaces/{tenantId:D}/matters", new { title, jurisdiction = "Synthetic jurisdiction" });
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        return (await response.Content.ReadFromJsonAsync<MatterResponse>())!.Id;
-    }
-
     private static Task<HttpResponseMessage> SendJsonAsync(
         HttpClient client,
         string csrf,
@@ -224,5 +216,4 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
 
     private sealed record CsrfResponse(string Token);
     private sealed record WorkspaceResponse(Guid TenantId);
-    private sealed record MatterResponse(Guid Id);
 }
