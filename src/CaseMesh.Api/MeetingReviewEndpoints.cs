@@ -32,7 +32,7 @@ public static class MeetingReviewEndpoints
 
         try
         {
-            return Results.Ok(new CanonicalLiveContextAdapter().Build(tenant, matterId, loaded, processing));
+            return Results.Ok(new CanonicalLiveContextAdapter().Build(tenant, matterId, loaded.Brain, processing));
         }
         catch (UnauthorizedAccessException)
         {
