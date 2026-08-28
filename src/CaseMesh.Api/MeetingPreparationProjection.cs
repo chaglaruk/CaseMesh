@@ -20,80 +20,7 @@ internal static class MeetingPreparationProjection
         var candidatesById = loaded.Brain.Candidates.ToDictionary(item => item.Id);
         var assertionsById = loaded.Evidence.Assertions.ToDictionary(item => item.Id);
         var eventsById = loaded.Evidence.Events.ToDictionary(item => item.Id);
-        var extractedCanonicalRecords = loaded.Brain.Dependencies
-            .Select(item => (item.CanonicalKind, item.CanonicalId))
-            .ToHashSet();
-        var activeCanonicalRecords = activeDependencies
-            .Select(item => (item.CanonicalKind, item.CanonicalId))
-            .ToHashSet();
-        bool IsCurrentCanonical(CanonicalRecordKind kind, Guid id)
-        {
-            if (extractedCanonicalRecords.Contains((kind, id)) &&
-                !activeCanonicalRecords.Contains((kind, id)))
-            {
-                return false;
-            }
-
-            if (kind != CanonicalRecordKind.AssertionEventLink) return true;
-            var linkDependencies = loaded.Brain.Dependencies
-                .Where(dependency => dependency.CanonicalKind == kind && dependency.CanonicalId == id)
-                .ToArray();
-            if (linkDependencies.Length == 0) return true;
-
-            return linkDependencies
-                .GroupBy(dependency => dependency.CandidateId)
-                .Any(group => candidatesById.TryGetValue(group.Key, out var candidate) &&
-                              candidate.Kind == ExtractionCandidateKind.AssertionEventLink &&
-                              candidate.Disposition == CandidateDisposition.Validated &&
-                              HasCompleteCurrentCandidateProvenance(candidate, kind, id));
-        }
-        bool HasCompleteCurrentCandidateProvenance(
-            ExtractionCandidateRecord candidate,
-            CanonicalRecordKind canonicalKind,
-            Guid canonicalId)
-        {
-            var candidateSources = candidate.SourceSpanIds.Distinct().ToArray();
-            if (candidateSources.Length == 0) return false;
-            var activeSources = activeDependencies
-                .Where(dependency => dependency.CanonicalKind == canonicalKind &&
-                                     dependency.CanonicalId == canonicalId &&
-                                     dependency.CandidateId == candidate.Id)
-                .Select(dependency => dependency.SourceSpanId)
-                .ToHashSet();
-            return candidateSources.All(activeSources.Contains);
-        }
-        bool HasCompleteCurrentEventProvenance(Guid eventId)
-        {
-            var eventDependencies = loaded.Brain.Dependencies
-                .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Event &&
-                                     dependency.CanonicalId == eventId)
-                .ToArray();
-            if (eventDependencies.Length == 0) return true;
-
-            var activeEventDependencies = activeDependencies
-                .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Event &&
-                                     dependency.CanonicalId == eventId)
-                .ToArray();
-            return eventDependencies
-                .GroupBy(dependency => dependency.CandidateId)
-                .Any(group =>
-                {
-                    if (!candidatesById.TryGetValue(group.Key, out var candidate) ||
-                        candidate.Kind != ExtractionCandidateKind.Event ||
-                        candidate.Disposition != CandidateDisposition.Validated)
-                    {
-                        return false;
-                    }
-
-                    var candidateSources = candidate.SourceSpanIds.Distinct().ToArray();
-                    if (candidateSources.Length == 0) return false;
-                    var activeSources = activeEventDependencies
-                        .Where(dependency => dependency.CandidateId == group.Key)
-                        .Select(dependency => dependency.SourceSpanId)
-                        .ToHashSet();
-                    return candidateSources.All(activeSources.Contains);
-                });
-        }
+        var policy = new CanonicalEvidencePolicy(loaded.Brain);
 
         var correctedAssertionIds = loaded.Evidence.AuditEvents
             .Where(item => item.Kind == AuditEventKind.AssertionCorrected && item.ReplacementEntityId.HasValue)
@@ -105,37 +32,29 @@ internal static class MeetingPreparationProjection
             .ToHashSet();
         bool HasCurrentCorrectionDateConflict(MatterEvent matterEvent) => loaded.Evidence.AssertionEventLinks
             .Where(link => link.EventId == matterEvent.Id &&
-                           IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
+                           policy.IsCurrentAssertionEventLink(link.Id) &&
                            link.Relation == AssertionEventRelation.Supports &&
                            correctedAssertionIds.Contains(link.AssertionId))
             .Select(link => assertionsById.TryGetValue(link.AssertionId, out var assertion) ? assertion : null)
             .Where(assertion => assertion is not null &&
-                                assertion.SupersededByAssertionId is null &&
-                                assertion.DisputeState != DisputeState.Superseded &&
-                                assertion.VerificationState != VerificationState.Rejected)
+                                policy.IsCurrentAttributedAssertion(assertion, requireDocumentarySource: false))
             .Any(assertion => assertion!.EventTime.HasValue && assertion.EventTime != matterEvent.StartTime);
 
         var currentAssertions = loaded.Evidence.Assertions
-            .Where(item => item.SourceSpanId.HasValue &&
-                           item.SupersededByAssertionId is null &&
-                           item.DisputeState != DisputeState.Superseded &&
-                           item.VerificationState != VerificationState.Rejected &&
-                           item.OriginClass != EvidenceOriginClass.AiGeneratedInference &&
-                           item.AssertionClass != AssertionClass.AiInference &&
-                           IsCurrentCanonical(CanonicalRecordKind.Assertion, item.Id))
+            .Where(item => policy.IsCurrentAttributedAssertion(item, requireDocumentarySource: true))
             .OrderBy(item => item.EventTime ?? item.AssertedAt)
             .ThenBy(item => item.Id)
             .ToArray();
         var currentAssertionIds = currentAssertions.Select(item => item.Id).ToHashSet();
         var currentSupersedingAssertionIds = loaded.Evidence.AssertionEventLinks
-            .Where(link => IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
+            .Where(link => policy.IsCurrentAssertionEventLink(link.Id) &&
                            link.Relation == AssertionEventRelation.Supersedes &&
                            currentAssertionIds.Contains(link.AssertionId))
             .Select(link => link.AssertionId)
             .ToHashSet();
         bool HasCurrentSupersedingEvidence(Guid eventId) => loaded.Evidence.AssertionEventLinks.Any(link =>
             link.EventId == eventId &&
-            IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
+            policy.IsCurrentAssertionEventLink(link.Id) &&
             link.Relation == AssertionEventRelation.Supersedes &&
             currentAssertionIds.Contains(link.AssertionId));
 
@@ -144,7 +63,7 @@ internal static class MeetingPreparationProjection
             var relationSet = relations.ToHashSet();
             return loaded.Evidence.AssertionEventLinks
                 .Where(link => link.EventId == matterEvent.Id &&
-                               IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
+                               policy.IsCurrentAssertionEventLink(link.Id) &&
                                currentAssertionIds.Contains(link.AssertionId) &&
                                relationSet.Contains(link.Relation))
                 .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
@@ -165,7 +84,7 @@ internal static class MeetingPreparationProjection
             if (!matterEvent.StartTime.HasValue) return [];
             return loaded.Evidence.AssertionEventLinks
                 .Where(link => link.EventId == matterEvent.Id &&
-                               IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
+                               policy.IsCurrentAssertionEventLink(link.Id) &&
                                link.Relation == AssertionEventRelation.Supports &&
                                currentAssertionIds.Contains(link.AssertionId))
                 .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
@@ -183,7 +102,7 @@ internal static class MeetingPreparationProjection
             if (!matterEvent.StartTime.HasValue) return [];
             return loaded.Evidence.AssertionEventLinks
                 .Where(link => link.EventId == matterEvent.Id &&
-                               IsCurrentCanonical(CanonicalRecordKind.AssertionEventLink, link.Id) &&
+                               policy.IsCurrentAssertionEventLink(link.Id) &&
                                link.Relation == AssertionEventRelation.Supports &&
                                currentAssertionIds.Contains(link.AssertionId))
                 .Join(currentAssertions, link => link.AssertionId, assertion => assertion.Id,
@@ -274,10 +193,8 @@ internal static class MeetingPreparationProjection
             }).ToArray();
 
         var chronology = loaded.Evidence.Events
-            .Where(item => item.Status is not (EventStatus.Superseded or EventStatus.Rejected) &&
+            .Where(item => policy.IsCurrentEvent(item) &&
                            !correctedEventIds.Contains(item.Id) &&
-                           IsCurrentCanonical(CanonicalRecordKind.Event, item.Id) &&
-                           HasCompleteCurrentEventProvenance(item.Id) &&
                            !HasCurrentSupersedingEvidence(item.Id) &&
                            !HasCurrentCorrectionDateConflict(item))
             .Select(item =>
@@ -387,32 +304,42 @@ internal static class MeetingPreparationProjection
 
         var unresolvedDisputes = loaded.Evidence.Contradictions
             .Where(item => item.ResolutionState == ContradictionResolutionState.Unresolved &&
-                           IsCurrentCanonical(CanonicalRecordKind.Contradiction, item.Id) &&
-                           IsCurrentCanonical(CanonicalRecordKind.Assertion, item.AssertionAId) &&
-                           IsCurrentCanonical(CanonicalRecordKind.Assertion, item.AssertionBId))
+                           policy.IsCurrentContradiction(item) &&
+                           assertionsById.TryGetValue(item.AssertionAId, out var first) &&
+                           policy.IsCurrentAttributedAssertion(first, requireDocumentarySource: false) &&
+                           assertionsById.TryGetValue(item.AssertionBId, out var second) &&
+                           policy.IsCurrentAttributedAssertion(second, requireDocumentarySource: false))
             .OrderBy(item => item.Id)
             .Select(item =>
             {
-                assertionsById.TryGetValue(item.AssertionAId, out var first);
-                assertionsById.TryGetValue(item.AssertionBId, out var second);
-                var sourceSpanIds = new[] { first?.SourceSpanId, second?.SourceSpanId }
+                var first = assertionsById[item.AssertionAId];
+                var second = assertionsById[item.AssertionBId];
+                var sourceSpanIds = new[] { first.SourceSpanId, second.SourceSpanId }
                     .Where(id => id.HasValue)
                     .Select(id => id!.Value)
                     .Distinct()
                     .OrderBy(id => id)
                     .ToArray();
+                var detectionOrigin = policy.GetContradictionDetectionOrigin(item);
+                var aiAnalysis = detectionOrigin == ContradictionDetectionOrigin.StructuredExtractionAnalysis;
                 return new
                 {
                     item.Id,
                     type = item.Type.ToString(),
                     resolutionState = item.ResolutionState.ToString(),
+                    detectionOrigin = detectionOrigin.ToString(),
+                    aiAnalysis,
                     assertions = new[]
                     {
                         DisputedAssertion(first),
                         DisputedAssertion(second)
                     }.Where(assertion => assertion is not null).ToArray(),
                     sourceSpanIds,
-                    notice = "Conflicting attributed statements remain unresolved."
+                    notice = aiAnalysis
+                        ? "AI analysis detected a possible conflict between current attributed statements. Review the cited documentary evidence; the analysis is not itself documentary fact."
+                        : detectionOrigin == ContradictionDetectionOrigin.DeterministicRule
+                            ? "A deterministic evidence rule detected conflicting current attributed statements. The rule does not decide which account is true."
+                            : "Conflicting attributed statements remain unresolved."
                 };
             }).ToArray();
 
@@ -429,7 +356,7 @@ internal static class MeetingPreparationProjection
         }).ToArray();
 
         var currentPeople = loaded.Brain.People
-            .Where(item => IsCurrentCanonical(CanonicalRecordKind.Person, item.Id))
+            .Where(item => policy.IsCanonicalCurrent(CanonicalRecordKind.Person, item.Id))
             .ToArray();
         var participants = currentPeople
             .GroupBy(item => loaded.Brain.ResolveEntityId(CanonicalEntityKind.Person, item.Id))
@@ -456,8 +383,8 @@ internal static class MeetingPreparationProjection
                                                 candidate.Disposition == CandidateDisposition.Validated)
                             .ToArray();
                         var completeActiveCandidates = activeCandidates
-                            .Where(candidate => HasCompleteCurrentCandidateProvenance(
-                                candidate, CanonicalRecordKind.Person, member.Id))
+                            .Where(candidate => policy.HasCompleteValidatedCandidateProvenance(
+                                CanonicalRecordKind.Person, member.Id, ExtractionCandidateKind.Person))
                             .ToArray();
                         var fieldsSourceBacked = completeActiveCandidates.Length > 0 &&
                                                  completeActiveCandidates.All(candidate => CandidateSupportsParticipant(candidate, member));
@@ -511,8 +438,8 @@ internal static class MeetingPreparationProjection
                             .Distinct()
                             .Where(item => candidatesById.ContainsKey(item.CandidateId))
                             .Where(item => CandidateSupportsAlias(candidatesById[item.CandidateId], alias.NormalizedValue))
-                            .Where(item => HasCompleteCurrentCandidateProvenance(
-                                candidatesById[item.CandidateId], CanonicalRecordKind.Person, item.CanonicalId))
+                            .Where(item => policy.HasCompleteValidatedCandidateProvenance(
+                                CanonicalRecordKind.Person, item.CanonicalId, ExtractionCandidateKind.Person))
                             .Select(item => item.CandidateId)
                             .ToHashSet();
                         var sourceSpanIds = activeDependencies
@@ -616,6 +543,7 @@ internal static class MeetingPreparationProjection
             {
                 "Meeting preparation is evidence organisation, not legal advice or a prediction of outcome.",
                 "Attributed statements and unresolved contradictions remain labelled; CaseMesh does not silently resolve them.",
+                "AI-derived contradiction detection is analysis and is explicitly separated from documentary evidence.",
                 "Human corrections are audit history, not documentary evidence; historical citations never silently transfer to corrected wording or dates.",
                 "External legal guidance and Live meeting assistance are separate surfaces."
             }
