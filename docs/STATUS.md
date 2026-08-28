@@ -2,16 +2,16 @@
 
 Last update: 2026-08-28.
 
-The commercial Matter evidence platform through Milestone 11 is merged. Issue #29 / draft PR #30 is implementing the canonical CaseMesh Live/Review foundation. This repository work does **not** upgrade any real Windows/Teams/audio readiness gate.
+The commercial Matter evidence platform through Milestone 12 is merged. Issue #31 / draft PR #32 is hardening the canonical CaseMesh Live/Review projection after late post-merge review findings. This repository work does **not** upgrade any real Windows/Teams/audio readiness gate.
 
 | Area | Status | Notes |
 |---|---|---|
-| Canonical Matter -> Live/Review boundary | IN_PROGRESS | `CaseMesh.Live` adds a platform-neutral read-only canonical context adapter, exact documentary provenance, separate source-less attributed statements and AI analysis, explicit meeting origins, and tenant-scoped Review context. PR #30 remains draft until its full gates pass. |
+| Canonical Matter -> Live/Review boundary | MERGED_HARDENING_IN_PROGRESS | Milestone 12 merged as `0bb9124a6ba91a7028553c9e4928bb36570d6708`. Issue #31 / PR #32 addresses late correctness/performance findings before the next product milestone. |
 | Repository architecture | PARTIAL | Commercial PostgreSQL Matter state is the evidence system of record; the legacy local Windows `MeetingState`/SQLite stack remains a compatibility/runtime prototype for later Live work. Real hardware gates remain open. |
-| Build / automated tests | VERIFIED_FOR_AUTOMATED_SCOPE | The Milestone 12 foundation is included in the solution and automated CI. A passing build/test proves only deterministic/software behavior, not live Teams/audio behavior. |
-| Core orchestration | AUTOMATED_ONLY | Speaker ownership, chronological meeting state, deterministic older-turn compaction, six-second live budget, 1.5-second optional analysis budget, latest-turn-wins cancellation, durable final turns and fake overlap/timeout tests are implemented in the legacy Live runtime. |
-| Canonical Live context provenance | AUTOMATED_ONLY | Documentary items preserve exact SourceSpan, DocumentVersion, immutable original-object id and SHA-256; non-current documentary records are historical; source-less current attributed statements and AI analysis are separate and uncited. Independent review is still pending while PR #30 is draft. |
-| Uploaded meeting/transcript review foundation | AUTOMATED_ONLY | `HrSaid`, `UserActuallySaid` and `AiSuggested` remain distinct. Matter evidence references are context citations only and may resolve only to current canonical documentary evidence; they do not become provenance for spoken wording. Real uploaded-file product flow remains later work. |
+| Build / automated tests | VERIFIED_FOR_AUTOMATED_SCOPE | The canonical Live foundation and hardening are covered by solution and CI tests. Passing automated tests proves deterministic/software behavior only, not real Teams/audio behavior. |
+| Core orchestration | AUTOMATED_ONLY | Speaker ownership, chronological meeting state, deterministic older-turn compaction, live budgets, latest-turn-wins cancellation, durable final turns and fake overlap/timeout tests remain implemented in the legacy Live runtime. |
+| Canonical Live context provenance | HARDENING_IN_PROGRESS | Documentary items reference exact canonical SourceSpan provenance; default Review context no longer needs aggregate exact source text inline. Source metadata includes immutable document/original/hash linkage, exact-text digest/length, parser version and extraction confidence; exact text is retrieved separately through tenant/Matter-scoped Review source detail. Source-less current/historical statements and AI analysis remain separate and uncited. |
+| Uploaded meeting/transcript review foundation | AUTOMATED_ONLY | `HrSaid`, `UserActuallySaid` and `AiSuggested` remain distinct. Matter evidence references are context citations only and may resolve only to current canonical documentary evidence. Real uploaded-file product flow is the next product milestone after PR #32. |
 | SQLite schema / FTS5 | AUTOMATED_ONLY | Legacy local documents, chunks, facts, transcripts, FTS5/BM25 and tests remain buildable; they are not the commercial evidence authority. |
 | TXT/MD/HTML/DOCX/EML/PDF legacy local ingestion | AUTOMATED_ONLY | Recursive import, SHA-256 deduplication, per-file failure isolation, source locators, empty/scanned-text detection and repeated-evidence de-crowding authored. Real representative private-file validation remains pending for the local Live track. |
 | Working-context seed import | AUTOMATED_ONLY | Separate `.hrcontext` path maps USER_POSITION vs UNVERIFIED context without creating false documentary evidence; tests authored. |
@@ -27,14 +27,29 @@ The commercial Matter evidence platform through Milestone 11 is merged. Issue #2
 | Coordinator concurrency test | AUTOMATED_ONLY | Deterministic tests cover cancellation/latest-turn-wins/persistence behavior with fake dependencies. |
 | 30-minute rehearsal | NOT_ATTEMPTED | Required before real meeting-ready status. |
 
-## Current Milestone 12 constraints
+## Current canonical Live hardening constraints
 
 - Canonical PostgreSQL Matter state remains the only commercial evidence authority.
-- The new Review/Live context must not copy evidence into a parallel persistence store.
-- A user correction or other source-less statement must not inherit documentary provenance it does not possess.
+- Review/Live context must not copy evidence into a parallel persistence store.
+- Default context must not inline unbounded aggregate exact source text; exact source text is retrieved on demand through an authenticated tenant/Matter/source path.
+- SourceSpan parser/extraction metadata and assertion extraction confidence must survive the boundary where applicable.
+- Source-less corrected/rejected statements remain visible as historical attributed statements and never acquire documentary provenance.
 - AI analysis and `AI_SUGGESTED` content must not become documentary fact or `USER_ACTUALLY_SAID`.
+- Structured-extraction contradiction provenance remains auditable; trusted human-correction rules remain labelled deterministic.
 - Context citations shown beside a conversation item do not prove that the participant spoke the cited wording.
-- Cross-tenant Review/Live context access must fail closed.
+- Cross-tenant Review/Live context and source-detail access must fail closed.
+
+## Next product milestone after PR #32
+
+Uploaded meeting/transcript Review on the hardened canonical boundary:
+
+- uploaded transcript/recording-derived transcript ingestion and review;
+- explicit `HR_SAID` / `USER_ACTUALLY_SAID` ownership;
+- AI analysis and `AI_SUGGESTED` kept separate;
+- contradictions, commitments, unanswered questions, factual gaps and follow-up items grounded in canonical Matter context;
+- exact source inspection without promoting transcript/model content to established fact.
+
+Real-time CaseMesh Live remains later and requires the separate local gates below.
 
 ## Local-only gates still open
 
