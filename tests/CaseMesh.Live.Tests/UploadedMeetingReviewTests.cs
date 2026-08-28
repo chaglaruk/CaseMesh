@@ -1,4 +1,5 @@
 using CaseMesh.Core.Models;
+using Xunit;
 
 namespace CaseMesh.Live.Tests;
 
