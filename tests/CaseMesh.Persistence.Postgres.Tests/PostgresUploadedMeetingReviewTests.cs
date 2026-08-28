@@ -202,28 +202,43 @@ public sealed class PostgresUploadedMeetingReviewTests(PostgresFixture database)
         await using (var admin = new NpgsqlConnection(database.AdminConnectionString))
         {
             await admin.OpenAsync();
-            await using var command = new NpgsqlCommand("""
+            await using (var insertSource = new NpgsqlCommand("""
                 INSERT INTO casemesh.source_spans
                     (tenant_id,matter_id,source_span_id,document_version_id,page_number,
                      extracted_text,extracted_text_digest,parser_version)
                 VALUES ($1,$2,$3,$4,99,$5,$6,$7);
+                """, admin))
+            {
+                PostgresMatterStore.AddParameters(insertSource,
+                    tenantA,
+                    matterA,
+                    removedSourceId,
+                    sourceTemplate.DocumentVersionId,
+                    "Synthetic source removed after Review attachment.",
+                    new string('E', 64),
+                    "synthetic-parser/1");
+                Assert.Equal(1, await insertSource.ExecuteNonQueryAsync());
+            }
+
+            await using (var insertCitation = new NpgsqlCommand("""
                 INSERT INTO casemesh.uploaded_meeting_review_context_citations
                     (tenant_id,matter_id,meeting_id,item_id,source_span_id,ordinal)
-                VALUES ($1,$2,$8,$9,$3,1);
+                VALUES ($1,$2,$3,$4,$5,1);
+                """, admin))
+            {
+                PostgresMatterStore.AddParameters(insertCitation,
+                    tenantA, matterA, meetingId, itemId, removedSourceId);
+                Assert.Equal(1, await insertCitation.ExecuteNonQueryAsync());
+            }
+
+            await using (var deleteSource = new NpgsqlCommand("""
                 DELETE FROM casemesh.source_spans
                 WHERE tenant_id=$1 AND matter_id=$2 AND source_span_id=$3;
-                """, admin);
-            PostgresMatterStore.AddParameters(command,
-                tenantA,
-                matterA,
-                removedSourceId,
-                sourceTemplate.DocumentVersionId,
-                "Synthetic source removed after Review attachment.",
-                new string('E', 64),
-                "synthetic-parser/1",
-                meetingId,
-                itemId);
-            await command.ExecuteNonQueryAsync();
+                """, admin))
+            {
+                PostgresMatterStore.AddParameters(deleteSource, tenantA, matterA, removedSourceId);
+                Assert.Equal(1, await deleteSource.ExecuteNonQueryAsync());
+            }
         }
 
         await using var matterStore = new PostgresMatterStore(database.AppConnectionString);
