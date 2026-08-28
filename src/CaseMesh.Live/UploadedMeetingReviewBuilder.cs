@@ -34,7 +34,6 @@ public sealed class UploadedMeetingReviewBuilder
         var totalCharacters = 0;
         DateTimeOffset? earliest = null;
         DateTimeOffset? latest = null;
-        DateTimeOffset? previousStartedAt = null;
         foreach (var item in items)
         {
             if (item.Id == Guid.Empty || !ids.Add(item.Id))
@@ -65,12 +64,6 @@ public sealed class UploadedMeetingReviewBuilder
             {
                 throw new InvalidOperationException("Meeting review item timestamps are invalid.");
             }
-
-            if (previousStartedAt.HasValue && item.StartedAt < previousStartedAt.Value)
-            {
-                throw new InvalidOperationException("Meeting review items must be supplied in chronological start-time order.");
-            }
-            previousStartedAt = item.StartedAt;
 
             earliest = earliest.HasValue && earliest.Value <= item.StartedAt ? earliest : item.StartedAt;
             latest = latest.HasValue && latest.Value >= item.EndedAt ? latest : item.EndedAt;
@@ -104,10 +97,14 @@ public sealed class UploadedMeetingReviewBuilder
         }
 
         var normalized = items
-            .Select(item => item with
+            .Select((item, inputOrdinal) => new { Item = item, InputOrdinal = inputOrdinal })
+            .OrderBy(entry => entry.Item.StartedAt)
+            .ThenBy(entry => entry.Item.EndedAt)
+            .ThenBy(entry => entry.InputOrdinal)
+            .Select(entry => entry.Item with
             {
-                Text = item.Text.Trim(),
-                ContextCitationSourceSpanIds = item.ContextCitationSourceSpanIds.OrderBy(id => id).ToArray()
+                Text = entry.Item.Text.Trim(),
+                ContextCitationSourceSpanIds = entry.Item.ContextCitationSourceSpanIds.OrderBy(id => id).ToArray()
             })
             .ToArray();
 
