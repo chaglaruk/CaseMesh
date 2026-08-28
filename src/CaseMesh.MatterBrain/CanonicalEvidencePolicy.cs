@@ -90,14 +90,18 @@ public sealed class CanonicalEvidencePolicy
             return true;
         }
 
-        return dependencies
-            .Select(dependency => dependency.CandidateId)
-            .Distinct()
-            .Where(_candidatesById.ContainsKey)
-            .Select(candidateId => _candidatesById[candidateId])
-            .Where(candidate => candidate.Kind == candidateKind)
-            .Any(candidate => HasCompleteValidatedCandidateProvenance(candidate, canonicalKind, canonicalId));
+        return CompleteCandidates(canonicalKind, canonicalId, candidateKind).Any();
     }
+
+    public IReadOnlyList<Guid> CompleteCandidateSourceIds(
+        CanonicalRecordKind canonicalKind,
+        Guid canonicalId,
+        ExtractionCandidateKind candidateKind) =>
+        CompleteCandidates(canonicalKind, canonicalId, candidateKind)
+            .SelectMany(candidate => candidate.SourceSpanIds)
+            .Distinct()
+            .OrderBy(id => id)
+            .ToArray();
 
     public bool IsCurrentExtractedRecord(
         CanonicalRecordKind canonicalKind,
@@ -154,27 +158,42 @@ public sealed class CanonicalEvidencePolicy
     public ContradictionDetectionOrigin GetContradictionDetectionOrigin(Contradiction contradiction)
     {
         ArgumentNullException.ThrowIfNull(contradiction);
-        var candidateIds = _state.Dependencies
+        var contradictionDependencies = _state.Dependencies
             .Where(dependency => dependency.CanonicalKind == CanonicalRecordKind.Contradiction &&
                                  dependency.CanonicalId == contradiction.Id)
-            .Select(dependency => dependency.CandidateId)
-            .Distinct()
             .ToArray();
-        if (candidateIds.Length == 0)
+        if (contradictionDependencies.Length == 0)
         {
             return ContradictionDetectionOrigin.CanonicalRecord;
         }
 
-        var candidates = candidateIds
-            .Where(_candidatesById.ContainsKey)
-            .Select(id => _candidatesById[id])
-            .Where(candidate => candidate.Kind == ExtractionCandidateKind.Contradiction &&
-                                candidate.Disposition == CandidateDisposition.Validated)
-            .ToArray();
-        return candidates.Any(candidate => IsTrustedDeterministicRuleCandidate(candidate, contradiction))
+        var currentCandidates = CompleteCandidates(
+            CanonicalRecordKind.Contradiction,
+            contradiction.Id,
+            ExtractionCandidateKind.Contradiction).ToArray();
+        if (currentCandidates.Length == 0)
+        {
+            return ContradictionDetectionOrigin.StructuredExtractionAnalysis;
+        }
+
+        return currentCandidates.Any(candidate => IsTrustedDeterministicRuleCandidate(candidate, contradiction))
             ? ContradictionDetectionOrigin.DeterministicRule
             : ContradictionDetectionOrigin.StructuredExtractionAnalysis;
     }
+
+    private IEnumerable<ExtractionCandidateRecord> CompleteCandidates(
+        CanonicalRecordKind canonicalKind,
+        Guid canonicalId,
+        ExtractionCandidateKind candidateKind) =>
+        _state.Dependencies
+            .Where(dependency => dependency.CanonicalKind == canonicalKind &&
+                                 dependency.CanonicalId == canonicalId)
+            .Select(dependency => dependency.CandidateId)
+            .Distinct()
+            .Where(_candidatesById.ContainsKey)
+            .Select(candidateId => _candidatesById[candidateId])
+            .Where(candidate => candidate.Kind == candidateKind &&
+                                HasCompleteValidatedCandidateProvenance(candidate, canonicalKind, canonicalId));
 
     private static bool IsTrustedDeterministicRuleCandidate(
         ExtractionCandidateRecord candidate,
