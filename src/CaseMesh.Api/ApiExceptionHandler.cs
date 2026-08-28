@@ -29,9 +29,12 @@ public sealed class ApiExceptionHandler(
         logger.LogWarning("API request failed with type {ExceptionType} and status {StatusCode}.",
             exception.GetType().Name, status);
         context.Response.StatusCode = status;
-        context.Response.Headers["Cache-Control"] = "no-store, private";
-        context.Response.Headers["Pragma"] = "no-cache";
-        context.Response.Headers["Expires"] = "0";
+        ApplyPrivateNoStore(context.Response);
+        context.Response.OnStarting(static state =>
+        {
+            ApplyPrivateNoStore((HttpResponse)state);
+            return Task.CompletedTask;
+        }, context.Response);
         if (status == StatusCodes.Status404NotFound)
             return true;
         var problem = new Microsoft.AspNetCore.Mvc.ProblemDetails
@@ -48,5 +51,12 @@ public sealed class ApiExceptionHandler(
             HttpContext = context,
             ProblemDetails = problem
         });
+    }
+
+    private static void ApplyPrivateNoStore(HttpResponse response)
+    {
+        response.Headers["Cache-Control"] = "no-store, private";
+        response.Headers["Pragma"] = "no-cache";
+        response.Headers["Expires"] = "0";
     }
 }
