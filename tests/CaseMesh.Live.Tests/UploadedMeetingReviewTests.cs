@@ -48,6 +48,27 @@ public sealed class UploadedMeetingReviewTests
     }
 
     [Fact]
+    public void Builder_preserves_input_order_when_transcript_timestamps_tie()
+    {
+        var fixture = CreateContext();
+        var builder = new UploadedMeetingReviewBuilder();
+        var now = DateTimeOffset.Parse("2026-08-28T10:00:00Z");
+        var firstId = Guid.Parse("f0000000-0000-0000-0000-000000000001");
+        var secondId = Guid.Parse("10000000-0000-0000-0000-000000000001");
+
+        var review = builder.Build(
+            fixture.Context,
+            Guid.NewGuid(),
+            [
+                new LiveConversationItem(firstId, LiveConversationOrigin.HrSaid, "First at tied timestamp.", now, now, []),
+                new LiveConversationItem(secondId, LiveConversationOrigin.UserActuallySaid, "Second at tied timestamp.", now, now, [])
+            ]);
+
+        Assert.Equal([firstId, secondId], review.Items.Select(item => item.Id));
+        Assert.Equal(["First at tied timestamp.", "Second at tied timestamp."], review.Items.Select(item => item.Text));
+    }
+
+    [Fact]
     public void Analyzer_preserves_review_history_without_promoting_context_to_spoken_provenance()
     {
         var fixture = CreateContext();
