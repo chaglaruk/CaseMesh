@@ -9,6 +9,7 @@ public interface IRealtimeTranscriber : IAsyncDisposable
 {
     SpeakerRole Speaker { get; }
     event EventHandler<TranscriptionUpdate>? Updated;
+    event EventHandler<Exception>? Failed;
     Task StartAsync(CancellationToken cancellationToken = default);
     ValueTask SendAsync(AudioFrame frame, CancellationToken cancellationToken = default);
     Task StopAsync(CancellationToken cancellationToken = default);

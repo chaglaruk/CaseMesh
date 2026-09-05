@@ -88,6 +88,23 @@ public sealed class LiveMeetingCoordinatorTests
         fixture.AssertStoppedCleanly();
     }
 
+    [Fact]
+    public async Task TranscriberFailure_IsReportedImmediately()
+    {
+        var fixture = new CoordinatorFixture();
+        await using var coordinator = fixture.CreateCoordinator();
+        var failureReported = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.NonFatalError += (_, exception) => failureReported.TrySetResult(exception);
+
+        await coordinator.StartAsync();
+        fixture.UserTranscriber.Fail(new InvalidOperationException("Transcription service rejected the session."));
+        var failure = await failureReported.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await coordinator.StopAsync();
+
+        Assert.Contains("rejected", failure.Message, StringComparison.Ordinal);
+        fixture.AssertStoppedCleanly();
+    }
+
     private sealed class CoordinatorFixture
     {
         public FakeAudioSource HrAudio { get; } = new(SpeakerRole.Hr);
@@ -147,6 +164,7 @@ public sealed class LiveMeetingCoordinatorTests
         public SpeakerRole Speaker { get; } = speaker;
         public int StopCalls { get; private set; }
         public event EventHandler<TranscriptionUpdate>? Updated;
+        public event EventHandler<Exception>? Failed;
 
         public Task StartAsync(CancellationToken cancellationToken = default)
         {
@@ -171,6 +189,8 @@ public sealed class LiveMeetingCoordinatorTests
 
         public void EmitFinal(string text, string itemId) =>
             Updated?.Invoke(this, new TranscriptionUpdate(text, true, DateTimeOffset.UtcNow, itemId));
+
+        public void Fail(Exception exception) => Failed?.Invoke(this, exception);
     }
 
     private sealed class BlockingAiService : IMeetingAiService

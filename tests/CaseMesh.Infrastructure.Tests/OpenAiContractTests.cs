@@ -35,6 +35,84 @@ public sealed class OpenAiContractTests
     }
 
     [Fact]
+    public void RealtimeTranscriptionContract_UsesTranscriptionIntentAndVadCompatibleModel()
+    {
+        var options = new OpenAiOptions();
+
+        var uri = OpenAiRealtimeTranscriber.BuildConnectionUri(options);
+        var update = JsonSerializer.SerializeToElement(OpenAiRealtimeTranscriber.CreateSessionUpdate(options));
+        var input = update.GetProperty("session").GetProperty("audio").GetProperty("input");
+        var transcription = input.GetProperty("transcription");
+
+        Assert.Equal("wss://api.openai.com/v1/realtime?intent=transcription", uri.AbsoluteUri);
+        Assert.Equal("transcription", update.GetProperty("session").GetProperty("type").GetString());
+        Assert.Equal("gpt-4o-mini-transcribe", transcription.GetProperty("model").GetString());
+        Assert.Equal("en", transcription.GetProperty("language").GetString());
+        Assert.Equal("server_vad", input.GetProperty("turn_detection").GetProperty("type").GetString());
+        Assert.False(transcription.TryGetProperty("languages", out _));
+        Assert.False(transcription.TryGetProperty("keywords", out _));
+        Assert.False(transcription.TryGetProperty("delay", out _));
+    }
+
+    [Fact]
+    public void ParseServerMessage_PreservesActionableErrorWithoutWholePayload()
+    {
+        const string payload = """
+            {
+              "type": "error",
+              "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_model",
+                "param": "model",
+                "message": "The selected model cannot start this session."
+              },
+              "unrelated": "must not be included"
+            }
+            """;
+
+        var serverEvent = OpenAiRealtimeTranscriber.ParseServerMessage(payload);
+
+        Assert.Equal("error", serverEvent.Type);
+        Assert.Contains("code=invalid_model", serverEvent.Error, StringComparison.Ordinal);
+        Assert.Contains("parameter=model", serverEvent.Error, StringComparison.Ordinal);
+        Assert.Contains("cannot start", serverEvent.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("unrelated", serverEvent.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ItemTranscriptionFailure_IsReportedWithoutSuppressingLaterCompletion()
+    {
+        await using var transcriber = new OpenAiRealtimeTranscriber(
+            SpeakerRole.User,
+            new EnvironmentApiKeyStore("unused"),
+            Options.Create(new OpenAiOptions()));
+        var failures = new List<Exception>();
+        var updates = new List<TranscriptionUpdate>();
+        transcriber.Failed += (_, exception) => failures.Add(exception);
+        transcriber.Updated += (_, update) => updates.Add(update);
+
+        transcriber.ProcessServerMessage("""
+            {
+              "type": "conversation.item.input_audio_transcription.failed",
+              "error": { "code": "audio_unintelligible", "message": "Could not transcribe this item." }
+            }
+            """);
+        transcriber.ProcessServerMessage("""
+            {
+              "type": "conversation.item.input_audio_transcription.completed",
+              "item_id": "later-item",
+              "transcript": "A later turn still succeeds."
+            }
+            """);
+
+        Assert.Single(failures);
+        var update = Assert.Single(updates);
+        Assert.True(update.IsFinal);
+        Assert.Equal("later-item", update.ItemId);
+        Assert.Equal("A later turn still succeeds.", update.Text);
+    }
+
+    [Fact]
     public void FtsQuery_QuotesAndLimitsUserTerms()
     {
         var query = SqliteCaseRepository.ToFtsQuery("Occupational Health redeployment; confirm Monday?");
