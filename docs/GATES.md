@@ -99,7 +99,7 @@ Record median and p95 latency from realistic rehearsal. Do not hard-code an unve
 
 ## Gate 6 — Overlay usability
 
-**Status: PARTIAL (local Windows, 2026-09-05).** With Teams foregrounded, typed text remained in Teams while the topmost CaseMesh overlay stayed visible and did not take focus. Manual fallback produced and displayed assistance; SAY was visually prominent, WATCH/ASK headings used distinct colours, and NO CASE EVIDENCE was clear at a glance. The tester noted weak WATCH/ASK typography hierarchy. Evidence-backed locator display was not exercised. Closing the main window while the overlay was open exposed an orphan-process defect; `fix/overlay-shutdown-lifecycle` (`fc2485d5e2dec84663d9b59548bc584b79b6ffac`) fixed it, and a direct repeat confirmed that both windows and the process closed.
+**Status: PARTIAL (local Windows, 2026-09-05).** With Teams foregrounded, typed text remained in Teams while the topmost CaseMesh overlay stayed visible and did not take focus. Manual fallback produced and displayed assistance; SAY was visually prominent, WATCH/ASK headings used distinct colours, and NO CASE EVIDENCE was clear at a glance. The tester noted weak WATCH/ASK typography hierarchy. Evidence-backed locator display was not exercised. Closing the main window while the overlay was open exposed an orphan-process defect; `fix/overlay-shutdown-lifecycle` (`64be9842ce3ecd62700ad9398303273088eefee3`) fixed it, and direct repeats confirmed that the independent overlay survived main-window minimization, then both windows and the process closed on main-window exit.
 
 Required:
 
