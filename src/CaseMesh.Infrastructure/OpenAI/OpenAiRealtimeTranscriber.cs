@@ -127,10 +127,14 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
         }
     }
 
-    private void ProcessServerMessage(string json)
+    internal void ProcessServerMessage(string json)
     {
         var serverEvent = ParseServerMessage(json);
-        ThrowIfServerError(serverEvent);
+        if (serverEvent.Error is not null)
+        {
+            Failed?.Invoke(this, CreateServerException(serverEvent));
+            return;
+        }
         if (serverEvent.Type is not ("conversation.item.input_audio_transcription.delta" or "conversation.item.input_audio_transcription.completed")) return;
 
         Updated?.Invoke(this, new(
@@ -229,8 +233,11 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
     private static void ThrowIfServerError(RealtimeServerEvent serverEvent)
     {
         if (serverEvent.Error is not null)
-            throw new InvalidOperationException($"OpenAI realtime transcription failed: {serverEvent.Error}");
+            throw CreateServerException(serverEvent);
     }
+
+    private static InvalidOperationException CreateServerException(RealtimeServerEvent serverEvent) =>
+        new($"OpenAI realtime transcription failed: {serverEvent.Error}");
 
     private async Task SendJsonAsync(object payload, CancellationToken cancellationToken)
     {

@@ -80,6 +80,39 @@ public sealed class OpenAiContractTests
     }
 
     [Fact]
+    public async Task ItemTranscriptionFailure_IsReportedWithoutSuppressingLaterCompletion()
+    {
+        await using var transcriber = new OpenAiRealtimeTranscriber(
+            SpeakerRole.User,
+            new EnvironmentApiKeyStore("unused"),
+            Options.Create(new OpenAiOptions()));
+        var failures = new List<Exception>();
+        var updates = new List<TranscriptionUpdate>();
+        transcriber.Failed += (_, exception) => failures.Add(exception);
+        transcriber.Updated += (_, update) => updates.Add(update);
+
+        transcriber.ProcessServerMessage("""
+            {
+              "type": "conversation.item.input_audio_transcription.failed",
+              "error": { "code": "audio_unintelligible", "message": "Could not transcribe this item." }
+            }
+            """);
+        transcriber.ProcessServerMessage("""
+            {
+              "type": "conversation.item.input_audio_transcription.completed",
+              "item_id": "later-item",
+              "transcript": "A later turn still succeeds."
+            }
+            """);
+
+        Assert.Single(failures);
+        var update = Assert.Single(updates);
+        Assert.True(update.IsFinal);
+        Assert.Equal("later-item", update.ItemId);
+        Assert.Equal("A later turn still succeeds.", update.Text);
+    }
+
+    [Fact]
     public void FtsQuery_QuotesAndLimitsUserTerms()
     {
         var query = SqliteCaseRepository.ToFtsQuery("Occupational Health redeployment; confirm Monday?");
