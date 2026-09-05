@@ -393,7 +393,7 @@ public partial class MainWindow : Window
     {
         if (_overlay is null || !_overlay.IsLoaded)
         {
-            _overlay = new OverlayWindow();
+            _overlay = new OverlayWindow { Owner = this };
             _overlay.Closed += (_, _) => _overlay = null;
             _overlay.Show();
         }
