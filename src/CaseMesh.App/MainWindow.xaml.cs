@@ -241,10 +241,15 @@ public partial class MainWindow : Window
 
     private async void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
-        if (_allowClose || _liveSession is null) return;
+        if (_allowClose || _liveSession is null)
+        {
+            _overlay?.Close();
+            return;
+        }
         e.Cancel = true;
         await StopLiveAsync("Closing CaseMesh; live capture stopped cleanly.");
         _allowClose = true;
+        _overlay?.Close();
         Close();
     }
 
