@@ -138,6 +138,8 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         _userAudio.CaptureFailed += OnCaptureFailed;
         _remoteTranscriber.Updated += OnRemoteTranscription;
         _userTranscriber.Updated += OnUserTranscription;
+        _remoteTranscriber.Failed += OnTranscriberFailed;
+        _userTranscriber.Failed += OnTranscriberFailed;
     }
 
     private void Detach()
@@ -148,6 +150,8 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
         _userAudio.CaptureFailed -= OnCaptureFailed;
         _remoteTranscriber.Updated -= OnRemoteTranscription;
         _userTranscriber.Updated -= OnUserTranscription;
+        _remoteTranscriber.Failed -= OnTranscriberFailed;
+        _userTranscriber.Failed -= OnTranscriberFailed;
     }
 
     private void OnRemoteFrame(object? sender, AudioFrame frame) => TrackForward(_remoteTranscriber, frame);
@@ -179,6 +183,12 @@ public sealed class LiveMeetingCoordinator : IAsyncDisposable
     {
         ReportDiagnostic("CAPTURE_FAILED", exception.Message);
         CaptureFailed?.Invoke(this, exception);
+        NonFatalError?.Invoke(this, exception);
+    }
+
+    private void OnTranscriberFailed(object? sender, Exception exception)
+    {
+        ReportDiagnostic("TRANSCRIPTION_FAILED", exception.Message);
         NonFatalError?.Invoke(this, exception);
     }
 
