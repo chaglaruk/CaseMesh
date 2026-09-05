@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-08-28.
+Last update: 2026-09-05.
 
 The commercial Matter evidence platform through Milestone 13 and its post-merge transcript Review hardening is merged. Milestone 13 — **uploaded meeting transcript Review** — merged through Issue #33 / PR #34 as `a1eb151c7ae84228b90d45db7a0d05ef3f3e6b85`. The dedicated follow-up Issue #37 / PR #38 then merged as `f000a4f26633acea591f081acfc0757e50d5e5b5`, after exact candidate head `6e041faaea021df52f62e0f5013cd99133048a08` passed all seven jobs in CI run `33170725521` and the independent CodeRabbit full review generated no actionable comments. These repository results do **not** upgrade any real Windows/Teams/audio readiness gate.
 
@@ -15,12 +15,12 @@ The commercial Matter evidence platform through Milestone 13 and its post-merge 
 | Review context provenance | VERIFIED_AUTOMATED | New context citations attach only to current canonical documentary SourceSpans. Reopened references are classified current/historical/missing and remain contextual rather than provenance that a participant spoke cited wording. |
 | Review Web surface | VERIFIED_AUTOMATED | Matter navigation includes `Review`; structured JSON import preserves exact wording and HR_SAID / USER_ACTUALLY_SAID / AI_SUGGESTED, rejects NUL input and Reviews spanning more than 24 hours before submission, saved sessions reopen, transcript whitespace/line breaks render with whitespace-preserving safe text rendering, stale navigation requests are scoped out, and authorized exact Matter sources can be inspected. |
 | Build / automated tests | VERIFIED_AUTOMATED | Current hardening candidate head `6e041faaea021df52f62e0f5013cd99133048a08`; exact-head CI `33170725521` passed Windows, PostgreSQL, object storage, ingestion/scanner/OCR, QA, Web build and real-browser Playwright/axe jobs. The corresponding squash merge is `f000a4f26633acea591f081acfc0757e50d5e5b5`. No post-merge `main` CI is claimed here. |
-| Legacy Windows Live runtime | AUTOMATED_ONLY | Existing WPF/SQLite/audio projects remain buildable compatibility/runtime prototypes. They are not the commercial evidence authority. |
-| Process-specific Teams capture | AUTOMATED_ONLY | Application-loopback architecture exists, but a real Teams process-specific ownership run is still required. |
-| Live OpenAI transcription | PARTIAL | Realtime client/two-source ownership compile; real reconnect/order/provider behavior remains local/live work. |
-| WPF overlay | PARTIAL | SAY/WATCH/ASK and evidence state compile; focus/runtime validation with Teams foreground remains pending. |
-| Windows credential storage | AUTOMATED_ONLY | Implementation compiles; actual Windows Credential Manager behavior remains a local gate. |
-| Real latency/endurance | NOT_VERIFIED | Median/p95 and 30+ minute rehearsal remain local/live gates. |
+| Legacy Windows Live runtime | PARTIAL_LOCAL | The WPF app, manual fallback, overlay, built-in Realtek microphone capture and live model/transcription paths were exercised on Windows 11 on 2026-09-05. These remain compatibility/runtime prototypes and are not the commercial evidence authority. |
+| Process-specific Teams capture | PARTIAL | System-fallback and microphone stop/start produced real frames without raw-audio files. No second Teams participant was available, so process-specific remote ownership, mute/exclusion/reconnect and alternate audio endpoints remain open. |
+| Live OpenAI transcription | PARTIAL | Real microphone audio produced USER-owned live partial/final events after the provider protocol defect was fixed on branch `fix/live-transcription-session-protocol` at `f189ef4282a182f2dc95216610fe87b0d21c45b7`. Accuracy/latency varied; remote/two-source/reconnect behaviour remains open. |
+| WPF overlay | PARTIAL | With Teams foregrounded, the overlay remained visible without stealing focus; SAY/WATCH/ASK and no-evidence state were distinguishable. Evidence-backed locator display remains open. Overlay shutdown and independent minimize behaviour were fixed and directly retested on branch `fix/overlay-shutdown-lifecycle` at `64be9842ce3ecd62700ad9398303273088eefee3`. |
+| Windows credential storage | VERIFIED_LOCAL | Save/read/update/read/delete/absence were exercised through Windows Credential Manager with temporary values, then the intended user credential was saved for live evaluation. No secret value was printed or added to Git. |
+| Real latency/endurance | PARTIAL | Ten real answer-path samples measured 2.61-second median and 4.29-second p95, but the displayed wording failed the tester's naturalness judgment and live transcription first-useful timing varied up to 13.01 seconds. The mandatory 30+ minute rehearsal remains NOT_ATTEMPTED. |
 
 ## Milestone 13 and follow-up invariants now merged
 

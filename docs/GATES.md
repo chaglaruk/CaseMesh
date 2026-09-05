@@ -2,7 +2,7 @@
 
 ## Gate 0 — Build and deterministic tests
 
-**Status: VERIFIED (local Windows, 2026-08-13).** `dotnet restore`, Release build and all 30 automated tests passed with zero warnings/failures.
+**Status: VERIFIED (local Windows, 2026-09-05).** At `8848b002b6f14d2ea65d1a72eb2b5bdec3762809`, the Release solution build passed with zero warnings/errors and the full solution run passed 309 tests, skipped 111 environment-gated tests and failed none. Focused defect branches were also built and tested separately; no remote CI is claimed for them.
 
 **Pass when:** Windows Release build and all automated tests succeed.
 
@@ -10,7 +10,7 @@ The deterministic test suite must include the safety-critical HR exchange corpus
 
 ## Gate 1 — Audio ownership
 
-**Status: PARTIAL.** Process-tree capture is implemented and automated conversion/PID/lifecycle checks pass. A real microphone delivered continuous frames across restart on this laptop. No Teams process was running, so isolated remote frames, mute/unmute, headphones/Bluetooth, exclusion and reconnect remain unverified.
+**Status: PARTIAL (local Windows, 2026-09-05).** The built-in Realtek microphone and speakers delivered continuous packets in two system-fallback probe stop/start cycles without raw-audio persistence. Realtek microphone frames also crossed the live OpenAI transcription boundary in repeated fresh sessions with USER ownership. A second Teams participant was unavailable, so remote Teams ownership, mute/unmute, non-Teams exclusion and connection recovery are blocked rather than failed. No wired-headphone endpoint was present; a Bluetooth controller was present but no Bluetooth audio endpoint was available.
 
 **Goal:** remote Teams audio and microphone are separate, stable sources.
 
@@ -35,7 +35,7 @@ Play Teams remote speech, then separately play non-Teams system audio. Confirm T
 
 ## Gate 2 — Live transcription
 
-**Status: AUTOMATED_ONLY.** Separate role ownership and coordinator routing compile and are fake-tested; live API transcription, interruption behaviour and reconnect are still required.
+**Status: PARTIAL (local Windows, 2026-09-05).** Real built-in Realtek microphone audio reached the live OpenAI Realtime transcription service as USER speech after the startup protocol defect was corrected on `fix/live-transcription-session-protocol` (`f189ef4282a182f2dc95216610fe87b0d21c45b7`). Two fresh `gpt-4o-mini-transcribe` sessions produced 11/15 non-empty delta updates and 2/1 final events with no capture failure. One final omitted opening words and created a separate short turn; another was substantively usable but misheard the product name. First-useful-update timing was 3.59 seconds and 13.01 seconds. Remote ownership, alternating two-source turns, overlap/interruption, pause/reconnect ordering and persisted-final recovery remain blocked by the unavailable second participant or otherwise unverified.
 
 Required:
 
@@ -46,7 +46,7 @@ Required:
 
 ## Gate 3 — Case Brain
 
-**Status: AUTOMATED_ONLY.** Ingestion/retrieval tests pass; representative private files must be tested outside Git before promotion.
+**Status: PARTIAL (local Windows, 2026-09-05).** A real local importer/repository run used representative synthetic-private files under `%LOCALAPPDATA%\Temp\CaseMesh.LiveValidation.20260905`, outside Git. Recursive TXT, Markdown, DOCX, EML, normal PDF and OCR-text-layer PDF import, SHA-256 duplicate rejection, retrieval and persisted source identifiers/locators passed; PDF results resolved to `p.1`, and Git stayed clean before and after. An image-only scanned PDF through an installed OCR engine was not exercised because Tesseract/Poppler were unavailable, so this gate is not VERIFIED.
 
 Required:
 
@@ -59,7 +59,7 @@ Required:
 
 ## Gate 4 — Grounded assistance
 
-**Status: PARTIAL.** Deterministic grounding/commitment constraints pass. The live answer-model eval was not run because no configured credential was present.
+**Status: PARTIAL (local Windows, 2026-09-05).** The live safety corpus passed against `gpt-5.6-sol` using the Windows Credential Manager credential. Ten additional real model calls rejected loaded framing and commitment traps, avoided unsupported absence/medical claims, used SAY/WATCH/ASK separation, and resolved a cited synthetic PDF to the expected persisted source and `p.1` locator. AI suggestions did not become captured USER speech. Evidence-backed locator rendering in the real overlay and full two-source meeting behaviour remain unverified, so this gate is not VERIFIED.
 
 Required:
 
@@ -84,7 +84,7 @@ The harness uses the same Windows Credential Manager entry as the app. `OPENAI_A
 
 ## Gate 5 — Naturalness and latency
 
-**Status: AUTOMATED_ONLY.** Six-second cancellation, 1.5-second optional-analysis fallback and stale-generation behaviour are covered; rehearsal median/p95 latency is open.
+**Status: PARTIAL (local Windows, 2026-09-05).** Ten real answer-path samples on `gpt-5.6-sol` had a 2.61-second median and 4.29-second p95 (1.84-second minimum, 4.30-second maximum). Real microphone transcription first-useful timing varied from 3.59 to 13.01 seconds in the selected-model runs. The tester found the displayed manual-fallback wording insufficiently human, so the naturalness target did not pass. Runtime stale-generation cancellation still depends on real HR/remote final turns; only its automated coverage passed.
 
 Target UX:
 
@@ -99,7 +99,7 @@ Record median and p95 latency from realistic rehearsal. Do not hard-code an unve
 
 ## Gate 6 — Overlay usability
 
-**Status: AUTOMATED_ONLY.** Live dispatcher wiring and overlay rendering build; usability while Teams has focus has not been exercised.
+**Status: PARTIAL (local Windows, 2026-09-05).** With Teams foregrounded, typed text remained in Teams while the topmost CaseMesh overlay stayed visible and did not take focus. Manual fallback produced and displayed assistance; SAY was visually prominent, WATCH/ASK headings used distinct colours, and NO CASE EVIDENCE was clear at a glance. The tester noted weak WATCH/ASK typography hierarchy. Evidence-backed locator display was not exercised. Closing the main window while the overlay was open exposed an orphan-process defect; `fix/overlay-shutdown-lifecycle` (`64be9842ce3ecd62700ad9398303273088eefee3`) fixed it, and direct repeats confirmed that the independent overlay survived main-window minimization, then both windows and the process closed on main-window exit.
 
 Required:
 
@@ -111,7 +111,7 @@ Required:
 
 ## Gate 7 — Endurance/recovery
 
-**Status: NOT_ATTEMPTED.** No 30+ minute real rehearsal was performed.
+**Status: NOT_ATTEMPTED.** No 30+ minute real rehearsal was performed on 2026-09-05. Short stop/start and application-close checks do not satisfy this gate.
 
 Required:
 
