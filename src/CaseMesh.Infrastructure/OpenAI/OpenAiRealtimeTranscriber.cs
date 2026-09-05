@@ -14,6 +14,7 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
     private readonly OpenAiOptions _options;
     private readonly ClientWebSocket _socket = new();
     private readonly SemaphoreSlim _sendGate = new(1, 1);
+    private readonly byte[] _receiveBuffer = new byte[64 * 1024];
     private CancellationTokenSource? _receiveCts;
     private Task? _receiveTask;
 
@@ -146,14 +147,13 @@ public sealed class OpenAiRealtimeTranscriber : IRealtimeTranscriber
 
     private async Task<string?> ReceiveMessageAsync(CancellationToken cancellationToken)
     {
-        var buffer = new byte[64 * 1024];
         using var stream = new MemoryStream();
         WebSocketReceiveResult result;
         do
         {
-            result = await _socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken).ConfigureAwait(false);
+            result = await _socket.ReceiveAsync(new ArraySegment<byte>(_receiveBuffer), cancellationToken).ConfigureAwait(false);
             if (result.MessageType == WebSocketMessageType.Close) return null;
-            stream.Write(buffer, 0, result.Count);
+            stream.Write(_receiveBuffer, 0, result.Count);
         } while (!result.EndOfMessage);
 
         return result.MessageType == WebSocketMessageType.Text
